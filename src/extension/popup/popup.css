@@ -1,0 +1,256 @@
+:root {
+  --bg-color: #0f172a;
+  --surface-color: #1e293b;
+  --border-color: #334155;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --primary-color: #3b82f6;
+  --primary-hover: #2563eb;
+  --danger-color: #ef4444;
+  --danger-hover: #dc2626;
+  --success-color: #10b981;
+  --warning-color: #f59e0b;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  width: 380px;
+  background-color: var(--bg-color);
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.container {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.header {
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 10px;
+}
+
+.header-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+}
+
+.badge.ready {
+  background-color: rgba(59, 130, 246, 0.2);
+  border-color: var(--primary-color);
+  color: #60a5fa;
+}
+
+.badge.armed,
+.badge.monitoring {
+  background-color: rgba(245, 158, 11, 0.2);
+  border-color: var(--warning-color);
+  color: #fbbf24;
+}
+
+.badge.held,
+.badge.confirmed {
+  background-color: rgba(16, 185, 129, 0.2);
+  border-color: var(--success-color);
+  color: #34d399;
+}
+
+.badge.failed,
+.badge.stopped {
+  background-color: rgba(239, 68, 68, 0.2);
+  border-color: var(--danger-color);
+  color: #f87171;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+input[type='text'],
+input[type='number'] {
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-main);
+  padding: 8px 10px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+input[type='text']:focus,
+input[type='number']:focus {
+  border-color: var(--primary-color);
+}
+
+.hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.checkbox-col {
+  justify-content: center;
+  padding-bottom: 8px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-main);
+  cursor: pointer;
+  text-transform: none;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.btn {
+  flex: 1;
+  padding: 10px;
+  border-radius: 6px;
+  border: none;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.btn-primary {
+  background-color: var(--primary-color);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-hover);
+}
+
+.btn-danger {
+  background-color: var(--danger-color);
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background-color: var(--danger-hover);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.telemetry-section {
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.telemetry-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.latency-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.latency-item {
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.latency-item strong {
+  font-size: 12px;
+  color: var(--text-main);
+}
+
+.log-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.log-box {
+  background-color: #030712;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  height: 80px;
+  padding: 6px 8px;
+  font-family: monospace;
+  font-size: 10px;
+  color: #94a3b8;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

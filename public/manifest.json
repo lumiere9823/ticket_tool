@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Ticketbox Purchase Assistant",
+  "version": "0.1.0",
+  "description": "Browser-based purchase assistant for Ticketbox with strict reservation boundary and platform-safe architecture",
+  "permissions": ["storage", "activeTab", "alarms"],
+  "host_permissions": ["*://*.ticketbox.vn/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.ticketbox.vn/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "src/extension/popup/popup.html",
+    "default_title": "Ticketbox Purchase Assistant"
+  }
+}

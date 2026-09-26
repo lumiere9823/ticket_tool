@@ -1,0 +1,30 @@
+{
+  "name": "ticketbox-purchase-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-based purchase assistant for Ticketbox with strict reservation boundary, isolated domain logic, and platform-safe architecture",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "ci": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@types/chrome": "^0.0.308",
+    "@types/node": "^22.13.4",
+    "eslint": "^9.20.1",
+    "prettier": "^3.5.1",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.24.1",
+    "vite": "^6.1.0",
+    "vitest": "^3.0.5"
+  }
+}

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ticketbox Assistant</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="header">
+        <div class="header-title">
+          <h2>Ticketbox Assistant</h2>
+          <span class="badge" id="state-badge">INIT</span>
+        </div>
+        <p class="subtitle">Platform-Safe Purchase Assistant</p>
+      </header>
+
+      <section class="section">
+        <label for="event-url">Target Event URL</label>
+        <input type="text" id="event-url" placeholder="https://ticketbox.vn/event/..." />
+      </section>
+
+      <section class="section">
+        <label for="category-priority">Priority Categories (comma-separated)</label>
+        <input type="text" id="category-priority" value="VIP, CAT 1, CAT 2, ANY" />
+        <span class="hint">Evaluated in order. First matching tier will be selected.</span>
+      </section>
+
+      <div class="row">
+        <div class="col">
+          <label for="quantity">Quantity</label>
+          <input type="number" id="quantity" min="1" max="10" value="2" />
+        </div>
+        <div class="col checkbox-col">
+          <label class="checkbox-label">
+            <input type="checkbox" id="allow-fallback" checked />
+            Allow Fallback
+          </label>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-arm" class="btn btn-primary">ARM ASSISTANT</button>
+        <button id="btn-stop" class="btn btn-danger">STOP</button>
+      </div>
+
+      <section class="telemetry-section">
+        <div class="telemetry-header">
+          <span>Attempt ID:</span>
+          <strong id="attempt-id-display">None</strong>
+        </div>
+        <div class="latency-grid">
+          <div class="latency-item">
+            <span>Detection (T1-T0)</span>
+            <strong id="metric-t1">-</strong>
+          </div>
+          <div class="latency-item">
+            <span>Decision (T2-T1)</span>
+            <strong id="metric-t2">-</strong>
+          </div>
+          <div class="latency-item">
+            <span>Action (T3-T2)</span>
+            <strong id="metric-t3">-</strong>
+          </div>
+          <div class="latency-item">
+            <span>Confirmation (T5-T4)</span>
+            <strong id="metric-t5">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="log-section">
+        <label>Activity Log</label>
+        <div id="log-box" class="log-box"></div>
+      </section>
+    </div>
+
+    <script type="module" src="popup.ts"></script>
+  </body>
+</html>
