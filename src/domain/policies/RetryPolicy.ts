@@ -34,6 +34,7 @@ export class RetryPolicy {
     switch (reason) {
       case FailureReason.RATE_LIMITED:
       case FailureReason.SESSION_EXPIRED:
+      case FailureReason.AUTH_FAILURE:
       case FailureReason.PAYMENT_FAILED:
       case FailureReason.UNKNOWN:
         // Platform, security, or non-deterministic failures are NEVER automatically retried

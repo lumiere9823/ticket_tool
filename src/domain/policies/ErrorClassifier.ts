@@ -53,6 +53,21 @@ export class ErrorClassifier {
       };
     }
 
+    // Auth Failure / Forbidden
+    if (
+      lower.includes('auth failed') ||
+      lower.includes('authentication failed') ||
+      lower.includes('forbidden') ||
+      lower.includes('403')
+    ) {
+      return {
+        category: 'AUTH',
+        reason: FailureReason.AUTH_FAILURE,
+        message: 'Authentication failed on Ticketbox',
+        isRetryable: false,
+      };
+    }
+
     // Business - Sold out
     if (lower.includes('sold out') || lower.includes('hết vé') || lower.includes('out of stock')) {
       return {
