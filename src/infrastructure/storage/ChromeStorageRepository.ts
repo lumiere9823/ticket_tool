@@ -36,6 +36,8 @@ export class ChromeStorageRepository implements StorageRepository {
   private isChromeStorageAvailable(): boolean {
     return (
       typeof chrome !== 'undefined' &&
+      typeof chrome.runtime !== 'undefined' &&
+      Boolean(chrome.runtime.id) &&
       typeof chrome.storage !== 'undefined' &&
       typeof chrome.storage.local !== 'undefined'
     );

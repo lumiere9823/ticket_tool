@@ -252,6 +252,20 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     this.logger?.info('Executing Section 7 Ticket Selection', { candidateId, quantity });
 
+    // 0. If already on booking / seat map page, ticket tier selection is already fulfilled
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const isAlreadyOnBookingPage =
+      currentUrl.includes('/select-ticket') ||
+      currentUrl.includes('/booking') ||
+      root.querySelector('svg.seatmap, [class*="seatmap"], .seat-map') !== null;
+
+    if (isAlreadyOnBookingPage) {
+      this.logger?.info('Already on booking / seat map page; ticket tier step fulfilled', {
+        candidateId,
+      });
+      return true;
+    }
+
     const candidateLower = candidateId.toLowerCase().trim();
 
     // 1. Expand showing or accordion if tickets or quantity controls are not yet visible
@@ -351,6 +365,19 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       ticketName: ticket.name,
       quantity,
     });
+
+    // If on seat map page, quantity is fulfilled by seat selection
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const isAlreadyOnBookingPage =
+      currentUrl.includes('/select-ticket') ||
+      currentUrl.includes('/booking') ||
+      root.querySelector('svg.seatmap, [class*="seatmap"], .seat-map') !== null;
+    if (isAlreadyOnBookingPage) {
+      this.logger?.info('Already on seat map page; quantity handled via seat selection', {
+        ticketName: ticket.name,
+      });
+      return true;
+    }
 
     // Locate quantity input or container
     let ticketContainer = ticket.id ? root.querySelector(`[data-ticket-id="${ticket.id}"]`) : null;
@@ -483,7 +510,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     await new Promise((r) => setTimeout(r, 300));
 
     const candidates = root.querySelectorAll(
-      '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, button[type="submit"], .btn-checkout, [class*="checkout"], .ant-drawer-footer button'
+      '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, button[type="submit"], .btn-checkout, [class*="checkout"], .ant-drawer-footer button, [class*="bottom"] button, [class*="bottom"] a, button, a.btn, a[class*="button"], [role="button"]'
     );
 
     for (const btn of candidates) {
@@ -503,9 +530,18 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         this.logger?.info('Clicking next step / continue button', { buttonText: text });
         if (typeof (btn as MutableDOMElement).click === 'function') {
           (btn as MutableDOMElement).click!();
-          await new Promise((r) => setTimeout(r, 500));
-          return true;
         }
+        if (
+          typeof window !== 'undefined' &&
+          typeof window.MouseEvent === 'function' &&
+          'dispatchEvent' in (btn as object)
+        ) {
+          (btn as unknown as HTMLElement).dispatchEvent(
+            new MouseEvent('click', { bubbles: true, cancelable: true })
+          );
+        }
+        await new Promise((r) => setTimeout(r, 500));
+        return true;
       }
     }
 
@@ -563,10 +599,13 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const root = this.getRoot();
     if (!root) return { hasSeatMap: false };
 
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const isBookingUrl = currentUrl.includes('/select-ticket') || currentUrl.includes('/booking');
+
     const mapEl = root.querySelector(
-      '.seat-map, #seat-map, svg.seatmap, [data-seat-map], [data-seatmap], .seat-plan'
+      '.seat-map, #seat-map, svg.seatmap, [data-seat-map], [data-seatmap], .seat-plan, [class*="seatmap"], [class*="seat-map"], svg'
     );
-    const hasSeatMap = mapEl !== null;
+    const hasSeatMap = mapEl !== null || isBookingUrl;
     const areas = TicketboxSeatMapParser.parseAreas(root);
 
     return {
@@ -581,7 +620,37 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   public async discoverSeats(areaId?: string): Promise<Seat[]> {
     const root = this.getRoot();
     if (!root) return [];
-    const allSeats = TicketboxSeatMapParser.parseSeats(root);
+    let allSeats = TicketboxSeatMapParser.parseSeats(root);
+
+    // If seats are not yet parsed from DOM nodes or if user already selected a seat, inspect bottom action bar
+    const selectedBadge = root.querySelector(
+      '[class*="selected"], [class*="seat-selected"], [class*="seat-info"], [class*="bottom"], footer, .bottom-bar'
+    );
+    const selectedBadgeText = selectedBadge ? selectedBadge.textContent : '';
+    const seatMatches = selectedBadgeText.match(/\b([A-Z0-9]+[-_]\d+)\b/gi);
+
+    if (seatMatches) {
+      for (const rawLabel of seatMatches) {
+        const seatLabel = rawLabel.toUpperCase();
+        const existing = allSeats.find(
+          (s) => s.label.toUpperCase() === seatLabel || s.id.toUpperCase() === seatLabel
+        );
+        if (existing) {
+          existing.status = 'SELECTED';
+        } else {
+          const parsed = TicketboxSeatMapParser.parseRowAndNumber(seatLabel);
+          allSeats.unshift({
+            id: seatLabel,
+            label: seatLabel,
+            row: parsed.row,
+            number: parsed.number,
+            area: 'DEFAULT',
+            status: 'SELECTED',
+            selectable: true,
+          });
+        }
+      }
+    }
 
     if (areaId) {
       return allSeats.filter((s) => !s.area || s.area === areaId);

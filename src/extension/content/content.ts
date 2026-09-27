@@ -15,15 +15,29 @@ const adapter = new TicketboxJourneyAdapter(logger);
 const storage = new ChromeStorageRepository();
 const stateMachine = new PurchaseStateMachine(PurchaseState.MONITORING);
 
+function isExtensionContextValid(): boolean {
+  try {
+    return typeof chrome !== 'undefined' && Boolean(chrome.runtime) && Boolean(chrome.runtime.id);
+  } catch {
+    return false;
+  }
+}
+
 stateMachine.subscribe(async (context: StateContext) => {
-  await storage.saveCurrentState(context);
-  await messageBus.publish({
-    type: 'STATE_CHANGED',
-    timestamp: new Date().toISOString(),
-    attemptId: stateMachine.attemptId,
-    state: context.currentState,
-    context,
-  });
+  if (!isExtensionContextValid()) return;
+  try {
+    await storage.saveCurrentState(context);
+    await messageBus.publish({
+      type: 'STATE_CHANGED',
+      timestamp: new Date().toISOString(),
+      attemptId: stateMachine.attemptId,
+      state: context.currentState,
+      context,
+    });
+  } catch (err: unknown) {
+    if (String(err).includes('Extension context invalidated')) return;
+    logger.error('Error in stateMachine subscriber', err);
+  }
 });
 
 const journeyUseCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, messageBus, logger);
@@ -42,6 +56,14 @@ logger.info('Ticketbox Content Script loaded on page', {
  * Passive discovery scan does not mutate page state (strictly Phase 8 / safe architecture compliant).
  */
 async function performDiscoveryScan(): Promise<void> {
+  if (!isExtensionContextValid()) {
+    if (monitoringTimer) {
+      clearInterval(monitoringTimer);
+      monitoringTimer = null;
+    }
+    return;
+  }
+
   try {
     const eventState = await adapter.getEventState();
     const catalog = await adapter.discoverTicketCatalog();
@@ -120,40 +142,52 @@ async function performDiscoveryScan(): Promise<void> {
         : undefined,
     };
 
-    // Cache in chrome.storage.local for instant popup display on re-open
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      await chrome.storage.local.set({ latestJourneyUpdate: journeyUpdate });
+    // Cache in chrome.storage.local for instant popup display on re-open only if tickets were discovered
+    if (isExtensionContextValid() && chrome.storage && chrome.storage.local) {
+      if (allTickets.length > 0) {
+        await chrome.storage.local.set({ latestJourneyUpdate: journeyUpdate });
+      }
     }
 
-    // Publish legacy PAGE_DISCOVERY_SNAPSHOT for backward compatibility
-    await messageBus.publish({
-      type: 'PAGE_DISCOVERY_SNAPSHOT',
-      observationId: `obs_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      url: eventState.pageUrl,
-      pageTitle: eventTitle,
-      observedElements: {
-        buttonCount: document.querySelectorAll('button').length,
-        hasInteractiveElements: !!document.querySelector('button, [role="button"]'),
-        hasMainContent: !!document.querySelector('main, article, [role="main"]'),
-      },
-      observedAvailability: availableTickets.length > 0,
-      domSummary: {
-        title: eventTitle,
-        hasButtons: !!document.querySelector('button, [role="button"]'),
-        ticketElementsCount: allTickets.length,
-      },
-      timingMs: Date.now(),
-    });
+    if (isExtensionContextValid()) {
+      // Publish legacy PAGE_DISCOVERY_SNAPSHOT for backward compatibility
+      await messageBus.publish({
+        type: 'PAGE_DISCOVERY_SNAPSHOT',
+        observationId: `obs_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        url: eventState.pageUrl,
+        pageTitle: eventTitle,
+        observedElements: {
+          buttonCount: document.querySelectorAll('button').length,
+          hasInteractiveElements: !!document.querySelector('button, [role="button"]'),
+          hasMainContent: !!document.querySelector('main, article, [role="main"]'),
+        },
+        observedAvailability: availableTickets.length > 0,
+        domSummary: {
+          title: eventTitle,
+          hasButtons: !!document.querySelector('button, [role="button"]'),
+          ticketElementsCount: allTickets.length,
+        },
+        timingMs: Date.now(),
+      });
 
-    // Publish JOURNEY_UPDATE with full catalogSnapshot
-    await messageBus.publish(journeyUpdate);
+      // Publish JOURNEY_UPDATE with full catalogSnapshot
+      await messageBus.publish(journeyUpdate);
+    }
 
     // If monitoring is active, check if we should trigger the booking journey
     if (isMonitoringActive && !isExecutingJourney && availableTickets.length > 0) {
       attemptBookingJourney();
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    const msg = String(err);
+    if (msg.includes('Extension context invalidated')) {
+      if (monitoringTimer) {
+        clearInterval(monitoringTimer);
+        monitoringTimer = null;
+      }
+      return;
+    }
     logger.error('Error during discovery scan in content script', err);
   }
 }
@@ -246,7 +280,15 @@ async function attemptBookingJourney(): Promise<void> {
         monitoringTimer = null;
       }
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    const msg = String(err);
+    if (msg.includes('Extension context invalidated')) {
+      if (monitoringTimer) {
+        clearInterval(monitoringTimer);
+        monitoringTimer = null;
+      }
+      return;
+    }
     logger.error('Error during booking journey execution in content script', err);
   } finally {
     isExecutingJourney = false;
@@ -254,6 +296,7 @@ async function attemptBookingJourney(): Promise<void> {
 }
 
 function scheduleDiscoveryScan(delayMs = 300): void {
+  if (!isExtensionContextValid()) return;
   if (debounceTimer) {
     window.clearTimeout(debounceTimer);
   }
@@ -267,9 +310,51 @@ scheduleDiscoveryScan(100);
 window.setTimeout(() => scheduleDiscoveryScan(0), 1200);
 window.setTimeout(() => scheduleDiscoveryScan(0), 2500);
 
+// Auto-rehydrate monitoring/booking state across page navigation if already armed
+async function checkRehydration(): Promise<void> {
+  if (!isExtensionContextValid()) return;
+  try {
+    const lastState = await storage.getLastState();
+    if (
+      lastState &&
+      (lastState.currentState === PurchaseState.ARMED ||
+        lastState.currentState === PurchaseState.MONITORING ||
+        lastState.currentState === PurchaseState.SELECTING)
+    ) {
+      logger.info('Rehydrating active monitoring state in content script', {
+        state: lastState.currentState,
+      });
+      isMonitoringActive = true;
+      scheduleDiscoveryScan(200);
+      setTimeout(attemptBookingJourney, 600);
+      if (!monitoringTimer) {
+        monitoringTimer = window.setInterval(() => {
+          if (!isExtensionContextValid()) {
+            if (monitoringTimer) {
+              clearInterval(monitoringTimer);
+              monitoringTimer = null;
+            }
+            return;
+          }
+          performDiscoveryScan();
+        }, 2000);
+      }
+    }
+  } catch (err: unknown) {
+    if (String(err).includes('Extension context invalidated')) return;
+    logger.warn('Failed to check rehydration in content script', { err: String(err) });
+  }
+}
+
+checkRehydration();
+
 // Set up MutationObserver to re-scan when client-side React mounts tickets
 if (typeof MutationObserver !== 'undefined') {
   const observer = new MutationObserver((mutations) => {
+    if (!isExtensionContextValid()) {
+      observer.disconnect();
+      return;
+    }
     let hasAddedElements = false;
     for (const m of mutations) {
       if (m.addedNodes.length > 0) {
@@ -322,6 +407,13 @@ messageBus.subscribe((message: ExtensionMessage) => {
       setTimeout(attemptBookingJourney, 400);
       if (!monitoringTimer) {
         monitoringTimer = window.setInterval(() => {
+          if (!isExtensionContextValid()) {
+            if (monitoringTimer) {
+              clearInterval(monitoringTimer);
+              monitoringTimer = null;
+            }
+            return;
+          }
           performDiscoveryScan();
         }, 2000);
       }
@@ -348,6 +440,13 @@ messageBus.subscribe((message: ExtensionMessage) => {
       setTimeout(attemptBookingJourney, 400);
       if (!monitoringTimer) {
         monitoringTimer = window.setInterval(() => {
+          if (!isExtensionContextValid()) {
+            if (monitoringTimer) {
+              clearInterval(monitoringTimer);
+              monitoringTimer = null;
+            }
+            return;
+          }
           performDiscoveryScan();
         }, 2000);
       }
@@ -373,6 +472,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener(
     (message: unknown, _sender: unknown, sendResponse: (res?: unknown) => void) => {
+      if (!isExtensionContextValid()) return undefined;
       if (
         message &&
         typeof message === 'object' &&

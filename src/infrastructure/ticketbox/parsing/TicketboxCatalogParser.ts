@@ -307,6 +307,45 @@ export class TicketboxCatalogParser {
       }
     }
 
+    if (ticketTypes.length > 0) {
+      return ticketTypes;
+    }
+
+    // Fallback for SEAT MAP / BOOKING page (/select-ticket):
+    // Parse price tiers from right sidebar or legend
+    const priceElements = container.querySelectorAll(
+      '.legend-item, [class*="legend-item"], [class*="price-tier"], [class*="tier-item"], [class*="price"], [class*="tier"], aside div, .sidebar div, ul li'
+    );
+
+    const priceRegex = /(\d{1,3}(?:[.,]\d{3})+)\s*(?:đ|vnd|vnđ)/i;
+    const seenPrices = new Set<number>();
+
+    for (const el of priceElements) {
+      const text = el.textContent.trim();
+      const match = text.match(priceRegex);
+      if (match && match[1]) {
+        const amount = parseInt(match[1].replace(/[.,]/g, ''), 10);
+        if (!isNaN(amount) && amount > 0 && !seenPrices.has(amount)) {
+          seenPrices.add(amount);
+          const nameEl = el.querySelector('[class*="name"], [class*="label"], [class*="title"]');
+          const name = nameEl ? nameEl.textContent.trim() : `Vé ${amount.toLocaleString('vi-VN')} đ`;
+          ticketTypes.push({
+            id: `ticket-tier-${amount}`,
+            name,
+            price: { amount, currency: 'VND' },
+            mode: 'SEATED',
+            availability: 'AVAILABLE',
+            selectable: true,
+            minQuantity: 1,
+            maxQuantity: 4,
+            selectedQuantity: 0,
+            source: { page: 'BOOKING', evidence: [`SIDEBAR_PRICE_${amount}`] },
+            rawLabel: text,
+          });
+        }
+      }
+    }
+
     return ticketTypes;
   }
 

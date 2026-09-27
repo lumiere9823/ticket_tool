@@ -271,7 +271,7 @@ export class TicketboxSeatMapParser {
     return 'UNKNOWN';
   }
 
-  private static parseRowAndNumber(label: string): { row: string; number: number } {
+  public static parseRowAndNumber(label: string): { row: string; number: number } {
     // Matches patterns like "A12", "Row A - 12", "A-12", "Hàng A Số 12"
     const match =
       label.match(/([a-zA-Z]+)[\s\-_/]*(\d+)/) ||

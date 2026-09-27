@@ -250,15 +250,13 @@ export class ExecuteBookingJourneyUseCase {
 
     // 5. BOOKING MODE DETECTION (Section 8)
     let bookingMode = chosenTicket.mode;
-    if (bookingMode === 'UNKNOWN') {
-      const seatMapInfo = await this.adapter.detectSeatMap();
-      if (seatMapInfo && seatMapInfo.hasSeatMap) {
-        bookingMode = 'SEATED';
-        this.logger.info('Seat map detected on page; classifying mode as SEATED');
-      } else {
-        bookingMode = 'STANDING';
-        this.logger.info('No seat map detected on page; defaulting general admission to STANDING');
-      }
+    const seatMapInfo = await this.adapter.detectSeatMap();
+    if (seatMapInfo && seatMapInfo.hasSeatMap) {
+      bookingMode = 'SEATED';
+      this.logger.info('Seat map detected on page; classifying mode as SEATED');
+    } else if (bookingMode === 'UNKNOWN') {
+      bookingMode = 'STANDING';
+      this.logger.info('No seat map detected on page; defaulting general admission to STANDING');
     }
 
     this.stateMachine.transition({
@@ -366,71 +364,90 @@ export class ExecuteBookingJourneyUseCase {
         });
       }
 
-      // C. Adjacent Seat Selection Strategy
-      const tSeatSelStart = Date.now();
-      this.stateMachine.transition({ type: 'SELECTING_SEATS' });
-
-      const seatDecision = AdjacentSeatStrategy.selectSeats(
-        availableSeats,
-        preferences.quantity,
-        currentSelection.areaId ?? undefined,
-        preferences.seatPreference ?? 'ANY_AVAILABLE',
-        preferences.nonAdjacentFallback ?? 'SELECT_NON_ADJACENT'
-      );
-
-      if (seatDecision.status === 'WAIT') {
+      // Check if user already has selected seat(s) on the seat map (e.g. L-28)
+      const alreadySelected = availableSeats.filter((s) => s.status === 'SELECTED');
+      if (alreadySelected.length >= preferences.quantity) {
+        const seatLabels = alreadySelected.slice(0, preferences.quantity).map((s) => s.label);
+        currentSelection.seats = seatLabels;
         this.stateMachine.transition({
-          type: 'WAITING',
-          reason: seatDecision.reason,
+          type: 'SEATS_SELECTED',
+          seats: seatLabels,
         });
-        return {
-          success: false,
-          finalState: PurchaseState.WAITING,
-          requiresUserAction: false,
-          actionRequiredReason: seatDecision.reason,
-        };
-      }
-
-      if (seatDecision.status !== 'SUCCESS' || seatDecision.selectedSeats.length === 0) {
-        throw new BookingError({
-          code: 'SEAT_SELECTION_FAILED',
-          message: seatDecision.reason,
-          state: this.stateMachine.state,
-          recoverable: true,
+        this.logger.info(`Existing selected seats recognized: ${seatLabels.join(', ')}`);
+        await this.eventBus.publish({
+          type: 'NOTIFICATION_EVENT',
+          timestamp: new Date().toISOString(),
+          category: 'SEATS_SELECTED',
+          title: 'Ticketbox Assistant',
+          body: `Seats selected: ${seatLabels.join(', ')}`,
         });
-      }
+      } else {
+        // C. Adjacent Seat Selection Strategy
+        const tSeatSelStart = Date.now();
+        this.stateMachine.transition({ type: 'SELECTING_SEATS' });
 
-      const seatIds = seatDecision.selectedSeats.map((s) => s.id);
-      const seatLabels = seatDecision.selectedSeats.map((s) => s.label);
+        const seatDecision = AdjacentSeatStrategy.selectSeats(
+          availableSeats,
+          preferences.quantity,
+          currentSelection.areaId ?? undefined,
+          preferences.seatPreference ?? 'ANY_AVAILABLE',
+          preferences.nonAdjacentFallback ?? 'SELECT_NON_ADJACENT'
+        );
 
-      if (this.adapter.selectSpecificSeats) {
-        const seatsOk = await this.adapter.selectSpecificSeats(seatIds);
-        if (!seatsOk) {
+        if (seatDecision.status === 'WAIT') {
+          this.stateMachine.transition({
+            type: 'WAITING',
+            reason: seatDecision.reason,
+          });
+          return {
+            success: false,
+            finalState: PurchaseState.WAITING,
+            requiresUserAction: false,
+            actionRequiredReason: seatDecision.reason,
+          };
+        }
+
+        if (seatDecision.status !== 'SUCCESS' || seatDecision.selectedSeats.length === 0) {
           throw new BookingError({
             code: 'SEAT_SELECTION_FAILED',
-            message: 'Seat selection click or verification failed',
+            message: seatDecision.reason,
             state: this.stateMachine.state,
             recoverable: true,
           });
         }
+
+        const seatIds = seatDecision.selectedSeats.map((s) => s.id);
+        const seatLabels = seatDecision.selectedSeats.map((s) => s.label);
+
+        if (this.adapter.selectSpecificSeats) {
+          const seatsOk = await this.adapter.selectSpecificSeats(seatIds);
+          if (!seatsOk) {
+            throw new BookingError({
+              code: 'SEAT_SELECTION_FAILED',
+              message: 'Seat selection click or verification failed',
+              state: this.stateMachine.state,
+              recoverable: true,
+            });
+          }
+        }
+
+        latencyTracker?.recordSeatSelection(Date.now() - tSeatSelStart);
+        currentSelection.seats = seatLabels;
+
+        this.stateMachine.transition({
+          type: 'SEATS_SELECTED',
+          seats: seatLabels,
+        });
+        this.logger.info(`Seats selected: ${seatLabels.join(', ')}`);
+
+        await this.eventBus.publish({
+          type: 'NOTIFICATION_EVENT',
+          timestamp: new Date().toISOString(),
+          category: 'SEATS_SELECTED',
+          title: 'Ticketbox Assistant',
+          body: `Seats selected: ${seatLabels.join(', ')}`,
+        });
       }
-
-      latencyTracker?.recordSeatSelection(Date.now() - tSeatSelStart);
-      currentSelection.seats = seatLabels;
-
-      this.stateMachine.transition({
-        type: 'SEATS_SELECTED',
-        seats: seatLabels,
-      });
-      this.logger.info(`Seats selected: ${seatLabels.join(', ')}`);
-
-      await this.eventBus.publish({
-        type: 'NOTIFICATION_EVENT',
-        timestamp: new Date().toISOString(),
-        category: 'SEATS_SELECTED',
-        title: 'Ticketbox Assistant',
-        body: `Seats selected: ${seatLabels.join(', ')}`,
-      });
     }
 
     // Advance to next step if applicable (e.g. click "Tiếp tục" / "Đặt vé")

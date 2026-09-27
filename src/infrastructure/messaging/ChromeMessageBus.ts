@@ -29,7 +29,11 @@ export class ChromeMessageBus implements EventBus {
   constructor(private readonly logger?: LoggerPort) {}
 
   private isChromeRuntimeAvailable(): boolean {
-    return typeof chrome !== 'undefined' && typeof chrome.runtime !== 'undefined';
+    return (
+      typeof chrome !== 'undefined' &&
+      typeof chrome.runtime !== 'undefined' &&
+      Boolean(chrome.runtime.id)
+    );
   }
 
   public async publish(message: ExtensionMessage): Promise<void> {
