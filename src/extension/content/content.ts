@@ -2,12 +2,34 @@ import { ChromeMessageBus } from '../../infrastructure/messaging/ChromeMessageBu
 import { TicketboxJourneyAdapter } from '../../infrastructure/ticketbox/TicketboxJourneyAdapter';
 import { SanitizedLogger } from '../../infrastructure/logging/SanitizedLogger';
 import { ExtensionMessage } from '../shared/messages';
+import { ExecuteBookingJourneyUseCase } from '../../application/use-cases/ExecuteBookingJourneyUseCase';
+import { PurchaseStateMachine } from '../../domain/state-machine/PurchaseStateMachine';
+import { PurchaseState, StateContext } from '../../domain/states/PurchaseState';
+import { ChromeStorageRepository } from '../../infrastructure/storage/ChromeStorageRepository';
+import { BookingPreferences } from '../../domain/entities/BookingJourneyModels';
+import { LatencyTracker } from '../../application/services/LatencyTracker';
 
 const logger = new SanitizedLogger({ state: 'CONTENT_SCRIPT' });
 const messageBus = new ChromeMessageBus(logger);
 const adapter = new TicketboxJourneyAdapter(logger);
+const storage = new ChromeStorageRepository();
+const stateMachine = new PurchaseStateMachine(PurchaseState.MONITORING);
+
+stateMachine.subscribe(async (context: StateContext) => {
+  await storage.saveCurrentState(context);
+  await messageBus.publish({
+    type: 'STATE_CHANGED',
+    timestamp: new Date().toISOString(),
+    attemptId: stateMachine.attemptId,
+    state: context.currentState,
+    context,
+  });
+});
+
+const journeyUseCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, messageBus, logger);
 
 let isMonitoringActive = false;
+let isExecutingJourney = false;
 let monitoringTimer: number | null = null;
 let debounceTimer: number | null = null;
 
@@ -59,12 +81,7 @@ async function performDiscoveryScan(): Promise<void> {
         mode: (t.mode === 'ZONE' ? 'AREA_BASED' : t.mode) as
           'STANDING' | 'SEATED' | 'AREA_BASED' | 'UNKNOWN',
         availability: t.availability as
-          | 'AVAILABLE'
-          | 'SOLD_OUT'
-          | 'OFFLINE_SALE'
-          | 'NOT_STARTED'
-          | 'CLOSED'
-          | 'UNKNOWN',
+          'AVAILABLE' | 'SOLD_OUT' | 'OFFLINE_SALE' | 'NOT_STARTED' | 'CLOSED' | 'UNKNOWN',
         selectable: t.selectable,
         minQuantity: t.minQuantity,
         maxQuantity: t.maxQuantity,
@@ -131,8 +148,108 @@ async function performDiscoveryScan(): Promise<void> {
 
     // Publish JOURNEY_UPDATE with full catalogSnapshot
     await messageBus.publish(journeyUpdate);
+
+    // If monitoring is active, check if we should trigger the booking journey
+    if (isMonitoringActive && !isExecutingJourney && availableTickets.length > 0) {
+      attemptBookingJourney();
+    }
   } catch (err) {
     logger.error('Error during discovery scan in content script', err);
+  }
+}
+
+/**
+ * Executes the state-machine-driven booking journey when armed.
+ * Transitions strictly through canonical states up to PAYMENT_GATE.
+ */
+async function attemptBookingJourney(): Promise<void> {
+  if (!isMonitoringActive || isExecutingJourney) return;
+
+  try {
+    const config = await storage.getConfiguration();
+    if (!config) return;
+
+    const plan = config.purchasePlan;
+    const priorities = plan
+      ? plan.ticketRules.map((r) => r.ticketName || r.ticketId).filter(Boolean)
+      : config.preferences?.categoryPriority || [];
+
+    if (priorities.length === 0) {
+      logger.info('No ticket priorities configured; waiting for user configuration');
+      return;
+    }
+
+    const preferences: BookingPreferences = {
+      categoryPriority: priorities,
+      quantity: plan?.ticketRules[0]?.quantity ?? config.preferences?.quantity ?? 1,
+      allowFallback: plan?.allowFallback ?? config.preferences?.allowFallback ?? true,
+      seatPreference: 'ANY_AVAILABLE',
+      nonAdjacentFallback: 'SELECT_NON_ADJACENT',
+      userProfile: config.userProfile,
+    };
+
+    // Discover catalog
+    const catalog = await adapter.discoverTicketCatalog();
+    const allTickets = catalog.showings.flatMap((s) => s.ticketTypes);
+    const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
+
+    if (availableTickets.length === 0) {
+      logger.info('No tickets currently available. Continuing monitoring...');
+      return;
+    }
+
+    // Check if any available ticket matches user priority or fallback
+    const hasMatch =
+      preferences.allowFallback ||
+      availableTickets.some((t) =>
+        priorities.some(
+          (p) =>
+            t.name.toLowerCase().includes(p.toLowerCase()) ||
+            p.toLowerCase().includes(t.name.toLowerCase())
+        )
+      );
+
+    if (!hasMatch) {
+      logger.info('Available tickets do not match priority rules. Continuing monitoring...');
+      return;
+    }
+
+    logger.info('Matching ticket detected! Starting booking journey execution...', {
+      priorities,
+      quantity: preferences.quantity,
+    });
+
+    isExecutingJourney = true;
+    const tracker = new LatencyTracker(stateMachine.attemptId || `attempt_${Date.now()}`, logger);
+    tracker.recordT0(Date.now(), true);
+
+    const result = await journeyUseCase.execute(preferences, tracker);
+
+    logger.info('Booking journey executed', {
+      success: result.success,
+      finalState: result.finalState,
+      requiresUserAction: result.requiresUserAction,
+    });
+
+    // When payment gate, consent, or reservation is reached: pause monitoring so we don't loop
+    if (
+      result.finalState === PurchaseState.PAYMENT_GATE ||
+      result.finalState === PurchaseState.CONSENT_REQUIRED ||
+      result.finalState === PurchaseState.HELD ||
+      result.finalState === PurchaseState.CONFIRMED ||
+      result.finalState === PurchaseState.STOPPED
+    ) {
+      logger.info(`Journey reached target state ${result.finalState}. Halting monitoring loop.`);
+      isMonitoringActive = false;
+      if (monitoringTimer) {
+        clearInterval(monitoringTimer);
+        monitoringTimer = null;
+      }
+    }
+  } catch (err) {
+    logger.error('Error during booking journey execution in content script', err);
+  } finally {
+    isExecutingJourney = false;
   }
 }
 
@@ -185,12 +302,28 @@ messageBus.subscribe((message: ExtensionMessage) => {
       break;
     }
 
+    case 'ARM_REQUESTED': {
+      logger.info('Content script received ARM_REQUESTED');
+      isMonitoringActive = true;
+      performDiscoveryScan();
+      setTimeout(attemptBookingJourney, 400);
+      if (!monitoringTimer) {
+        monitoringTimer = window.setInterval(() => {
+          performDiscoveryScan();
+        }, 2000);
+      }
+      break;
+    }
+
     case 'START_MONITORING': {
       logger.info('Content script received START_MONITORING');
       isMonitoringActive = true;
       performDiscoveryScan();
+      setTimeout(attemptBookingJourney, 400);
       if (!monitoringTimer) {
-        monitoringTimer = window.setInterval(performDiscoveryScan, 3000);
+        monitoringTimer = window.setInterval(() => {
+          performDiscoveryScan();
+        }, 2000);
       }
       break;
     }
@@ -233,4 +366,3 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage)
     }
   );
 }
-
