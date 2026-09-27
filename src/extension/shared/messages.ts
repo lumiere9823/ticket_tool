@@ -2,7 +2,6 @@ import { PurchaseState, FailureReason, StateContext } from '../../domain/states/
 import { CandidateTicket } from '../../domain/entities/CandidateTicket';
 import { TicketCatalogSnapshot } from '../../domain/entities/PurchasePlan';
 
-
 export type ExtensionMessageType =
   | 'STATE_CHANGED'
   | 'ARM_REQUESTED'
@@ -184,9 +183,7 @@ export interface JourneyUpdateMessage extends BaseExtensionMessage {
    * Legacy simple ticket array kept for backwards compatibility.
    * Use catalogSnapshot.tickets for full data including IDs, minQty, maxQty.
    */
-  tickets?:
-    | Array<{ name: string; price: number; mode: string; availability: string }>
-    | undefined;
+  tickets?: Array<{ name: string; price: number; mode: string; availability: string }> | undefined;
   selection?:
     | {
         ticket: string;
@@ -213,12 +210,7 @@ export interface ArmRequestedMessage extends BaseExtensionMessage {
   quantity: number;
   allowFallback?: boolean | undefined;
   seatPreference?:
-    | 'ANY_AVAILABLE'
-    | 'SAME_ROW'
-    | 'NEAREST_STAGE'
-    | 'AREA_PRIORITY'
-    | 'SPECIFIC_SEAT'
-    | undefined;
+    'ANY_AVAILABLE' | 'SAME_ROW' | 'NEAREST_STAGE' | 'AREA_PRIORITY' | 'SPECIFIC_SEAT' | undefined;
   nonAdjacentFallback?: 'WAIT' | 'SELECT_NON_ADJACENT' | 'STOP' | undefined;
   userProfile?:
     | {

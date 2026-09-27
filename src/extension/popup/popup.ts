@@ -56,7 +56,9 @@ const fallbackPolicyGroup = document.getElementById('fallback-policy-group') as 
 const profileNameInput = document.getElementById('profile-name') as HTMLInputElement;
 const profilePhoneInput = document.getElementById('profile-phone') as HTMLInputElement;
 const profileEmailInput = document.getElementById('profile-email') as HTMLInputElement;
-const profileAgreeTermsCheckbox = document.getElementById('profile-agree-terms') as HTMLInputElement;
+const profileAgreeTermsCheckbox = document.getElementById(
+  'profile-agree-terms'
+) as HTMLInputElement;
 
 const btnArm = document.getElementById('btn-arm') as HTMLButtonElement;
 const btnStop = document.getElementById('btn-stop') as HTMLButtonElement;
@@ -205,8 +207,8 @@ function ticketOptionLabel(t: TicketOption): string {
     t.availability === 'AVAILABLE'
       ? ''
       : t.availability === 'SOLD_OUT'
-      ? ' — HẾT VÉ'
-      : ` — ${t.availability}`;
+        ? ' — HẾT VÉ'
+        : ` — ${t.availability}`;
   return `${t.name} — ${price}${avail}`;
 }
 
@@ -287,8 +289,8 @@ function buildTicketRuleCard(rule: TicketRule, ruleIndex: number): HTMLElement {
         t.availability === 'AVAILABLE'
           ? 'opt-available'
           : t.availability === 'SOLD_OUT'
-          ? 'opt-soldout'
-          : 'opt-unknown';
+            ? 'opt-soldout'
+            : 'opt-unknown';
       if (!t.selectable) {
         opt.disabled = true;
       }
@@ -550,7 +552,8 @@ function addTicketRuleRow(rule?: Partial<TicketRule>): void {
 
 function renderCatalogTable(tickets: TicketOption[]): void {
   if (!tickets || tickets.length === 0) {
-    ticketsTbody.innerHTML = '<tr><td colspan="4" class="empty-cell">No tickets discovered yet</td></tr>';
+    ticketsTbody.innerHTML =
+      '<tr><td colspan="4" class="empty-cell">No tickets discovered yet</td></tr>';
     return;
   }
 
@@ -611,7 +614,9 @@ function applyNewCatalog(snapshot: TicketCatalogSnapshot): void {
     validateAllRuleCards();
   }
 
-  addLog(`Catalog updated: ${newCount} ticket${newCount !== 1 ? 's' : ''} — ${snapshot.loadMessage}`);
+  addLog(
+    `Catalog updated: ${newCount} ticket${newCount !== 1 ? 's' : ''} — ${snapshot.loadMessage}`
+  );
 }
 
 /**
@@ -771,9 +776,7 @@ async function findTicketboxTab(): Promise<chrome.tabs.Tab | null> {
         const inputUrl = eventUrlInput.value.trim().toLowerCase();
         if (inputUrl) {
           const cleanInput = inputUrl.split('?')[0]!;
-          const exactMatch = tbTabs.find(
-            (t) => t.url && t.url.toLowerCase().includes(cleanInput)
-          );
+          const exactMatch = tbTabs.find((t) => t.url && t.url.toLowerCase().includes(cleanInput));
           if (exactMatch) {
             resolve(exactMatch);
             return;
@@ -941,21 +944,28 @@ async function loadInitialData(): Promise<void> {
           eventId: null,
           eventTitle: cached.eventTitle ?? null,
           showings: [],
-          tickets: (cached.tickets as Array<{ name: string; price: number; mode: string; availability: string }>).map(
-            (t) => ({
-              id: null,
-              name: t.name,
-              price: t.price,
-              currency: 'VND' as const,
-              mode: (t.mode === 'ZONE' ? 'AREA_BASED' : t.mode) as 'STANDING' | 'SEATED' | 'AREA_BASED' | 'UNKNOWN',
-              availability: t.availability as 'AVAILABLE' | 'SOLD_OUT' | 'OFFLINE_SALE' | 'NOT_STARTED' | 'CLOSED' | 'UNKNOWN',
-              selectable: t.availability === 'AVAILABLE',
-              minQuantity: null,
-              maxQuantity: null,
-              source: 'EVENT_PAGE' as const,
-              evidence: [],
-            })
-          ),
+          tickets: (
+            cached.tickets as Array<{
+              name: string;
+              price: number;
+              mode: string;
+              availability: string;
+            }>
+          ).map((t) => ({
+            id: null,
+            name: t.name,
+            price: t.price,
+            currency: 'VND' as const,
+            mode: (t.mode === 'ZONE' ? 'AREA_BASED' : t.mode) as
+              'STANDING' | 'SEATED' | 'AREA_BASED' | 'UNKNOWN',
+            availability: t.availability as
+              'AVAILABLE' | 'SOLD_OUT' | 'OFFLINE_SALE' | 'NOT_STARTED' | 'CLOSED' | 'UNKNOWN',
+            selectable: t.availability === 'AVAILABLE',
+            minQuantity: null,
+            maxQuantity: null,
+            source: 'EVENT_PAGE' as const,
+            evidence: [],
+          })),
           loadState: 'LOADED',
           loadMessage: `${cached.tickets.length} ticket options discovered (cached).`,
           discoveredAt: null,
@@ -1015,8 +1025,10 @@ messageBus.subscribe((message: ExtensionMessage) => {
               name: t.name,
               price: t.price,
               currency: 'VND',
-              mode: (t.mode === 'ZONE' ? 'AREA_BASED' : t.mode) as 'STANDING' | 'SEATED' | 'AREA_BASED' | 'UNKNOWN',
-              availability: t.availability as 'AVAILABLE' | 'SOLD_OUT' | 'OFFLINE_SALE' | 'NOT_STARTED' | 'CLOSED' | 'UNKNOWN',
+              mode: (t.mode === 'ZONE' ? 'AREA_BASED' : t.mode) as
+                'STANDING' | 'SEATED' | 'AREA_BASED' | 'UNKNOWN',
+              availability: t.availability as
+                'AVAILABLE' | 'SOLD_OUT' | 'OFFLINE_SALE' | 'NOT_STARTED' | 'CLOSED' | 'UNKNOWN',
               selectable: t.availability === 'AVAILABLE',
               minQuantity: null,
               maxQuantity: null,
@@ -1076,7 +1088,10 @@ messageBus.subscribe((message: ExtensionMessage) => {
       if (message.category === 'CONSENT_REQUIRED') {
         updateStateBadge(PurchaseState.CONSENT_REQUIRED, 'User consent required');
       } else if (message.category === 'PAYMENT_REQUIRED') {
-        updateStateBadge(PurchaseState.PAYMENT_GATE, 'Payment step reached — user action required.');
+        updateStateBadge(
+          PurchaseState.PAYMENT_GATE,
+          'Payment step reached — user action required.'
+        );
       }
       break;
     }
@@ -1118,8 +1133,8 @@ btnArm.addEventListener('click', async () => {
   if (!validation.hasActionableRule && currentCatalog.tickets.length > 0) {
     const proceed = confirm(
       'Warning: No selected ticket is currently available.\n\n' +
-      (validation.errors.join('\n') || 'All selected tickets are unavailable.') +
-      '\n\nArm anyway and wait for availability?'
+        (validation.errors.join('\n') || 'All selected tickets are unavailable.') +
+        '\n\nArm anyway and wait for availability?'
     );
     if (!proceed) return;
   }
@@ -1212,4 +1227,3 @@ eventUrlInput.addEventListener('keydown', (e) => {
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', loadInitialData);
-

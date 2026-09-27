@@ -1,222 +1,229 @@
 <!doctype html>
 <html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ticketbox Assistant</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
 
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ticketbox Assistant</title>
-  <link rel="stylesheet" href="popup.css" />
-</head>
+  <body>
+    <div class="container">
+      <header class="header">
+        <div class="header-title">
+          <h2>Ticketbox Assistant</h2>
+          <span class="badge" id="state-badge">INIT</span>
+        </div>
+        <p class="subtitle">Platform-Safe Purchase Assistant</p>
+      </header>
 
-<body>
-  <div class="container">
-    <header class="header">
-      <div class="header-title">
-        <h2>Ticketbox Assistant</h2>
-        <span class="badge" id="state-badge">INIT</span>
-      </div>
-      <p class="subtitle">Platform-Safe Purchase Assistant</p>
-    </header>
+      <!-- CONFIGURATION SECTION -->
+      <section class="section config-card">
+        <label for="event-url">Target Event URL</label>
+        <input type="text" id="event-url" placeholder="https://ticketbox.vn/event/..." />
 
-    <!-- CONFIGURATION SECTION -->
-    <section class="section config-card">
-      <label for="event-url">Target Event URL</label>
-      <input type="text" id="event-url" placeholder="https://ticketbox.vn/event/..." />
-
-      <!-- ============================================================
+        <!-- ============================================================
            TICKET CATALOG STATUS
            ============================================================ -->
-      <div class="catalog-status" id="catalog-status">
-        <div class="catalog-status-icon" id="catalog-status-icon">⌛</div>
-        <span id="catalog-status-text">Waiting for Ticketbox discovery...</span>
-        <button type="button" class="btn-refresh" id="btn-refresh-catalog" title="Làm mới catalog">↺</button>
-      </div>
+        <div class="catalog-status" id="catalog-status">
+          <div class="catalog-status-icon" id="catalog-status-icon">⌛</div>
+          <span id="catalog-status-text">Waiting for Ticketbox discovery...</span>
+          <button
+            type="button"
+            class="btn-refresh"
+            id="btn-refresh-catalog"
+            title="Làm mới catalog"
+          >
+            ↺
+          </button>
+        </div>
 
-      <!-- ============================================================
+        <!-- ============================================================
            EVENT INFO (populated after discovery)
            ============================================================ -->
-      <div class="event-info-bar" id="event-info-bar" style="display:none;">
-        <div class="event-info-title" id="event-info-title">-</div>
-      </div>
+        <div class="event-info-bar" id="event-info-bar" style="display: none">
+          <div class="event-info-title" id="event-info-title">-</div>
+        </div>
 
-      <!-- ============================================================
+        <!-- ============================================================
            SHOWING SELECTION
            ============================================================ -->
-      <div class="field-group" id="showing-group" style="display:none;">
-        <label for="showing-select">BUỔI DIỄN</label>
-        <select id="showing-select" class="select-field">
-          <option value="">— chưa có buổi diễn —</option>
-        </select>
-      </div>
-
-      <!-- ============================================================
-           PURCHASE PLAN: TICKET RULES
-           ============================================================ -->
-      <div class="ticket-selection-card">
-        <div class="ticket-selection-header">Kế hoạch mua vé (theo thứ tự ưu tiên)</div>
-        <div id="ticket-rules-container" class="ticket-rules-container"></div>
-        <button type="button" id="btn-add-ticket-row" class="btn-add-row">+ Thêm loại vé</button>
-        <span class="hint">Ưu tiên được đánh giá từ trên xuống. Loại vé được chọn từ danh mục đã khám phá.</span>
-      </div>
-
-      <!-- ============================================================
-           FALLBACK POLICY
-           ============================================================ -->
-      <div class="fallback-row">
-        <label class="checkbox-label">
-          <input type="checkbox" id="allow-fallback" checked />
-          Cho phép fallback
-        </label>
-        <div class="fallback-policy-group" id="fallback-policy-group">
-          <label for="fallback-policy-select" class="inline-label">Chính sách:</label>
-          <select id="fallback-policy-select" class="select-field select-inline">
-            <option value="NEXT_PRIORITY">Vé ưu tiên tiếp theo</option>
-            <option value="ANY_AVAILABLE">Bất kỳ vé nào còn</option>
-            <option value="STOP_AND_NOTIFY">Dừng và thông báo</option>
+        <div class="field-group" id="showing-group" style="display: none">
+          <label for="showing-select">BUỔI DIỄN</label>
+          <select id="showing-select" class="select-field">
+            <option value="">— chưa có buổi diễn —</option>
           </select>
         </div>
-      </div>
 
-      <!-- ============================================================
+        <!-- ============================================================
+           PURCHASE PLAN: TICKET RULES
+           ============================================================ -->
+        <div class="ticket-selection-card">
+          <div class="ticket-selection-header">Kế hoạch mua vé (theo thứ tự ưu tiên)</div>
+          <div id="ticket-rules-container" class="ticket-rules-container"></div>
+          <button type="button" id="btn-add-ticket-row" class="btn-add-row">+ Thêm loại vé</button>
+          <span class="hint"
+            >Ưu tiên được đánh giá từ trên xuống. Loại vé được chọn từ danh mục đã khám phá.</span
+          >
+        </div>
+
+        <!-- ============================================================
+           FALLBACK POLICY
+           ============================================================ -->
+        <div class="fallback-row">
+          <label class="checkbox-label">
+            <input type="checkbox" id="allow-fallback" checked />
+            Cho phép fallback
+          </label>
+          <div class="fallback-policy-group" id="fallback-policy-group">
+            <label for="fallback-policy-select" class="inline-label">Chính sách:</label>
+            <select id="fallback-policy-select" class="select-field select-inline">
+              <option value="NEXT_PRIORITY">Vé ưu tiên tiếp theo</option>
+              <option value="ANY_AVAILABLE">Bất kỳ vé nào còn</option>
+              <option value="STOP_AND_NOTIFY">Dừng và thông báo</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- ============================================================
            USER PROFILE
            ============================================================ -->
-      <details class="user-profile-details">
-        <summary>User Profile &amp; Form Autofill</summary>
-        <div class="profile-fields">
-          <input type="text" id="profile-name" placeholder="Full Name (e.g. Nguyễn Văn A)" />
-          <input type="text" id="profile-phone" placeholder="Phone (e.g. 0901234567)" />
-          <input type="email" id="profile-email" placeholder="Email (e.g. user@example.com)" />
-          <label class="checkbox-label" style="margin-top: 4px;">
-            <input type="checkbox" id="profile-agree-terms" />
-            Pre-agree to Event Terms &amp; Conditions
-          </label>
-        </div>
-      </details>
+        <details class="user-profile-details">
+          <summary>User Profile &amp; Form Autofill</summary>
+          <div class="profile-fields">
+            <input type="text" id="profile-name" placeholder="Full Name (e.g. Nguyễn Văn A)" />
+            <input type="text" id="profile-phone" placeholder="Phone (e.g. 0901234567)" />
+            <input type="email" id="profile-email" placeholder="Email (e.g. user@example.com)" />
+            <label class="checkbox-label" style="margin-top: 4px">
+              <input type="checkbox" id="profile-agree-terms" />
+              Pre-agree to Event Terms &amp; Conditions
+            </label>
+          </div>
+        </details>
 
-      <div class="actions" style="margin-top: 10px;">
-        <button id="btn-arm" class="btn btn-primary">ARM ASSISTANT</button>
-        <button id="btn-stop" class="btn btn-danger">STOP</button>
-      </div>
-    </section>
-
-    <!-- ============================================================
-         TICKET CATALOG TABLE (informational, also source of dropdown options)
-         ============================================================ -->
-    <section class="info-card">
-      <div class="card-header">TICKET CATALOG</div>
-      <div id="tickets-table-container" class="tickets-container">
-        <table class="tickets-table">
-          <thead>
-            <tr>
-              <th>Loại Vé</th>
-              <th>Giá</th>
-              <th>Mode</th>
-              <th>Trạng thái</th>
-            </tr>
-          </thead>
-          <tbody id="tickets-tbody">
-            <tr>
-              <td colspan="4" class="empty-cell">No tickets discovered yet</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- ============================================================
-         SELECTION & SUMMARY
-         ============================================================ -->
-    <div class="dashboard-grid">
-      <section class="info-card">
-        <div class="card-header">SELECTION</div>
-        <div class="info-row">
-          <span class="info-label">Ticket:</span>
-          <strong id="sel-ticket">-</strong>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Mode:</span>
-          <span id="sel-mode">-</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Area:</span>
-          <span id="sel-area">-</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Seats:</span>
-          <strong id="sel-seats">-</strong>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Quantity:</span>
-          <strong id="sel-qty">-</strong>
+        <div class="actions" style="margin-top: 10px">
+          <button id="btn-arm" class="btn btn-primary">ARM ASSISTANT</button>
+          <button id="btn-stop" class="btn btn-danger">STOP</button>
         </div>
       </section>
 
+      <!-- ============================================================
+         TICKET CATALOG TABLE (informational, also source of dropdown options)
+         ============================================================ -->
       <section class="info-card">
-        <div class="card-header">SUMMARY</div>
-        <div class="info-row">
-          <span class="info-label">Subtotal:</span>
-          <span id="sum-subtotal">-</span>
+        <div class="card-header">TICKET CATALOG</div>
+        <div id="tickets-table-container" class="tickets-container">
+          <table class="tickets-table">
+            <thead>
+              <tr>
+                <th>Loại Vé</th>
+                <th>Giá</th>
+                <th>Mode</th>
+                <th>Trạng thái</th>
+              </tr>
+            </thead>
+            <tbody id="tickets-tbody">
+              <tr>
+                <td colspan="4" class="empty-cell">No tickets discovered yet</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <div class="info-row">
-          <span class="info-label">Fees:</span>
-          <span id="sum-fees">-</span>
+      </section>
+
+      <!-- ============================================================
+         SELECTION & SUMMARY
+         ============================================================ -->
+      <div class="dashboard-grid">
+        <section class="info-card">
+          <div class="card-header">SELECTION</div>
+          <div class="info-row">
+            <span class="info-label">Ticket:</span>
+            <strong id="sel-ticket">-</strong>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Mode:</span>
+            <span id="sel-mode">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Area:</span>
+            <span id="sel-area">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Seats:</span>
+            <strong id="sel-seats">-</strong>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Quantity:</span>
+            <strong id="sel-qty">-</strong>
+          </div>
+        </section>
+
+        <section class="info-card">
+          <div class="card-header">SUMMARY</div>
+          <div class="info-row">
+            <span class="info-label">Subtotal:</span>
+            <span id="sum-subtotal">-</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Fees:</span>
+            <span id="sum-fees">-</span>
+          </div>
+          <div class="info-row total-row">
+            <span class="info-label">Total:</span>
+            <strong id="sum-total">-</strong>
+          </div>
+        </section>
+      </div>
+
+      <!-- CURRENT STATE -->
+      <section class="info-card state-monitor-card">
+        <div class="card-header">CURRENT STATE</div>
+        <div class="state-details">
+          <div class="state-row">
+            <span>Status:</span>
+            <strong id="current-step-display">IDLE</strong>
+          </div>
+          <div class="blocking-row" id="blocking-reason-container" style="display: none">
+            <span class="blocking-label">Blocking Reason:</span>
+            <span id="blocking-reason-text" class="blocking-text">-</span>
+          </div>
         </div>
-        <div class="info-row total-row">
-          <span class="info-label">Total:</span>
-          <strong id="sum-total">-</strong>
+      </section>
+
+      <!-- TELEMETRY -->
+      <section class="telemetry-section">
+        <div class="telemetry-header">
+          <span>Attempt ID:</span>
+          <strong id="attempt-id-display">None</strong>
         </div>
+        <div class="latency-grid">
+          <div class="latency-item">
+            <span>Detection</span>
+            <strong id="metric-t1">-</strong>
+          </div>
+          <div class="latency-item">
+            <span>Decision</span>
+            <strong id="metric-t2">-</strong>
+          </div>
+          <div class="latency-item">
+            <span>Action</span>
+            <strong id="metric-t3">-</strong>
+          </div>
+          <div class="latency-item">
+            <span>Confirm</span>
+            <strong id="metric-t5">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACTIVITY LOG -->
+      <section class="log-section">
+        <label>Activity Log</label>
+        <div id="log-box" class="log-box"></div>
       </section>
     </div>
 
-    <!-- CURRENT STATE -->
-    <section class="info-card state-monitor-card">
-      <div class="card-header">CURRENT STATE</div>
-      <div class="state-details">
-        <div class="state-row">
-          <span>Status:</span>
-          <strong id="current-step-display">IDLE</strong>
-        </div>
-        <div class="blocking-row" id="blocking-reason-container" style="display: none;">
-          <span class="blocking-label">Blocking Reason:</span>
-          <span id="blocking-reason-text" class="blocking-text">-</span>
-        </div>
-      </div>
-    </section>
-
-    <!-- TELEMETRY -->
-    <section class="telemetry-section">
-      <div class="telemetry-header">
-        <span>Attempt ID:</span>
-        <strong id="attempt-id-display">None</strong>
-      </div>
-      <div class="latency-grid">
-        <div class="latency-item">
-          <span>Detection</span>
-          <strong id="metric-t1">-</strong>
-        </div>
-        <div class="latency-item">
-          <span>Decision</span>
-          <strong id="metric-t2">-</strong>
-        </div>
-        <div class="latency-item">
-          <span>Action</span>
-          <strong id="metric-t3">-</strong>
-        </div>
-        <div class="latency-item">
-          <span>Confirm</span>
-          <strong id="metric-t5">-</strong>
-        </div>
-      </div>
-    </section>
-
-    <!-- ACTIVITY LOG -->
-    <section class="log-section">
-      <label>Activity Log</label>
-      <div id="log-box" class="log-box"></div>
-    </section>
-  </div>
-
-  <script type="module" src="popup.ts"></script>
-</body>
-
+    <script type="module" src="popup.ts"></script>
+  </body>
 </html>
