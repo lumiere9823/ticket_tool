@@ -1,8 +1,48 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite';
+import { defineConfig, build, type Plugin } from 'vite';
 import { resolve } from 'node:path';
 
+/**
+ * Builds content.js as a standalone IIFE bundle without code-splitting.
+ * Chrome Extension content scripts in Manifest V3 are classic scripts and CANNOT use ES module imports.
+ */
+function buildContentScript(): Plugin {
+  return {
+    name: 'build-content-script',
+    async closeBundle() {
+      await build({
+        configFile: false,
+        resolve: {
+          alias: {
+            '@domain': resolve(__dirname, 'src/domain'),
+            '@application': resolve(__dirname, 'src/application'),
+            '@infrastructure': resolve(__dirname, 'src/infrastructure'),
+            '@extension': resolve(__dirname, 'src/extension'),
+            '@ui': resolve(__dirname, 'src/ui'),
+          },
+        },
+        build: {
+          outDir: 'dist',
+          emptyOutDir: false,
+          target: 'es2022',
+          rollupOptions: {
+            input: {
+              content: resolve(__dirname, 'src/extension/content/content.ts'),
+            },
+            output: {
+              format: 'iife',
+              entryFileNames: 'content.js',
+              extend: true,
+            },
+          },
+        },
+      });
+    },
+  };
+}
+
 export default defineConfig({
+  plugins: process.env.VITEST ? [] : [buildContentScript()],
   resolve: {
     alias: {
       '@domain': resolve(__dirname, 'src/domain'),
@@ -20,11 +60,10 @@ export default defineConfig({
       input: {
         popup: resolve(__dirname, 'src/extension/popup/popup.html'),
         background: resolve(__dirname, 'src/extension/background/service-worker.ts'),
-        content: resolve(__dirname, 'src/extension/content/content.ts'),
       },
       output: {
         entryFileNames: (chunkInfo) => {
-          if (chunkInfo.name === 'background' || chunkInfo.name === 'content') {
+          if (chunkInfo.name === 'background') {
             return '[name].js';
           }
           return 'assets/[name]-[hash].js';
