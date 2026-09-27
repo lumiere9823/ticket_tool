@@ -5,7 +5,60 @@ import {
   SeatMapLegendItem,
   SeatStatus,
 } from '../../../domain/entities/BookingJourneyModels';
+import { TicketType } from '../../../domain/entities/EventCatalog';
 import { DOMElementLike } from './DOMElementLike';
+
+export interface SeatmapApiSeat {
+  id: number;
+  rowId: number;
+  name: string;
+  status: number;
+  position?: number;
+  x: number;
+  y: number;
+}
+
+export interface SeatmapApiRow {
+  id: number;
+  sectionId: number;
+  name: string;
+  seats: SeatmapApiSeat[];
+}
+
+export interface SeatmapApiTicketType {
+  id: number;
+  name: string;
+  price: number;
+  color?: string;
+  status?: string;
+  minQtyPerOrder?: number;
+  maxQtyPerOrder?: number;
+}
+
+export interface SeatmapApiSection {
+  id: number;
+  seatMapId: number;
+  name: string;
+  isReservingSeat: boolean;
+  isStage?: boolean;
+  status: number;
+  ticketType?: SeatmapApiTicketType;
+  rows?: SeatmapApiRow[];
+  elements?: unknown[];
+}
+
+export interface SeatmapApiResponse {
+  status: number;
+  message: string;
+  data?: {
+    result?: {
+      id: number;
+      name: string;
+      status: number;
+      sections: SeatmapApiSection[];
+    };
+  };
+}
 
 export class TicketboxSeatMapParser {
   /**
@@ -306,4 +359,132 @@ export class TicketboxSeatMapParser {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '');
   }
+
+  /**
+   * Authoritative parsing of distinct TicketTypes directly from Ticketbox Seatmap API.
+   * Deduplicates by ticketType.id, returning the precise ticket tiers.
+   */
+  public static parseTicketTypesFromSeatmapApi(data: SeatmapApiResponse): TicketType[] {
+    const sections = data?.data?.result?.sections;
+    if (!Array.isArray(sections)) return [];
+
+    const uniqueTicketTypes = new Map<number, SeatmapApiTicketType>();
+    for (const section of sections) {
+      if (section.ticketType && typeof section.ticketType.id === 'number') {
+        if (!uniqueTicketTypes.has(section.ticketType.id)) {
+          uniqueTicketTypes.set(section.ticketType.id, section.ticketType);
+        }
+      }
+    }
+
+    const ticketTypes: TicketType[] = [];
+    for (const tt of uniqueTicketTypes.values()) {
+      const isAvailable = tt.status === 'book_now';
+      ticketTypes.push({
+        id: String(tt.id),
+        name: tt.name,
+        price: {
+          amount: tt.price,
+          currency: 'VND',
+        },
+        mode: 'SEATED',
+        availability: isAvailable ? 'AVAILABLE' : 'SOLD_OUT',
+        selectable: isAvailable,
+        minQuantity: tt.minQtyPerOrder ?? 1,
+        maxQuantity: tt.maxQtyPerOrder ?? 4,
+        selectedQuantity: 0,
+        source: {
+          page: 'BOOKING',
+          evidence: ['SEATMAP_API', `TICKET_TYPE_${tt.id}`],
+        },
+        rawLabel: `${tt.name} - ${tt.price} VND`,
+      });
+    }
+
+    return ticketTypes;
+  }
+
+  /**
+   * Authoritative parsing of individual seats with coordinates from Ticketbox Seatmap API.
+   * If targetTicketIdOrName is provided, filters to matching sections/ticket types.
+   */
+  public static parseSeatsFromSeatmapApi(
+    data: SeatmapApiResponse,
+    targetTicketIdOrName?: string
+  ): Seat[] {
+    const sections = data?.data?.result?.sections;
+    if (!Array.isArray(sections)) return [];
+
+    const normTarget = targetTicketIdOrName ? targetTicketIdOrName.trim().toLowerCase() : '';
+
+    let targetSections = sections;
+    if (normTarget) {
+      const matched = sections.filter((s) => {
+        const ttName = s.ticketType?.name?.toLowerCase() || '';
+        const ttId = String(s.ticketType?.id || '');
+        const secName = s.name.toLowerCase();
+        return (
+          ttName === normTarget ||
+          ttId === normTarget ||
+          secName === normTarget ||
+          (normTarget.length > 2 && (ttName.includes(normTarget) || normTarget.includes(ttName)))
+        );
+      });
+      if (matched.length > 0) {
+        targetSections = matched;
+      }
+    }
+
+    const seats: Seat[] = [];
+    for (const section of targetSections) {
+      if (!section.rows || !Array.isArray(section.rows)) continue;
+      for (const row of section.rows) {
+        if (!row.seats || !Array.isArray(row.seats)) continue;
+        for (const seat of row.seats) {
+          const isAvailable = seat.status === 1;
+          const num = parseInt(seat.name, 10) || 0;
+          const label = `${row.name}${seat.name}`;
+          seats.push({
+            id: String(seat.id),
+            label,
+            row: row.name,
+            number: num,
+            area: section.name,
+            status: isAvailable ? 'AVAILABLE' : 'UNAVAILABLE',
+            selectable: isAvailable,
+            price: section.ticketType?.price,
+            x: seat.x,
+            y: seat.y,
+          });
+        }
+      }
+    }
+
+    return seats;
+  }
+
+  /**
+   * Authoritative parsing of seat zones/areas from Ticketbox Seatmap API.
+   */
+  public static parseAreasFromSeatmapApi(data: SeatmapApiResponse): SeatArea[] {
+    const sections = data?.data?.result?.sections;
+    if (!Array.isArray(sections)) return [];
+
+    const areas: SeatArea[] = [];
+    for (const sec of sections) {
+      if (!sec.isReservingSeat || sec.isStage) continue;
+      const isAvailable = sec.ticketType ? sec.ticketType.status === 'book_now' : sec.status === 1;
+      areas.push({
+        id: String(sec.id),
+        name: sec.name,
+        price: sec.ticketType?.price ?? 0,
+        currency: 'VND',
+        mode: 'SEATED',
+        availability: isAvailable ? 'AVAILABLE' : 'SOLD_OUT',
+        selectable: isAvailable,
+      });
+    }
+    return areas;
+  }
 }
+

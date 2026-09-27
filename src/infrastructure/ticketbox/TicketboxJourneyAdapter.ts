@@ -28,7 +28,10 @@ import {
 } from '../../domain/entities/BookingJourneyModels';
 import { DOMElementLike, wrapBrowserElement } from './parsing/DOMElementLike';
 import { TicketboxCatalogParser } from './parsing/TicketboxCatalogParser';
-import { TicketboxSeatMapParser } from './parsing/TicketboxSeatMapParser';
+import {
+  SeatmapApiResponse,
+  TicketboxSeatMapParser,
+} from './parsing/TicketboxSeatMapParser';
 import { TicketboxSummaryParser } from './parsing/TicketboxSummaryParser';
 import { TicketboxFormParser } from './parsing/TicketboxFormParser';
 import { FormAutofillPolicy } from '../../domain/policies/FormAutofillPolicy';
@@ -53,6 +56,9 @@ interface MutableDOMElement extends DOMElementLike {
  */
 export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   private customRoot?: DOMElementLike | undefined;
+  private cachedSeatmapData?: SeatmapApiResponse | null = null;
+  private cachedShowingId?: string | null = null;
+  private cachedSeats: Seat[] = [];
 
   constructor(
     private readonly logger?: LoggerPort,
@@ -81,6 +87,88 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     } else if (typeof document !== 'undefined') {
       this.customRoot = wrapBrowserElement(root as Element | Document);
     }
+  }
+
+  public setSeatmapData(data: SeatmapApiResponse | null): void {
+    this.cachedSeatmapData = data;
+  }
+
+  public getShowingId(): string | null {
+    const url = typeof window !== 'undefined' ? window.location.href : '';
+    const root = this.getRoot();
+    return TicketboxCatalogParser.extractShowingId(url, root);
+  }
+
+  public async fetchSeatmapApi(showingId: string): Promise<SeatmapApiResponse | null> {
+    if (this.cachedShowingId === showingId && this.cachedSeatmapData) {
+      return this.cachedSeatmapData;
+    }
+
+    const url = `https://api-v2.ticketbox.vn/event/api/v1/events/showings/${showingId}/seatmap`;
+    this.logger?.info('Fetching seatmap API', { showingId, url });
+
+    // 1. Direct fetch if in browser or node
+    if (typeof fetch !== 'undefined') {
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const json = (await res.json()) as SeatmapApiResponse;
+          if (json && json.data?.result?.sections) {
+            this.cachedShowingId = showingId;
+            this.cachedSeatmapData = json;
+            this.logger?.info('Seatmap API fetched successfully via direct fetch', {
+              sectionsCount: json.data.result.sections.length,
+            });
+            return json;
+          }
+        }
+      } catch (err: unknown) {
+        this.logger?.debug('Direct fetch failed, falling back to background message', {
+          err: String(err),
+        });
+      }
+    }
+
+    // 2. Background service worker fetch fallback
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      try {
+        const response = await new Promise<SeatmapApiResponse | null>((resolve) => {
+          const timeout = setTimeout(() => resolve(null), 3000);
+          const listener = (msg: unknown) => {
+            const m = msg as {
+              type?: string;
+              showingId?: string;
+              success?: boolean;
+              data?: SeatmapApiResponse;
+            };
+            if (m && m.type === 'FETCH_SEATMAP_RESPONSE' && m.showingId === showingId) {
+              clearTimeout(timeout);
+              chrome.runtime.onMessage.removeListener(listener);
+              resolve(m.success && m.data ? m.data : null);
+            }
+          };
+          chrome.runtime.onMessage.addListener(listener);
+          chrome.runtime.sendMessage({
+            type: 'FETCH_SEATMAP_REQUEST',
+            timestamp: new Date().toISOString(),
+            showingId,
+          });
+        });
+
+        if (response && response.data?.result?.sections) {
+          this.cachedShowingId = showingId;
+          this.cachedSeatmapData = response;
+          this.logger?.info('Seatmap API fetched successfully via background worker', {
+            sectionsCount: response.data.result.sections.length,
+          });
+          return response;
+        }
+      } catch (err: unknown) {
+        this.logger?.warn('Background message fetch failed', { err: String(err) });
+      }
+    }
+
+    return null;
   }
 
   public async getEventState(): Promise<PageEventState> {
@@ -162,6 +250,55 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   public async discoverTicketCatalog(showingId?: string | null): Promise<EventCatalog> {
     const root = this.getRoot();
     const url = typeof window !== 'undefined' ? window.location.href : '';
+    const targetShowingId = showingId || this.getShowingId();
+
+    // 1. Attempt to fetch authoritative ticket tiers from Seatmap API when showing ID is available
+    if (targetShowingId) {
+      try {
+        const seatmapData = await this.fetchSeatmapApi(targetShowingId);
+        if (seatmapData) {
+          const apiTickets = TicketboxSeatMapParser.parseTicketTypesFromSeatmapApi(seatmapData);
+          if (apiTickets.length > 0) {
+            const baseCatalog = root
+              ? TicketboxCatalogParser.parseCatalog(root, url)
+              : {
+                  eventId: null,
+                  eventTitle: null,
+                  eventUrl: url,
+                  showings: [],
+                };
+
+            const showingName = baseCatalog.showings[0]?.name || null;
+            const showingDate = baseCatalog.showings[0]?.date || null;
+
+            this.logger?.info('Discovered ticket types from authoritative Seatmap API', {
+              showingId: targetShowingId,
+              ticketCount: apiTickets.length,
+            });
+
+            return {
+              eventId: baseCatalog.eventId,
+              eventTitle: baseCatalog.eventTitle,
+              eventUrl: url,
+              showings: [
+                {
+                  id: targetShowingId,
+                  name: showingName,
+                  date: showingDate,
+                  ticketTypes: apiTickets,
+                },
+              ],
+            };
+          }
+        }
+      } catch (err: unknown) {
+        this.logger?.warn('Error discovering tickets from Seatmap API, falling back to DOM parser', {
+          err: String(err),
+        });
+      }
+    }
+
+    // 2. DOM Parser fallback
     if (!root) {
       return {
         eventId: null,
@@ -553,6 +690,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
    */
   public async discoverAreas(): Promise<SeatArea[]> {
     const root = this.getRoot();
+    if (this.cachedSeatmapData) {
+      const apiAreas = TicketboxSeatMapParser.parseAreasFromSeatmapApi(this.cachedSeatmapData);
+      if (apiAreas.length > 0) return apiAreas;
+    }
     if (!root) return [];
     return TicketboxSeatMapParser.parseAreas(root);
   }
@@ -619,6 +760,28 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
    */
   public async discoverSeats(areaId?: string): Promise<Seat[]> {
     const root = this.getRoot();
+    const showingId = this.getShowingId();
+
+    // 1. Authoritative Seatmap API data
+    let seatmapData = this.cachedSeatmapData;
+    if (!seatmapData && showingId) {
+      seatmapData = await this.fetchSeatmapApi(showingId);
+    }
+
+    if (seatmapData) {
+      const apiSeats = TicketboxSeatMapParser.parseSeatsFromSeatmapApi(seatmapData, areaId);
+      if (apiSeats.length > 0) {
+        this.cachedSeats = apiSeats;
+        this.logger?.info('Discovered seats from authoritative Seatmap API', {
+          totalSeats: apiSeats.length,
+          availableCount: apiSeats.filter((s) => s.selectable).length,
+          areaId,
+        });
+        return apiSeats;
+      }
+    }
+
+    // 2. DOM Parser fallback
     if (!root) return [];
     let allSeats = TicketboxSeatMapParser.parseSeats(root);
 
@@ -652,6 +815,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       }
     }
 
+    this.cachedSeats = allSeats;
+
     if (areaId) {
       return allSeats.filter((s) => !s.area || s.area === areaId);
     }
@@ -668,25 +833,98 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     this.logger?.info('Selecting specific seats', { seatIds });
 
     for (const seatId of seatIds) {
-      const seatEl =
-        root.querySelector(`[data-seat-id="${seatId}"]`) ||
-        root.querySelector(`#${seatId}`) ||
-        root.querySelector(`[data-seat-label="${seatId}"]`) ||
-        root.querySelector(`[data-seat="${seatId}"]`);
+      let targetEl: DOMElementLike | null = null;
 
-      if (!seatEl) {
-        this.logger?.warn('Seat element not found', { seatId });
+      // 1. If we have cached seat with coordinates (x, y), search SVG circle / rect by coordinate
+      const seat = this.cachedSeats.find((s) => s.id === seatId || s.label === seatId);
+      if (seat && typeof seat.x === 'number' && typeof seat.y === 'number') {
+        const circles = root.querySelectorAll('svg circle, circle, svg rect, rect, [cx]');
+        let bestMatch: DOMElementLike | null = null;
+        let minDistance = 2.5; // coordinate tolerance
+
+        for (const c of circles) {
+          const cxAttr = c.getAttribute('cx') || c.getAttribute('x');
+          const cyAttr = c.getAttribute('cy') || c.getAttribute('y');
+          if (!cxAttr || !cyAttr) continue;
+          const cx = parseFloat(cxAttr);
+          const cy = parseFloat(cyAttr);
+          if (!isNaN(cx) && !isNaN(cy)) {
+            const dist = Math.hypot(cx - seat.x, cy - seat.y);
+            if (dist < minDistance) {
+              minDistance = dist;
+              bestMatch = c;
+            }
+          }
+        }
+
+        if (bestMatch) {
+          targetEl = bestMatch;
+          this.logger?.info('Found seat SVG circle by coordinates', {
+            seatId,
+            label: seat.label,
+            x: seat.x,
+            y: seat.y,
+            minDistance,
+          });
+        }
+      }
+
+      // 2. Fall back to standard DOM selector attributes
+      if (!targetEl) {
+        targetEl =
+          root.querySelector(`[data-seat-id="${seatId}"]`) ||
+          root.querySelector(`#${seatId}`) ||
+          root.querySelector(`[data-seat-label="${seatId}"]`) ||
+          root.querySelector(`[data-seat="${seatId}"]`);
+      }
+
+      if (!targetEl) {
+        this.logger?.warn('Seat element not found in DOM or SVG', { seatId });
         return false;
       }
 
-      if (typeof (seatEl as MutableDOMElement).click === 'function') {
-        (seatEl as MutableDOMElement).click!();
+      // 3. Dispatch simulated mouse and pointer clicks with coordinate context
+      const nativeEl = (targetEl.rawElement || targetEl) as Element;
+      if (typeof (targetEl as MutableDOMElement).click === 'function') {
+        (targetEl as MutableDOMElement).click!();
+      }
+      if (
+        typeof (nativeEl as HTMLElement).click === 'function' &&
+        (nativeEl as unknown) !== targetEl
+      ) {
+        (nativeEl as HTMLElement).click();
+      }
+
+      if (
+        typeof window !== 'undefined' &&
+        typeof window.MouseEvent === 'function' &&
+        'dispatchEvent' in (nativeEl as object)
+      ) {
+        const rect =
+          typeof nativeEl.getBoundingClientRect === 'function'
+            ? nativeEl.getBoundingClientRect()
+            : { left: 0, top: 0, width: 0, height: 0 };
+        const clientX = rect.left + rect.width / 2;
+        const clientY = rect.top + rect.height / 2;
+        const opts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
+
+        if (typeof window.PointerEvent === 'function') {
+          nativeEl.dispatchEvent(new PointerEvent('pointerdown', opts));
+        }
+        nativeEl.dispatchEvent(new MouseEvent('mousedown', opts));
+        if (typeof window.PointerEvent === 'function') {
+          nativeEl.dispatchEvent(new PointerEvent('pointerup', opts));
+        }
+        nativeEl.dispatchEvent(new MouseEvent('mouseup', opts));
+        nativeEl.dispatchEvent(new MouseEvent('click', opts));
       }
 
       // Mark selected in node attributes
-      (seatEl as MutableDOMElement).attributes = (seatEl as MutableDOMElement).attributes || {};
-      (seatEl as MutableDOMElement).attributes['data-status'] = 'selected';
-      (seatEl as MutableDOMElement).className = ((seatEl.className || '') + ' selected').trim();
+      (targetEl as MutableDOMElement).attributes = (targetEl as MutableDOMElement).attributes || {};
+      (targetEl as MutableDOMElement).attributes['data-status'] = 'selected';
+      (targetEl as MutableDOMElement).className = ((targetEl.className || '') + ' selected').trim();
+
+      await new Promise((r) => setTimeout(r, 200));
     }
 
     return true;

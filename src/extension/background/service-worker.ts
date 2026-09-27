@@ -211,6 +211,35 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
       break;
     }
 
+    case 'FETCH_SEATMAP_REQUEST': {
+      try {
+        const url = `https://api-v2.ticketbox.vn/event/api/v1/events/showings/${message.showingId}/seatmap`;
+        logger.info('Fetching seatmap from background worker', { showingId: message.showingId, url });
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        const json = await res.json();
+        await eventBus.publish({
+          type: 'FETCH_SEATMAP_RESPONSE',
+          timestamp: new Date().toISOString(),
+          showingId: message.showingId,
+          success: true,
+          data: json,
+        });
+      } catch (err: unknown) {
+        logger.error('Failed to fetch seatmap in background worker', err);
+        await eventBus.publish({
+          type: 'FETCH_SEATMAP_RESPONSE',
+          timestamp: new Date().toISOString(),
+          showingId: message.showingId,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      break;
+    }
+
     default:
       break;
   }

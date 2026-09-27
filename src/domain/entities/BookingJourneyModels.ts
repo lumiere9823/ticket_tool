@@ -57,6 +57,8 @@ export interface Seat {
   selectable: boolean;
   price?: number | undefined;
   element?: unknown;
+  x?: number | undefined;
+  y?: number | undefined;
 }
 
 export interface SeatArea {

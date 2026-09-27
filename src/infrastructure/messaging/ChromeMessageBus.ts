@@ -20,6 +20,8 @@ const VALID_MESSAGE_TYPES = new Set<string>([
   'SYNC_STATE_RESPONSE',
   'JOURNEY_UPDATE',
   'REQUEST_DISCOVERY_SCAN',
+  'FETCH_SEATMAP_REQUEST',
+  'FETCH_SEATMAP_RESPONSE',
 ]);
 
 export class ChromeMessageBus implements EventBus {

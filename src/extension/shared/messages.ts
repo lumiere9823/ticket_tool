@@ -19,7 +19,9 @@ export type ExtensionMessageType =
   | 'SYNC_STATE_REQUEST'
   | 'SYNC_STATE_RESPONSE'
   | 'JOURNEY_UPDATE'
-  | 'REQUEST_DISCOVERY_SCAN';
+  | 'REQUEST_DISCOVERY_SCAN'
+  | 'FETCH_SEATMAP_REQUEST'
+  | 'FETCH_SEATMAP_RESPONSE';
 
 export interface BaseExtensionMessage {
   type: ExtensionMessageType;
@@ -226,6 +228,19 @@ export interface RequestDiscoveryScanMessage extends BaseExtensionMessage {
   type: 'REQUEST_DISCOVERY_SCAN';
 }
 
+export interface FetchSeatmapRequestMessage extends BaseExtensionMessage {
+  type: 'FETCH_SEATMAP_REQUEST';
+  showingId: string;
+}
+
+export interface FetchSeatmapResponseMessage extends BaseExtensionMessage {
+  type: 'FETCH_SEATMAP_RESPONSE';
+  showingId: string;
+  success: boolean;
+  data?: unknown;
+  error?: string;
+}
+
 export type ExtensionMessage =
   | StateChangedMessage
   | ArmRequestedMessage
@@ -243,4 +258,7 @@ export type ExtensionMessage =
   | SyncStateRequestMessage
   | SyncStateResponseMessage
   | JourneyUpdateMessage
-  | RequestDiscoveryScanMessage;
+  | RequestDiscoveryScanMessage
+  | FetchSeatmapRequestMessage
+  | FetchSeatmapResponseMessage;
+

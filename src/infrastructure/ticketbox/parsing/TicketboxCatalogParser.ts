@@ -115,11 +115,70 @@ export class TicketboxCatalogParser {
     return null;
   }
 
+  /**
+   * Authoritative extraction of showing ID from URL, DOM elements, or Next.js state.
+   */
+  public static extractShowingId(url: string, root?: DOMElementLike | null): string | null {
+    // 1. From URL path: /bookings/81077997936830/...
+    const pathMatch = url.match(/\/bookings\/(\d+)/i);
+    if (pathMatch && pathMatch[1]) {
+      return pathMatch[1];
+    }
+
+    // 2. From URL query params: ?showingId=81077997936830 or ?showing=...
+    const queryMatch = url.match(/[?&]showing(?:Id)?=(\d+)/i);
+    if (queryMatch && queryMatch[1]) {
+      return queryMatch[1];
+    }
+
+    if (!root) return null;
+
+    // 3. From DOM attributes: [data-showing-id]
+    const showingEl = root.querySelector('[data-showing-id]');
+    if (showingEl) {
+      const id = showingEl.getAttribute('data-showing-id');
+      if (id && id.trim()) return id.trim();
+    }
+
+    // 4. From booking links in DOM: <a href=".../bookings/81077997936830/...">
+    const bookingLinks = root.querySelectorAll('a[href*="/bookings/"]');
+    for (const link of bookingLinks) {
+      const href = link.getAttribute('href') || '';
+      const linkMatch = href.match(/\/bookings\/(\d+)/i);
+      if (linkMatch && linkMatch[1]) {
+        return linkMatch[1];
+      }
+    }
+
+    // 5. From Next.js __NEXT_DATA__
+    const nextDataEl = root.querySelector('#__NEXT_DATA__');
+    if (nextDataEl && nextDataEl.textContent) {
+      const text = nextDataEl.textContent;
+      const nextMatch =
+        text.match(/"showingId":\s*["']?(\d+)["']?/i) ||
+        text.match(/"defaultShowingId":\s*["']?(\d+)["']?/i);
+      if (nextMatch && nextMatch[1]) {
+        return nextMatch[1];
+      }
+    }
+
+    return null;
+  }
+
   private static extractEventTitle(root: DOMElementLike): string | null {
     // Check h1
     const h1 = root.querySelector('h1');
     if (h1 && h1.textContent.trim()) {
-      return h1.textContent.trim();
+      const text = h1.textContent.trim();
+      const lower = text.toLowerCase();
+      if (
+        !lower.includes('mua vé hòa nhạc') &&
+        !lower.includes('hội thảo, thể thao') &&
+        !lower.includes('nền tảng phân phối vé') &&
+        !lower.includes('ticketbox')
+      ) {
+        return text;
+      }
     }
 
     // Check meta og:title or twitter:title if available in DOM
@@ -295,7 +354,7 @@ export class TicketboxCatalogParser {
           ticketTypes.push(ticket);
         }
       }
-      return ticketTypes;
+      return this.deduplicateTicketTypes(ticketTypes);
     }
 
     // Fallback: If no dedicated ticket-item wrappers exist, look for table rows or candidate sections
@@ -308,7 +367,7 @@ export class TicketboxCatalogParser {
     }
 
     if (ticketTypes.length > 0) {
-      return ticketTypes;
+      return this.deduplicateTicketTypes(ticketTypes);
     }
 
     // Fallback for SEAT MAP / BOOKING page (/select-ticket):
@@ -347,6 +406,20 @@ export class TicketboxCatalogParser {
     }
 
     return ticketTypes;
+  }
+
+  private static deduplicateTicketTypes(tickets: TicketType[]): TicketType[] {
+    const seen = new Map<string, TicketType>();
+    for (const t of tickets) {
+      const key = t.id ? `id_${t.id}` : `name_${t.name.trim().toLowerCase()}_${t.price.amount}`;
+      const existing = seen.get(key);
+      if (!existing) {
+        seen.set(key, t);
+      } else if (!existing.selectable && t.selectable) {
+        seen.set(key, t);
+      }
+    }
+    return Array.from(seen.values());
   }
 
   private static parseSingleTicket(

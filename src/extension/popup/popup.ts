@@ -381,7 +381,11 @@ function buildTicketRuleCard(rule: TicketRule, ruleIndex: number): HTMLElement {
   function updateAreaVisibility(): void {
     const selVal = ticketSelect.value;
     const ticket = tickets.find((t) => (t.id ?? t.name) === selVal);
-    if (ticket && (ticket.mode === 'AREA_BASED' || ticket.mode === 'SEATED')) {
+    if (
+      ticket &&
+      (ticket.mode === 'AREA_BASED' || ticket.mode === 'SEATED') &&
+      areaSelect.options.length > 1
+    ) {
       areaField.style.display = 'flex';
     } else {
       areaField.style.display = 'none';
