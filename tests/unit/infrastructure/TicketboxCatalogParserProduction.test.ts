@@ -115,4 +115,36 @@ describe('TicketboxCatalogParser with Live Production DOM', () => {
     expect(cat2?.availability).toBe('AVAILABLE');
     expect(cat2?.selectable).toBe(true);
   });
+
+  it('should not extract phantom showings from FAQ or terms accordions outside #ticket-info', () => {
+    const htmlWithFaq = `
+      ${LIVE_TICKETBOX_HTML}
+      <div id="faq-section">
+        <div class="ant-collapse">
+          <div class="ant-collapse-item">
+            <div class="ant-collapse-header">Quy định đổi trả vé</div>
+            <div class="ant-collapse-content">Vé không được đổi trả dưới mọi hình thức</div>
+          </div>
+          <div class="ant-collapse-item">
+            <div class="ant-collapse-header">Độ tuổi tham gia</div>
+            <div class="ant-collapse-content">Sự kiện dành cho khán giả từ 16 tuổi trở lên</div>
+          </div>
+          <div class="ant-collapse-item">
+            <div class="ant-collapse-header">Cách nhận vé</div>
+            <div class="ant-collapse-content">Vé điện tử gửi qua email</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const root = parseHtmlToDOMElementLike(htmlWithFaq);
+    const catalog = TicketboxCatalogParser.parseCatalog(
+      root,
+      'https://ticketbox.vn/tudaytunay-phuciuoi-26578'
+    );
+
+    // Must still have exactly 1 showing, ignoring the 3 FAQ collapse items
+    expect(catalog.showings).toHaveLength(1);
+    expect(catalog.showings[0]?.date).toBe('19:30 - Thứ 7, 04/04/2026');
+  });
 });

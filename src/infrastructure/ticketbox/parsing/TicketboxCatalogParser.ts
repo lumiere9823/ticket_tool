@@ -169,19 +169,42 @@ export class TicketboxCatalogParser {
     root: DOMElementLike,
     pageType: TicketboxPageType
   ): ShowingSnapshot[] {
-    const showingContainers = root.querySelectorAll(
-      '#ticket-info .ant-collapse-item, .ant-collapse-item, .showing-item, [data-showing-id], .session-tab, .date-tab'
+    const ticketInfo = root.querySelector('#ticket-info');
+    const containerScope = ticketInfo || root;
+
+    let showingContainers = containerScope.querySelectorAll(
+      ticketInfo
+        ? '.ant-collapse-item, .showing-item, [data-showing-id], .session-tab, .date-tab'
+        : '#ticket-info .ant-collapse-item, .showing-item, [data-showing-id], .session-tab, .date-tab'
     );
+
+    if (showingContainers.length === 0) {
+      showingContainers = root.querySelectorAll(
+        '.session-tab, .showing-item, [data-showing-id], .date-tab'
+      );
+    }
 
     if (showingContainers.length > 0) {
       const snapshots: ShowingSnapshot[] = [];
       for (const showingEl of showingContainers) {
         const id =
           showingEl.getAttribute('data-showing-id') || showingEl.getAttribute('id') || null;
-        const nameEl = showingEl.querySelector('.showing-name, .tab-title, .second-row, h3, h4');
-        const name = nameEl ? nameEl.textContent.trim() : null;
-        const dateEl = showingEl.querySelector('.showing-date, .tab-date, .first-row, time');
+
+        const dateEl = showingEl.querySelector(
+          '.first-row, .showing-date, .tab-date, [class*="showing-date"], time'
+        );
         const date = dateEl ? dateEl.textContent.trim() : null;
+
+        const nameEl = showingEl.querySelector(
+          '.second-row, .showing-name, .tab-title, [class*="showing-name"]'
+        );
+        let name = nameEl ? nameEl.textContent.trim() : null;
+        if (!name) {
+          const hEl = showingEl.querySelector('h3, h4');
+          if (hEl && date) {
+            name = hEl.textContent.trim();
+          }
+        }
 
         const showingBtn = showingEl.querySelector(
           '#select-showing-btn, [id*="select-showing"], button'
@@ -197,14 +220,27 @@ export class TicketboxCatalogParser {
           pageType,
           isShowingBtnEnabled
         );
-        snapshots.push({
-          id,
-          name,
-          date,
-          ticketTypes,
-        });
+
+        // A valid showing must have tickets, a date, or a showing action button
+        const hasTickets = ticketTypes.length > 0;
+        const hasValidDate = Boolean(date && date.trim());
+        const hasShowingBtn = Boolean(
+          showingEl.querySelector('#select-showing-btn, [id*="select-showing"]')
+        );
+
+        if (hasTickets || hasValidDate || hasShowingBtn) {
+          snapshots.push({
+            id,
+            name,
+            date,
+            ticketTypes,
+          });
+        }
       }
-      return snapshots;
+
+      if (snapshots.length > 0) {
+        return snapshots;
+      }
     }
 
     // Single unified showing

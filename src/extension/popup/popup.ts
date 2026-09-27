@@ -152,7 +152,12 @@ function updateCatalogStatus(snapshot: TicketCatalogSnapshot): void {
 // ─── Showing Dropdown ─────────────────────────────────────────────────────────
 
 function updateShowingDropdown(snapshot: TicketCatalogSnapshot): void {
-  if (snapshot.showings.length <= 1) {
+  // Filter only genuine showings that have date, name, or valid ID
+  const validShowings = (snapshot.showings || []).filter(
+    (s) => (s.date && s.date.trim()) || (s.name && s.name.trim()) || (s.id && s.id.trim())
+  );
+
+  if (validShowings.length <= 1) {
     showingGroup.style.display = 'none';
     return;
   }
@@ -160,7 +165,7 @@ function updateShowingDropdown(snapshot: TicketCatalogSnapshot): void {
   showingGroup.style.display = 'block';
   showingSelect.innerHTML = '';
 
-  for (const s of snapshot.showings) {
+  for (const s of validShowings) {
     const opt = document.createElement('option');
     opt.value = s.id ?? '';
     opt.textContent = [s.date, s.name].filter(Boolean).join(' — ') || `Showing ${s.id ?? '?'}`;
