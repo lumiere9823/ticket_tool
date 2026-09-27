@@ -2,19 +2,85 @@ import { ChromeMessageBus } from '../../infrastructure/messaging/ChromeMessageBu
 import { ChromeStorageRepository } from '../../infrastructure/storage/ChromeStorageRepository';
 import { PurchaseState } from '../../domain/states/PurchaseState';
 import { ExtensionMessage } from '../shared/messages';
+import {
+  PurchasePlan,
+  TicketRule,
+  TicketOption,
+  TicketCatalogSnapshot,
+  FallbackPolicy,
+  createDefaultPurchasePlan,
+  createEmptyTicketCatalogSnapshot,
+} from '../../domain/entities/PurchasePlan';
+import { PurchasePlanValidator } from '../../domain/policies/PurchasePlanValidator';
+
+// ─── Infrastructure ──────────────────────────────────────────────────────────
 
 const storage = new ChromeStorageRepository();
 const messageBus = new ChromeMessageBus();
 
+// ─── Runtime state ────────────────────────────────────────────────────────────
+
+/** Current discovered catalog. Updated on every JOURNEY_UPDATE. */
+let currentCatalog: TicketCatalogSnapshot = createEmptyTicketCatalogSnapshot();
+
+/** Current purchase plan being edited. Persisted on every change. */
+let currentPlan: PurchasePlan = createDefaultPurchasePlan();
+
+// ─── DOM References ───────────────────────────────────────────────────────────
+
 const stateBadge = document.getElementById('state-badge') as HTMLElement;
+const currentStepDisplay = document.getElementById('current-step-display') as HTMLElement;
+const blockingReasonContainer = document.getElementById('blocking-reason-container') as HTMLElement;
+const blockingReasonText = document.getElementById('blocking-reason-text') as HTMLElement;
+
 const eventUrlInput = document.getElementById('event-url') as HTMLInputElement;
-const categoryPriorityInput = document.getElementById('category-priority') as HTMLInputElement;
-const quantityInput = document.getElementById('quantity') as HTMLInputElement;
+
+const catalogStatusEl = document.getElementById('catalog-status') as HTMLElement;
+const catalogStatusIcon = document.getElementById('catalog-status-icon') as HTMLElement;
+const catalogStatusText = document.getElementById('catalog-status-text') as HTMLElement;
+const btnRefreshCatalog = document.getElementById('btn-refresh-catalog') as HTMLButtonElement;
+
+const eventInfoBar = document.getElementById('event-info-bar') as HTMLElement;
+const eventInfoTitle = document.getElementById('event-info-title') as HTMLElement;
+
+const showingGroup = document.getElementById('showing-group') as HTMLElement;
+const showingSelect = document.getElementById('showing-select') as HTMLSelectElement;
+
+const ticketRulesContainer = document.getElementById('ticket-rules-container') as HTMLElement;
+const btnAddTicketRow = document.getElementById('btn-add-ticket-row') as HTMLButtonElement;
+
 const allowFallbackCheckbox = document.getElementById('allow-fallback') as HTMLInputElement;
+const fallbackPolicySelect = document.getElementById('fallback-policy-select') as HTMLSelectElement;
+const fallbackPolicyGroup = document.getElementById('fallback-policy-group') as HTMLElement;
+
+const profileNameInput = document.getElementById('profile-name') as HTMLInputElement;
+const profilePhoneInput = document.getElementById('profile-phone') as HTMLInputElement;
+const profileEmailInput = document.getElementById('profile-email') as HTMLInputElement;
+const profileAgreeTermsCheckbox = document.getElementById('profile-agree-terms') as HTMLInputElement;
+
 const btnArm = document.getElementById('btn-arm') as HTMLButtonElement;
 const btnStop = document.getElementById('btn-stop') as HTMLButtonElement;
+
+const ticketsTbody = document.getElementById('tickets-tbody') as HTMLElement;
+
+const selTicket = document.getElementById('sel-ticket') as HTMLElement;
+const selMode = document.getElementById('sel-mode') as HTMLElement;
+const selArea = document.getElementById('sel-area') as HTMLElement;
+const selSeats = document.getElementById('sel-seats') as HTMLElement;
+const selQty = document.getElementById('sel-qty') as HTMLElement;
+
+const sumSubtotal = document.getElementById('sum-subtotal') as HTMLElement;
+const sumFees = document.getElementById('sum-fees') as HTMLElement;
+const sumTotal = document.getElementById('sum-total') as HTMLElement;
+
 const attemptIdDisplay = document.getElementById('attempt-id-display') as HTMLElement;
 const logBox = document.getElementById('log-box') as HTMLElement;
+const metricT1 = document.getElementById('metric-t1') as HTMLElement;
+const metricT2 = document.getElementById('metric-t2') as HTMLElement;
+const metricT3 = document.getElementById('metric-t3') as HTMLElement;
+const metricT5 = document.getElementById('metric-t5') as HTMLElement;
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
 
 function addLog(text: string): void {
   const line = document.createElement('div');
@@ -24,18 +90,601 @@ function addLog(text: string): void {
   logBox.scrollTop = logBox.scrollHeight;
 }
 
-function updateStateBadge(state: PurchaseState): void {
+function updateTelemetry(t1?: number, t2?: number, t3?: number, t5?: number): void {
+  if (t1 !== undefined && metricT1) metricT1.textContent = `${t1}ms`;
+  if (t2 !== undefined && metricT2) metricT2.textContent = `${t2}ms`;
+  if (t3 !== undefined && metricT3) metricT3.textContent = `${t3}ms`;
+  if (t5 !== undefined && metricT5) metricT5.textContent = `${t5}ms`;
+}
+
+function formatPrice(price: number): string {
+  return price > 0 ? `${price.toLocaleString('vi-VN')} đ` : 'Free';
+}
+
+// ─── Catalog Status UI ────────────────────────────────────────────────────────
+
+function updateCatalogStatus(snapshot: TicketCatalogSnapshot): void {
+  catalogStatusEl.className = 'catalog-status';
+
+  switch (snapshot.loadState) {
+    case 'IDLE':
+      catalogStatusIcon.textContent = '⌛';
+      catalogStatusText.textContent = snapshot.loadMessage;
+      break;
+    case 'LOADING':
+      catalogStatusEl.classList.add('loading');
+      catalogStatusIcon.textContent = '🔄';
+      catalogStatusText.textContent = 'Discovering tickets...';
+      break;
+    case 'LOADED':
+      catalogStatusEl.classList.add('loaded');
+      catalogStatusIcon.textContent = '✓';
+      catalogStatusText.textContent = snapshot.loadMessage;
+      break;
+    case 'EMPTY':
+      catalogStatusEl.classList.add('empty');
+      catalogStatusIcon.textContent = '○';
+      catalogStatusText.textContent = snapshot.loadMessage || 'No ticket options detected.';
+      break;
+    case 'ERROR':
+      catalogStatusEl.classList.add('error');
+      catalogStatusIcon.textContent = '✗';
+      catalogStatusText.textContent = snapshot.loadMessage || 'Unable to discover ticket options.';
+      break;
+    case 'INVALID_URL':
+      catalogStatusEl.classList.add('error');
+      catalogStatusIcon.textContent = '✗';
+      catalogStatusText.textContent = 'Invalid Ticketbox event URL.';
+      break;
+  }
+
+  // Event info bar
+  if (snapshot.eventTitle) {
+    eventInfoBar.style.display = 'block';
+    eventInfoTitle.textContent = snapshot.eventTitle;
+  } else {
+    eventInfoBar.style.display = 'none';
+  }
+}
+
+// ─── Showing Dropdown ─────────────────────────────────────────────────────────
+
+function updateShowingDropdown(snapshot: TicketCatalogSnapshot): void {
+  if (snapshot.showings.length <= 1) {
+    showingGroup.style.display = 'none';
+    return;
+  }
+
+  showingGroup.style.display = 'block';
+  showingSelect.innerHTML = '';
+
+  for (const s of snapshot.showings) {
+    const opt = document.createElement('option');
+    opt.value = s.id ?? '';
+    opt.textContent = [s.date, s.name].filter(Boolean).join(' — ') || `Showing ${s.id ?? '?'}`;
+    if (currentPlan.showingId === s.id) opt.selected = true;
+    showingSelect.appendChild(opt);
+  }
+}
+
+function onShowingChange(): void {
+  currentPlan.showingId = showingSelect.value || null;
+  savePlan();
+}
+
+// ─── Ticket Option Helpers ────────────────────────────────────────────────────
+
+/**
+ * Returns tickets relevant to the currently selected showing.
+ * Falls back to all tickets when showingId is null.
+ */
+function getTicketsForCurrentShowing(): TicketOption[] {
+  return currentCatalog.tickets;
+}
+
+/**
+ * Generates quantity options array based on ticket constraints.
+ * Defaults: min=1, max=8 when unknown.
+ */
+function buildQuantityOptions(ticket: TicketOption): number[] {
+  const min = ticket.minQuantity ?? 1;
+  const max = ticket.maxQuantity ?? 8;
+  const options: number[] = [];
+  for (let q = min; q <= Math.min(max, 20); q++) {
+    options.push(q);
+  }
+  return options.length > 0 ? options : [1];
+}
+
+/**
+ * Creates the availability suffix for an option label.
+ */
+function ticketOptionLabel(t: TicketOption): string {
+  const price = formatPrice(t.price);
+  const avail =
+    t.availability === 'AVAILABLE'
+      ? ''
+      : t.availability === 'SOLD_OUT'
+      ? ' — HẾT VÉ'
+      : ` — ${t.availability}`;
+  return `${t.name} — ${price}${avail}`;
+}
+
+// ─── Ticket Rule Card Builder ─────────────────────────────────────────────────
+
+let ruleCardCounter = 0;
+
+/**
+ * Builds a ticket rule card DOM element backed by discovered catalog options.
+ * All user input is select-based; no free-text ticket name entry.
+ */
+function buildTicketRuleCard(rule: TicketRule, ruleIndex: number): HTMLElement {
+  const cardId = `rule-${ruleCardCounter++}`;
+  const tickets = getTicketsForCurrentShowing();
+
+  const card = document.createElement('div');
+  card.className = 'ticket-rule-card';
+  card.dataset.ruleId = cardId;
+
+  // ── Header ──────────────────────────────────────────────────────────
+  const header = document.createElement('div');
+  header.className = 'ticket-rule-header';
+
+  const ruleLabel = document.createElement('span');
+  ruleLabel.className = 'ticket-rule-label';
+  ruleLabel.textContent = `VÉ ${ruleIndex + 1}`;
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'btn-remove-row';
+  removeBtn.textContent = '×';
+  removeBtn.title = 'Xóa loại vé này';
+  removeBtn.addEventListener('click', () => {
+    card.remove();
+    rebuildPlanFromCards();
+    savePlan();
+    reindexRuleLabels();
+  });
+
+  header.appendChild(ruleLabel);
+  header.appendChild(removeBtn);
+
+  // ── Fields ───────────────────────────────────────────────────────────
+  const fields = document.createElement('div');
+  fields.className = 'ticket-rule-fields';
+
+  // ── Ticket Select ───────────────────────────────────────────────────
+  const ticketField = document.createElement('div');
+  ticketField.className = 'field-group';
+
+  const ticketLabel = document.createElement('div');
+  ticketLabel.className = 'field-label';
+  ticketLabel.textContent = 'Loại vé';
+
+  const ticketSelect = document.createElement('select');
+  ticketSelect.className = 'select-field rule-ticket-select';
+
+  if (tickets.length === 0) {
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '— Waiting for discovery... —';
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    ticketSelect.appendChild(placeholder);
+  } else {
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '— Chọn loại vé —';
+    placeholder.disabled = true;
+    if (!rule.ticketId) placeholder.selected = true;
+    ticketSelect.appendChild(placeholder);
+
+    for (const t of tickets) {
+      const opt = document.createElement('option');
+      opt.value = t.id ?? t.name;
+      opt.textContent = ticketOptionLabel(t);
+      opt.className =
+        t.availability === 'AVAILABLE'
+          ? 'opt-available'
+          : t.availability === 'SOLD_OUT'
+          ? 'opt-soldout'
+          : 'opt-unknown';
+      if (!t.selectable) {
+        opt.disabled = true;
+      }
+      if (rule.ticketId === (t.id ?? t.name) || rule.ticketName === t.name) {
+        opt.selected = true;
+      }
+      ticketSelect.appendChild(opt);
+    }
+  }
+
+  ticketField.appendChild(ticketLabel);
+  ticketField.appendChild(ticketSelect);
+
+  // ── Area Select (hidden by default, shown for AREA_BASED/SEATED) ─────
+  const areaField = document.createElement('div');
+  areaField.className = 'field-group rule-area-group';
+  areaField.style.display = 'none';
+
+  const areaLabel = document.createElement('div');
+  areaLabel.className = 'field-label';
+  areaLabel.textContent = 'Khu vực';
+
+  const areaSelect = document.createElement('select');
+  areaSelect.className = 'select-field rule-area-select';
+
+  const areaPlaceholder = document.createElement('option');
+  areaPlaceholder.value = '';
+  areaPlaceholder.textContent = '— Phát hiện từ trang đặt vé —';
+  areaSelect.appendChild(areaPlaceholder);
+
+  areaField.appendChild(areaLabel);
+  areaField.appendChild(areaSelect);
+
+  // ── Quantity Select ──────────────────────────────────────────────────
+  const qtyField = document.createElement('div');
+  qtyField.className = 'field-group';
+
+  const qtyLabel = document.createElement('div');
+  qtyLabel.className = 'field-label';
+  qtyLabel.textContent = 'Số lượng';
+
+  const qtySelect = document.createElement('select');
+  qtySelect.className = 'select-field rule-qty-select';
+
+  // Build quantity options from selected ticket constraints
+  const selectedTicket = tickets.find(
+    (t) => (t.id ?? t.name) === rule.ticketId || t.name === rule.ticketName
+  );
+  const qtyOptions = selectedTicket ? buildQuantityOptions(selectedTicket) : [1, 2, 3, 4];
+  for (const q of qtyOptions) {
+    const opt = document.createElement('option');
+    opt.value = String(q);
+    opt.textContent = String(q);
+    if (q === rule.quantity) opt.selected = true;
+    qtySelect.appendChild(opt);
+  }
+
+  // Default to 1 if nothing selected
+  if (!qtySelect.value || qtySelect.value === '0') {
+    const firstOpt = qtySelect.querySelector('option');
+    if (firstOpt) firstOpt.selected = true;
+  }
+
+  qtyField.appendChild(qtyLabel);
+  qtyField.appendChild(qtySelect);
+
+  // ── Row layout: ticket (full width) ─────────────────────────────────
+  fields.appendChild(ticketField);
+  fields.appendChild(areaField);
+  fields.appendChild(qtyField);
+
+  card.appendChild(header);
+  card.appendChild(fields);
+
+  // ── Status message area ──────────────────────────────────────────────
+  const statusMsg = document.createElement('div');
+  statusMsg.className = 'rule-status-msg';
+  statusMsg.style.display = 'none';
+  card.appendChild(statusMsg);
+
+  // ── Update functions ─────────────────────────────────────────────────
+
+  function updateAreaVisibility(): void {
+    const selVal = ticketSelect.value;
+    const ticket = tickets.find((t) => (t.id ?? t.name) === selVal);
+    if (ticket && (ticket.mode === 'AREA_BASED' || ticket.mode === 'SEATED')) {
+      areaField.style.display = 'flex';
+    } else {
+      areaField.style.display = 'none';
+    }
+  }
+
+  function updateQtyOptions(): void {
+    const selVal = ticketSelect.value;
+    const ticket = tickets.find((t) => (t.id ?? t.name) === selVal);
+    if (!ticket) return;
+
+    const currentQty = parseInt(qtySelect.value, 10) || 1;
+    const options = buildQuantityOptions(ticket);
+
+    qtySelect.innerHTML = '';
+    for (const q of options) {
+      const opt = document.createElement('option');
+      opt.value = String(q);
+      opt.textContent = String(q);
+      if (q === currentQty) opt.selected = true;
+      qtySelect.appendChild(opt);
+    }
+    if (!qtySelect.value || qtySelect.value === '0') {
+      const firstOpt = qtySelect.querySelector('option');
+      if (firstOpt) firstOpt.selected = true;
+    }
+  }
+
+  function validateCard(): void {
+    const selVal = ticketSelect.value;
+    if (!selVal) {
+      card.classList.remove('invalid', 'unavailable');
+      statusMsg.style.display = 'none';
+      return;
+    }
+    const ticket = tickets.find((t) => (t.id ?? t.name) === selVal);
+    if (!ticket) {
+      card.classList.add('invalid');
+      card.classList.remove('unavailable');
+      statusMsg.className = 'ticket-invalid';
+      statusMsg.textContent = 'Loại vé không còn trong catalog. Vui lòng chọn lại.';
+      statusMsg.style.display = 'block';
+      return;
+    }
+    card.classList.remove('invalid');
+    if (ticket.availability !== 'AVAILABLE') {
+      card.classList.add('unavailable');
+      statusMsg.className = 'ticket-warning';
+      statusMsg.textContent = `${ticket.name} hiện ${ticket.availability}. Sẽ sử dụng khi có.`;
+      statusMsg.style.display = 'block';
+    } else {
+      card.classList.remove('unavailable');
+      statusMsg.style.display = 'none';
+    }
+  }
+
+  // ── Event listeners ──────────────────────────────────────────────────
+
+  ticketSelect.addEventListener('change', () => {
+    updateAreaVisibility();
+    updateQtyOptions();
+    validateCard();
+    rebuildPlanFromCards();
+    savePlan();
+  });
+
+  areaSelect.addEventListener('change', () => {
+    rebuildPlanFromCards();
+    savePlan();
+  });
+
+  qtySelect.addEventListener('change', () => {
+    rebuildPlanFromCards();
+    savePlan();
+  });
+
+  // Initialize
+  updateAreaVisibility();
+  validateCard();
+
+  return card;
+}
+
+// ─── Rule Card Indexing ────────────────────────────────────────────────────────
+
+function reindexRuleLabels(): void {
+  const cards = ticketRulesContainer.querySelectorAll('.ticket-rule-card');
+  cards.forEach((card, i) => {
+    const label = card.querySelector('.ticket-rule-label');
+    if (label) label.textContent = `VÉ ${i + 1}`;
+  });
+}
+
+// ─── Plan Sync ────────────────────────────────────────────────────────────────
+
+/**
+ * Reads all rule cards and rebuilds currentPlan.ticketRules from DOM state.
+ */
+function rebuildPlanFromCards(): void {
+  const cards = ticketRulesContainer.querySelectorAll('.ticket-rule-card');
+  const tickets = getTicketsForCurrentShowing();
+
+  const rules: TicketRule[] = [];
+  for (const card of Array.from(cards)) {
+    const ticketSelect = card.querySelector('.rule-ticket-select') as HTMLSelectElement;
+    const areaSelect = card.querySelector('.rule-area-select') as HTMLSelectElement;
+    const qtySelect = card.querySelector('.rule-qty-select') as HTMLSelectElement;
+
+    const ticketValue = ticketSelect?.value ?? '';
+    if (!ticketValue) continue;
+
+    const ticket = tickets.find((t) => (t.id ?? t.name) === ticketValue);
+    const areaValue = areaSelect?.value ?? '';
+    const qtyValue = parseInt(qtySelect?.value ?? '1', 10) || 1;
+
+    rules.push({
+      ticketId: ticket?.id ?? ticketValue,
+      ticketName: ticket?.name ?? ticketValue,
+      quantity: qtyValue,
+      areaId: areaValue || null,
+      areaName: areaValue || null,
+      seatPolicy: 'ANY_AVAILABLE',
+    });
+  }
+
+  currentPlan.ticketRules = rules;
+  currentPlan.showingId = showingSelect.value || null;
+  currentPlan.allowFallback = allowFallbackCheckbox.checked;
+  currentPlan.fallbackPolicy = (fallbackPolicySelect.value as FallbackPolicy) || 'NEXT_PRIORITY';
+}
+
+/**
+ * Re-renders all existing rule cards when catalog updates.
+ * Preserves user selections where possible (match by ticketId or name).
+ */
+function refreshAllRuleCards(): void {
+  const existingRules = [...currentPlan.ticketRules];
+  ticketRulesContainer.innerHTML = '';
+
+  if (existingRules.length === 0) {
+    // Add a blank rule ready to fill
+    addTicketRuleRow({ ticketId: '', ticketName: '', quantity: 1 });
+    return;
+  }
+
+  existingRules.forEach((rule, idx) => {
+    const card = buildTicketRuleCard(rule, idx);
+    ticketRulesContainer.appendChild(card);
+  });
+
+  reindexRuleLabels();
+}
+
+/**
+ * Adds a new empty ticket rule row to the purchase plan.
+ */
+function addTicketRuleRow(rule?: Partial<TicketRule>): void {
+  const newRule: TicketRule = {
+    ticketId: rule?.ticketId ?? '',
+    ticketName: rule?.ticketName ?? '',
+    quantity: rule?.quantity ?? 1,
+    areaId: rule?.areaId ?? null,
+    seatPolicy: 'ANY_AVAILABLE',
+  };
+
+  const ruleIndex = ticketRulesContainer.querySelectorAll('.ticket-rule-card').length;
+  const card = buildTicketRuleCard(newRule, ruleIndex);
+  ticketRulesContainer.appendChild(card);
+  reindexRuleLabels();
+}
+
+// ─── Catalog Table Rendering ──────────────────────────────────────────────────
+
+function renderCatalogTable(tickets: TicketOption[]): void {
+  if (!tickets || tickets.length === 0) {
+    ticketsTbody.innerHTML = '<tr><td colspan="4" class="empty-cell">No tickets discovered yet</td></tr>';
+    return;
+  }
+
+  ticketsTbody.innerHTML = '';
+  for (const t of tickets) {
+    const tr = document.createElement('tr');
+
+    const tdName = document.createElement('td');
+    tdName.textContent = t.name;
+
+    const tdPrice = document.createElement('td');
+    tdPrice.textContent = formatPrice(t.price);
+
+    const tdMode = document.createElement('td');
+    tdMode.textContent = t.mode;
+
+    const tdAvail = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = 'status-badge';
+    badge.textContent = t.availability;
+    if (t.availability === 'AVAILABLE') badge.classList.add('status-available');
+    else if (t.availability === 'SOLD_OUT') badge.classList.add('status-soldout');
+    else badge.classList.add('status-unknown');
+    tdAvail.appendChild(badge);
+
+    tr.appendChild(tdName);
+    tr.appendChild(tdPrice);
+    tr.appendChild(tdMode);
+    tr.appendChild(tdAvail);
+    ticketsTbody.appendChild(tr);
+  }
+}
+
+// ─── Catalog Update Handler ───────────────────────────────────────────────────
+
+/**
+ * Processes a new TicketCatalogSnapshot:
+ * 1. Updates catalog status UI
+ * 2. Refreshes the catalog table
+ * 3. Updates the showing dropdown
+ * 4. Rebuilds rule cards (preserving existing selections)
+ * 5. Validates and highlights any invalid/unavailable rules
+ */
+function applyNewCatalog(snapshot: TicketCatalogSnapshot): void {
+  const prevTicketCount = currentCatalog.tickets.length;
+  currentCatalog = snapshot;
+
+  updateCatalogStatus(snapshot);
+  updateShowingDropdown(snapshot);
+  renderCatalogTable(snapshot.tickets);
+
+  // Only refresh rule cards if tickets actually changed to avoid losing focus
+  const newCount = snapshot.tickets.length;
+  if (newCount !== prevTicketCount || prevTicketCount === 0) {
+    refreshAllRuleCards();
+  } else {
+    // Just revalidate each card
+    validateAllRuleCards();
+  }
+
+  addLog(`Catalog updated: ${newCount} ticket${newCount !== 1 ? 's' : ''} — ${snapshot.loadMessage}`);
+}
+
+/**
+ * Validates all rule cards against the current catalog without rebuilding them.
+ * Marks invalid/unavailable cards visually.
+ */
+function validateAllRuleCards(): void {
+  const validation = PurchasePlanValidator.validate(currentPlan, currentCatalog.tickets);
+
+  const cards = Array.from(ticketRulesContainer.querySelectorAll('.ticket-rule-card'));
+  cards.forEach((card, i) => {
+    card.classList.remove('invalid', 'unavailable');
+    const statusMsg = card.querySelector('.rule-status-msg') as HTMLElement | null;
+    if (!statusMsg) return;
+
+    if (validation.invalidRuleIndices.includes(i)) {
+      card.classList.add('invalid');
+      statusMsg.className = 'ticket-invalid';
+      statusMsg.textContent = 'Vé đã chọn không còn trong catalog. Vui lòng chọn lại.';
+      statusMsg.style.display = 'block';
+    } else if (validation.unavailableRuleIndices.includes(i)) {
+      card.classList.add('unavailable');
+      statusMsg.className = 'ticket-warning';
+      const rule = currentPlan.ticketRules[i];
+      statusMsg.textContent = rule
+        ? `${rule.ticketName} hiện không khả dụng. Sẽ thử theo fallback policy.`
+        : 'Vé không khả dụng.';
+      statusMsg.style.display = 'block';
+    } else {
+      statusMsg.style.display = 'none';
+    }
+  });
+}
+
+// ─── State Badge ───────────────────────────────────────────────────────────────
+
+function updateStateBadge(state: PurchaseState, blockingReason?: string): void {
   stateBadge.textContent = state;
+  currentStepDisplay.textContent = state;
   stateBadge.className = 'badge';
+
+  if (blockingReason) {
+    blockingReasonContainer.style.display = 'block';
+    blockingReasonText.textContent = blockingReason;
+  } else {
+    blockingReasonContainer.style.display = 'none';
+  }
 
   switch (state) {
     case PurchaseState.READY:
+    case PurchaseState.IDLE:
       stateBadge.classList.add('ready');
       break;
     case PurchaseState.ARMED:
     case PurchaseState.MONITORING:
+    case PurchaseState.EVENT_DETECTED:
+    case PurchaseState.SHOWING_DETECTED:
+    case PurchaseState.TICKETS_DETECTED:
+    case PurchaseState.EVALUATING_TICKETS:
     case PurchaseState.AVAILABLE_DETECTED:
     case PurchaseState.SELECTING:
+    case PurchaseState.TICKET_SELECTED:
+    case PurchaseState.BOOKING_MODE_DETECTED:
+    case PurchaseState.SELECTING_QUANTITY:
+    case PurchaseState.AREA_SELECTION_REQUIRED:
+    case PurchaseState.SELECTING_AREA:
+    case PurchaseState.SEAT_MAP_DETECTED:
+    case PurchaseState.SELECTING_SEATS:
+    case PurchaseState.SEATS_SELECTED:
+    case PurchaseState.BOOKING_SUMMARY_DETECTED:
+    case PurchaseState.QUESTION_FORM_DETECTED:
+    case PurchaseState.FILLING_ATTENDEE_FORM:
+    case PurchaseState.FORM_VALIDATED:
     case PurchaseState.RESERVING:
       stateBadge.classList.add('armed');
       break;
@@ -43,32 +692,170 @@ function updateStateBadge(state: PurchaseState): void {
     case PurchaseState.CONFIRMED:
       stateBadge.classList.add('held');
       break;
+    case PurchaseState.CONSENT_REQUIRED:
+    case PurchaseState.PAYMENT_GATE:
+    case PurchaseState.CAPTCHA_REQUIRED:
+    case PurchaseState.OTP_REQUIRED:
+    case PurchaseState.PAYMENT_ACTION_REQUIRED:
+    case PurchaseState.SESSION_REAUTH_REQUIRED:
+      stateBadge.classList.add('intervention');
+      break;
     case PurchaseState.STOPPED:
     case PurchaseState.FAILED:
+    case PurchaseState.RATE_LIMITED:
+    case PurchaseState.SOLD_OUT:
+    case PurchaseState.INVALID_SELECTION:
       stateBadge.classList.add('failed');
+      break;
+    case PurchaseState.WAITING:
+      stateBadge.classList.add('monitoring');
       break;
     default:
       break;
   }
 }
 
+// ─── Persistence ───────────────────────────────────────────────────────────────
+
+async function savePlan(): Promise<void> {
+  rebuildPlanFromCards();
+  const config = await storage.getConfiguration();
+  await storage.saveConfiguration({
+    targetEventUrl: config?.targetEventUrl ?? eventUrlInput.value.trim(),
+    discoveryMode: false,
+    purchasePlan: currentPlan,
+    userProfile: {
+      fullName: profileNameInput.value.trim(),
+      phone: profilePhoneInput.value.trim(),
+      email: profileEmailInput.value.trim(),
+      agreeToTerms: profileAgreeTermsCheckbox.checked,
+    },
+    // Keep legacy preferences for backward compat with ARM_REQUESTED
+    preferences: {
+      categoryPriority: currentPlan.ticketRules.map((r) => r.ticketName).filter(Boolean),
+      quantity: currentPlan.ticketRules[0]?.quantity ?? 1,
+      allowFallback: currentPlan.allowFallback,
+    },
+  });
+}
+
+// ─── Initial Data Load ────────────────────────────────────────────────────────
+
 async function loadInitialData(): Promise<void> {
   const config = await storage.getConfiguration();
+
   if (config) {
     if (config.targetEventUrl) eventUrlInput.value = config.targetEventUrl;
-    if (config.preferences) {
-      categoryPriorityInput.value = config.preferences.categoryPriority.join(', ');
-      quantityInput.value = String(config.preferences.quantity);
-      allowFallbackCheckbox.checked = config.preferences.allowFallback;
+
+    // Restore user profile
+    if (config.userProfile) {
+      profileNameInput.value = config.userProfile.fullName ?? '';
+      profilePhoneInput.value = config.userProfile.phone ?? '';
+      profileEmailInput.value = config.userProfile.email ?? '';
+      profileAgreeTermsCheckbox.checked = config.userProfile.agreeToTerms ?? false;
+    }
+
+    // Restore purchase plan
+    if (config.purchasePlan) {
+      currentPlan = config.purchasePlan;
+      allowFallbackCheckbox.checked = currentPlan.allowFallback;
+      fallbackPolicySelect.value = currentPlan.fallbackPolicy;
+    } else if (config.preferences) {
+      // Migrate from legacy preferences
+      currentPlan = {
+        showingId: null,
+        ticketRules: config.preferences.categoryPriority.map((name, i) => ({
+          ticketId: name,
+          ticketName: name,
+          quantity: i === 0 ? config.preferences!.quantity : 1,
+          seatPolicy: 'ANY_AVAILABLE' as const,
+        })),
+        fallbackPolicy: 'NEXT_PRIORITY',
+        allowFallback: config.preferences.allowFallback,
+      };
+      allowFallbackCheckbox.checked = currentPlan.allowFallback;
+    }
+
+    // Restore cached catalog snapshot for instant display
+    if (config.ticketCatalogSnapshot) {
+      applyNewCatalog(config.ticketCatalogSnapshot);
     }
   }
 
+  // Render rule cards (if no catalog yet, renders with empty dropdowns)
+  refreshAllRuleCards();
+
+  // Load last state
   const lastState = await storage.getLastState();
-  if (lastState && lastState.currentState) {
-    updateStateBadge(lastState.currentState);
+  if (lastState?.currentState) {
+    updateStateBadge(lastState.currentState, lastState.failureMessage);
     if (lastState.attemptId) {
       attemptIdDisplay.textContent = lastState.attemptId;
     }
+  }
+
+  // Read cached latest journey scan for immediate catalog display
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get('latestJourneyUpdate', (res) => {
+      const cached = res?.latestJourneyUpdate;
+      if (cached?.catalogSnapshot) {
+        applyNewCatalog(cached.catalogSnapshot);
+      } else if (cached?.tickets) {
+        // Legacy fallback: build minimal snapshot from simple tickets array
+        const legacySnapshot: TicketCatalogSnapshot = {
+          eventId: null,
+          eventTitle: cached.eventTitle ?? null,
+          showings: [],
+          tickets: (cached.tickets as Array<{ name: string; price: number; mode: string; availability: string }>).map(
+            (t) => ({
+              id: null,
+              name: t.name,
+              price: t.price,
+              currency: 'VND' as const,
+              mode: (t.mode === 'ZONE' ? 'AREA_BASED' : t.mode) as 'STANDING' | 'SEATED' | 'AREA_BASED' | 'UNKNOWN',
+              availability: t.availability as 'AVAILABLE' | 'SOLD_OUT' | 'OFFLINE_SALE' | 'NOT_STARTED' | 'CLOSED' | 'UNKNOWN',
+              selectable: t.availability === 'AVAILABLE',
+              minQuantity: null,
+              maxQuantity: null,
+              source: 'EVENT_PAGE' as const,
+              evidence: [],
+            })
+          ),
+          loadState: 'LOADED',
+          loadMessage: `${cached.tickets.length} ticket options discovered (cached).`,
+          discoveredAt: null,
+        };
+        applyNewCatalog(legacySnapshot);
+      }
+      if (cached?.summary) {
+        sumSubtotal.textContent = formatPrice(cached.summary.subtotal);
+        sumFees.textContent = formatPrice(cached.summary.fees);
+        sumTotal.textContent = formatPrice(cached.summary.total);
+      }
+    });
+  }
+
+  // Auto-populate active Ticketbox tab URL if not configured
+  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const activeUrl = tabs[0]?.url;
+      if (activeUrl && activeUrl.includes('ticketbox.vn') && !eventUrlInput.value) {
+        eventUrlInput.value = activeUrl;
+      }
+
+      // Request active tab content script to run an immediate discovery scan
+      if (tabs[0]?.id) {
+        chrome.tabs.sendMessage(
+          tabs[0].id,
+          { type: 'REQUEST_DISCOVERY_SCAN', timestamp: new Date().toISOString() },
+          () => {
+            if (chrome.runtime.lastError) {
+              // Expected if content script not yet injected
+            }
+          }
+        );
+      }
+    });
   }
 
   // Request latest state synchronization from service worker
@@ -78,33 +865,115 @@ async function loadInitialData(): Promise<void> {
   });
 }
 
-// Handle incoming events from Service Worker
+// ─── Message Handler ──────────────────────────────────────────────────────────
+
 messageBus.subscribe((message: ExtensionMessage) => {
   switch (message.type) {
     case 'STATE_CHANGED': {
-      updateStateBadge(message.context.currentState);
+      updateStateBadge(message.context.currentState, message.context.failureMessage);
       if (message.context.attemptId) {
         attemptIdDisplay.textContent = message.context.attemptId;
       }
-      addLog(`State changed -> ${message.context.currentState}`);
+      addLog(`State → ${message.context.currentState}`);
       break;
     }
 
     case 'SYNC_STATE_RESPONSE': {
-      updateStateBadge(message.context.currentState);
+      updateStateBadge(message.context.currentState, message.context.failureMessage);
       if (message.context.attemptId) {
         attemptIdDisplay.textContent = message.context.attemptId;
+      }
+      updateTelemetry();
+
+      // Apply full catalog snapshot if available
+      if (message.catalogSnapshot) {
+        applyNewCatalog(message.catalogSnapshot);
+      } else if (message.journeyDetails) {
+        if (message.journeyDetails.eventTitle) {
+          eventInfoTitle.textContent = message.journeyDetails.eventTitle;
+          eventInfoBar.style.display = 'block';
+        }
+        if (message.journeyDetails.tickets) {
+          renderCatalogTable(
+            message.journeyDetails.tickets.map((t) => ({
+              id: null,
+              name: t.name,
+              price: t.price,
+              currency: 'VND',
+              mode: (t.mode === 'ZONE' ? 'AREA_BASED' : t.mode) as 'STANDING' | 'SEATED' | 'AREA_BASED' | 'UNKNOWN',
+              availability: t.availability as 'AVAILABLE' | 'SOLD_OUT' | 'OFFLINE_SALE' | 'NOT_STARTED' | 'CLOSED' | 'UNKNOWN',
+              selectable: t.availability === 'AVAILABLE',
+              minQuantity: null,
+              maxQuantity: null,
+              source: 'EVENT_PAGE',
+              evidence: [],
+            }))
+          );
+        }
+      }
+      break;
+    }
+
+    case 'JOURNEY_UPDATE': {
+      // Apply full catalog snapshot (preferred)
+      if (message.catalogSnapshot) {
+        applyNewCatalog(message.catalogSnapshot);
+      } else if (message.eventTitle) {
+        eventInfoTitle.textContent = message.eventTitle;
+        eventInfoBar.style.display = 'block';
+      }
+
+      // Update runtime selection display
+      if (message.selection) {
+        selTicket.textContent = message.selection.ticket || '-';
+        selMode.textContent = message.selection.mode || '-';
+        selArea.textContent = message.selection.area || '-';
+        selSeats.textContent = message.selection.seats?.join(', ') || '-';
+        selQty.textContent = String(message.selection.quantity || '-');
+      }
+
+      if (message.summary) {
+        sumSubtotal.textContent = formatPrice(message.summary.subtotal);
+        sumFees.textContent = formatPrice(message.summary.fees);
+        sumTotal.textContent = formatPrice(message.summary.total);
+      }
+
+      if (message.blockingReason) {
+        blockingReasonContainer.style.display = 'block';
+        blockingReasonText.textContent = message.blockingReason;
+      }
+      break;
+    }
+
+    case 'PAGE_DISCOVERY_SNAPSHOT': {
+      const ticketCount = message.domSummary?.ticketElementsCount ?? 0;
+      const title = message.domSummary?.title || message.pageTitle || 'Ticketbox';
+      if (title && title !== 'Ticketbox') {
+        eventInfoTitle.textContent = title;
+        eventInfoBar.style.display = 'block';
+      }
+      addLog(`Discovered ${ticketCount} ticket tier${ticketCount !== 1 ? 's' : ''} on "${title}"`);
+      break;
+    }
+
+    case 'NOTIFICATION_EVENT': {
+      addLog(`[${message.category}] ${message.body}`);
+      if (message.category === 'CONSENT_REQUIRED') {
+        updateStateBadge(PurchaseState.CONSENT_REQUIRED, 'User consent required');
+      } else if (message.category === 'PAYMENT_REQUIRED') {
+        updateStateBadge(PurchaseState.PAYMENT_GATE, 'Payment step reached — user action required.');
       }
       break;
     }
 
     case 'RESERVATION_CONFIRMED': {
       addLog(`Reservation Confirmed! ID: ${message.reservationId}`);
+      updateStateBadge(PurchaseState.HELD);
       break;
     }
 
     case 'RESERVATION_FAILED': {
-      addLog(`Reservation Failed: ${message.reason}`);
+      addLog(`Reservation Failed: ${message.reason} - ${message.errorMessage ?? ''}`);
       break;
     }
 
@@ -113,6 +982,8 @@ messageBus.subscribe((message: ExtensionMessage) => {
   }
 });
 
+// ─── Button Handlers ──────────────────────────────────────────────────────────
+
 btnArm.addEventListener('click', async () => {
   const url = eventUrlInput.value.trim();
   if (!url) {
@@ -120,31 +991,47 @@ btnArm.addEventListener('click', async () => {
     return;
   }
 
-  const priorities = categoryPriorityInput.value
-    .split(',')
-    .map((p) => p.trim())
+  rebuildPlanFromCards();
+
+  if (currentPlan.ticketRules.length === 0) {
+    alert('Please select at least one ticket type before arming.');
+    return;
+  }
+
+  // Validate plan against current catalog (warn but don't block)
+  const validation = PurchasePlanValidator.validate(currentPlan, currentCatalog.tickets);
+  if (!validation.hasActionableRule && currentCatalog.tickets.length > 0) {
+    const proceed = confirm(
+      'Warning: No selected ticket is currently available.\n\n' +
+      (validation.errors.join('\n') || 'All selected tickets are unavailable.') +
+      '\n\nArm anyway and wait for availability?'
+    );
+    if (!proceed) return;
+  }
+
+  await savePlan();
+  addLog('Arming assistant...');
+
+  const userProfile = {
+    fullName: profileNameInput.value.trim(),
+    phone: profilePhoneInput.value.trim(),
+    email: profileEmailInput.value.trim(),
+    agreeToTerms: profileAgreeTermsCheckbox.checked,
+  };
+
+  // Derive legacy categoryPriority from ticketRules for backward compat
+  const categoryPriority = currentPlan.ticketRules
+    .map((r) => r.ticketName || r.ticketId)
     .filter(Boolean);
 
-  const quantity = parseInt(quantityInput.value, 10) || 1;
-  const allowFallback = allowFallbackCheckbox.checked;
-
-  await storage.saveConfiguration({
-    targetEventUrl: url,
-    preferences: {
-      categoryPriority: priorities,
-      quantity,
-      allowFallback,
-    },
-    discoveryMode: false,
-  });
-
-  addLog('Arming assistant...');
   await messageBus.publish({
-    type: 'START_MONITORING',
+    type: 'ARM_REQUESTED',
     timestamp: new Date().toISOString(),
     eventUrl: url,
-    attemptId: attemptIdDisplay.textContent || 'attempt_manual',
-    state: PurchaseState.ARMED,
+    categoryPriority,
+    quantity: currentPlan.ticketRules[0]?.quantity ?? 1,
+    allowFallback: currentPlan.allowFallback,
+    userProfile,
   });
 });
 
@@ -156,5 +1043,55 @@ btnStop.addEventListener('click', async () => {
     reason: 'Manual user stop via Popup UI',
   });
 });
+
+btnAddTicketRow.addEventListener('click', () => {
+  addTicketRuleRow();
+  rebuildPlanFromCards();
+  savePlan();
+});
+
+btnRefreshCatalog.addEventListener('click', () => {
+  updateCatalogStatus({
+    ...currentCatalog,
+    loadState: 'LOADING',
+    loadMessage: 'Discovering tickets...',
+  });
+  addLog('Manual catalog refresh requested...');
+
+  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]?.id) {
+        chrome.tabs.sendMessage(
+          tabs[0].id,
+          { type: 'REQUEST_DISCOVERY_SCAN', timestamp: new Date().toISOString() },
+          () => {
+            if (chrome.runtime.lastError) {
+              updateCatalogStatus({
+                ...currentCatalog,
+                loadState: 'ERROR',
+                loadMessage: 'Content script not active on current tab.',
+              });
+            }
+          }
+        );
+      }
+    });
+  }
+});
+
+showingSelect.addEventListener('change', onShowingChange);
+
+allowFallbackCheckbox.addEventListener('change', () => {
+  fallbackPolicyGroup.style.display = allowFallbackCheckbox.checked ? 'flex' : 'none';
+  rebuildPlanFromCards();
+  savePlan();
+});
+
+fallbackPolicySelect.addEventListener('change', () => {
+  rebuildPlanFromCards();
+  savePlan();
+});
+
+// ─── Bootstrap ────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', loadInitialData);
