@@ -11,12 +11,13 @@ export class TicketboxFormParser {
    * Conforms strictly to Sections 17 and 20.
    */
   public static parseForm(root: DOMElementLike): FormSchema | null {
-    const formContainer =
-      root.querySelector(
-        'form.questionnaire-form, #question-form, [data-question-form], form.attendee-form, .attendee-container, #attendee-form'
-      ) ||
-      root.querySelector('form') ||
-      root;
+    const formContainer = root.querySelector(
+      'form.questionnaire-form, #question-form, [data-question-form], form.attendee-form, .attendee-container, #attendee-form, .questionnaire-container, [class*="attendee"], [class*="questionnaire"]'
+    );
+
+    if (!formContainer) {
+      return null;
+    }
 
     const rawInputs = formContainer.querySelectorAll('input, select, textarea');
     const inputElements = rawInputs.filter((el) => {

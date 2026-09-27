@@ -254,16 +254,17 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     const candidateLower = candidateId.toLowerCase().trim();
 
-    // 1. Expand showing or accordion if tickets are not yet visible
+    // 1. Expand showing or accordion if tickets or quantity controls are not yet visible
     const showingBtn = root.querySelector(
-      '#select-showing-btn, [id*="select-showing"], .ant-collapse-header button, button.ant-btn'
+      '#select-showing-btn, [id*="select-showing"], button.btn-buy-ticket, .ant-collapse-header button'
     );
-    if (showingBtn && typeof showingBtn.click === 'function') {
-      const hasVisibleRows = root.querySelector('.content-row, [class*="content-row"]') !== null;
-      if (!hasVisibleRows) {
-        this.logger?.info('Expanding showing to reveal ticket tiers', { candidateId });
-        showingBtn.click();
-        await new Promise((r) => setTimeout(r, 400));
+    if (showingBtn && typeof (showingBtn as MutableDOMElement).click === 'function') {
+      const hasQtyControls =
+        root.querySelector('.ant-input-number, .qty-input, input[type="number"], .ant-drawer-open') !== null;
+      if (!hasQtyControls) {
+        this.logger?.info('Clicking showing/booking button to open ticket purchase view', { candidateId });
+        (showingBtn as MutableDOMElement).click!();
+        await new Promise((r) => setTimeout(r, 500));
       }
     }
 
@@ -380,7 +381,14 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     );
 
     if (input) {
-      // 1. Inspect allowed quantity
+      // 1. Read current quantity BEFORE any modification
+      const rawCurrentVal =
+        input.getAttribute('value') ||
+        ('value' in input ? String((input as MutableDOMElement).value) : '') ||
+        '0';
+      const cur = parseInt(rawCurrentVal, 10) || 0;
+
+      // 2. Inspect allowed quantity
       const minAttr = input.getAttribute('min');
       const maxAttr = input.getAttribute('max');
       const min = minAttr ? parseInt(minAttr, 10) : 1;
@@ -398,13 +406,29 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         return false;
       }
 
-      // 3. Set quantity
-      if ('value' in (input as MutableDOMElement)) {
-        (input as MutableDOMElement).value = String(quantity);
+      // 3. If plus button is present, click it to sync React/AntDesign state
+      const clicks = Math.max(0, quantity - cur);
+      if (plusBtn && typeof (plusBtn as MutableDOMElement).click === 'function' && clicks > 0) {
+        this.logger?.info('Clicking plus button to set quantity in AntDesign', {
+          clicks,
+          targetQuantity: quantity,
+        });
+        for (let i = 0; i < clicks; i++) {
+          (plusBtn as MutableDOMElement).click!();
+          await new Promise((r) => setTimeout(r, 120));
+        }
       }
+
+      // 4. Update native input value with prototype descriptor setter to notify React
       if (input.rawElement && 'value' in input.rawElement) {
         const nativeEl = input.rawElement as HTMLInputElement;
-        nativeEl.value = String(quantity);
+        const proto = typeof window !== 'undefined' ? window.HTMLInputElement?.prototype : null;
+        const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+        if (descriptor && descriptor.set) {
+          descriptor.set.call(nativeEl, String(quantity));
+        } else {
+          nativeEl.value = String(quantity);
+        }
         const EventCtor = (
           globalThis as unknown as {
             Event?: new (type: string, init?: Record<string, unknown>) => unknown;
@@ -415,21 +439,12 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           nativeEl.dispatchEvent(new EventCtor('change', { bubbles: true }) as never);
         }
       }
+
+      if ('value' in (input as MutableDOMElement)) {
+        (input as MutableDOMElement).value = String(quantity);
+      }
       (input as MutableDOMElement).attributes = (input as MutableDOMElement).attributes || {};
       (input as MutableDOMElement).attributes['value'] = String(quantity);
-
-      // If plus button is present, click it to sync React/AntDesign state
-      if (plusBtn && typeof (plusBtn as MutableDOMElement).click === 'function') {
-        const cur = parseInt(input.getAttribute('value') || input.value || '0', 10) || 0;
-        const clicks = Math.max(0, quantity - cur);
-        if (clicks > 0) {
-          this.logger?.info('Clicking plus button to set quantity in AntDesign', { clicks });
-          for (let i = 0; i < clicks; i++) {
-            (plusBtn as MutableDOMElement).click!();
-            await new Promise((r) => setTimeout(r, 120));
-          }
-        }
-      }
 
       this.logger?.info('Quantity selection verified', { quantity });
       return true;
@@ -464,8 +479,11 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const root = this.getRoot();
     if (!root) return false;
 
+    // Allow UI state to settle after quantity selection
+    await new Promise((r) => setTimeout(r, 300));
+
     const candidates = root.querySelectorAll(
-      '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, button[type="submit"], .btn-checkout, [class*="checkout"]'
+      '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, button[type="submit"], .btn-checkout, [class*="checkout"], .ant-drawer-footer button'
     );
 
     for (const btn of candidates) {
@@ -479,7 +497,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         text.includes('đặt vé') ||
         text.includes('thanh toán') ||
         text.includes('continue') ||
-        text.includes('checkout')
+        text.includes('checkout') ||
+        text.includes('xác nhận')
       ) {
         this.logger?.info('Clicking next step / continue button', { buttonText: text });
         if (typeof (btn as MutableDOMElement).click === 'function') {

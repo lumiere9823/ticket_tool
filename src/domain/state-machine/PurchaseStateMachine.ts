@@ -517,6 +517,21 @@ export class PurchaseStateMachine {
         if (event.type === 'BOOKING_SUMMARY_DETECTED') {
           return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
         }
+        if (event.type === 'QUESTION_FORM_DETECTED') {
+          return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
+        }
+        if (event.type === 'FILLING_ATTENDEE_FORM') {
+          return this.performTransition(PurchaseState.FILLING_ATTENDEE_FORM);
+        }
+        if (event.type === 'CONSENT_REQUIRED') {
+          return this.performTransition(PurchaseState.CONSENT_REQUIRED);
+        }
+        if (event.type === 'PAYMENT_GATE') {
+          return this.performTransition(PurchaseState.PAYMENT_GATE);
+        }
+        if (event.type === 'CHECKOUT_OPENED') {
+          return this.performTransition(PurchaseState.CHECKOUT);
+        }
         if (event.type === 'AREA_SELECTION_REQUIRED') {
           return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
         }
@@ -614,6 +629,18 @@ export class PurchaseStateMachine {
         }
         if (event.type === 'QUESTION_FORM_DETECTED') {
           return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
+        }
+        if (event.type === 'FILLING_ATTENDEE_FORM') {
+          return this.performTransition(PurchaseState.FILLING_ATTENDEE_FORM);
+        }
+        if (event.type === 'CONSENT_REQUIRED') {
+          return this.performTransition(PurchaseState.CONSENT_REQUIRED);
+        }
+        if (event.type === 'PAYMENT_GATE') {
+          return this.performTransition(PurchaseState.PAYMENT_GATE);
+        }
+        if (event.type === 'CHECKOUT_OPENED') {
+          return this.performTransition(PurchaseState.CHECKOUT);
         }
         if (event.type === 'SELECTION_COMPLETED' || event.type === 'RESERVATION_INITIATED') {
           return this.performTransition(PurchaseState.RESERVING);
