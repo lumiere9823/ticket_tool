@@ -147,6 +147,67 @@ describe('Application Layer Use Cases', () => {
     expect(stateMachine.failureReason).toBe(FailureReason.RESERVATION_FAILED);
   });
 
+  it('ExecuteReservationUseCase should transition to RATE_LIMITED when platform returns 429', async () => {
+    stateMachine = new PurchaseStateMachine(PurchaseState.SELECTING, 'attempt_test');
+
+    class RateLimitedMockAdapter extends SafeStubAdapter {
+      override async submitReservation(): Promise<{
+        isConfirmed: boolean;
+        errorMessage: string;
+      }> {
+        return {
+          isConfirmed: false,
+          errorMessage: 'HTTP 429: Too many requests, rate limit exceeded',
+        };
+      }
+    }
+    const mockAdapter = new RateLimitedMockAdapter();
+
+    const useCase = new ExecuteReservationUseCase(stateMachine, mockAdapter, eventBus, logger);
+    const candidate: CandidateTicket = {
+      id: 'cat-1',
+      categoryName: 'CAT 1',
+      price: new Money(1000000),
+      availableQuantity: 2,
+      isAvailable: true,
+    };
+
+    const result = await useCase.execute(candidate, 2);
+    expect(result.isConfirmed).toBe(false);
+    expect(stateMachine.state).toBe(PurchaseState.RATE_LIMITED);
+    expect(stateMachine.failureReason).toBe(FailureReason.RATE_LIMITED);
+  });
+
+  it('ExecuteReservationUseCase should transition to SESSION_REAUTH_REQUIRED when 401 occurs', async () => {
+    stateMachine = new PurchaseStateMachine(PurchaseState.SELECTING, 'attempt_test');
+
+    class SessionExpiredMockAdapter extends SafeStubAdapter {
+      override async submitReservation(): Promise<{
+        isConfirmed: boolean;
+        errorMessage: string;
+      }> {
+        return {
+          isConfirmed: false,
+          errorMessage: '401 Unauthorized: session expired',
+        };
+      }
+    }
+    const mockAdapter = new SessionExpiredMockAdapter();
+
+    const useCase = new ExecuteReservationUseCase(stateMachine, mockAdapter, eventBus, logger);
+    const candidate: CandidateTicket = {
+      id: 'cat-1',
+      categoryName: 'CAT 1',
+      price: new Money(1000000),
+      availableQuantity: 2,
+      isAvailable: true,
+    };
+
+    const result = await useCase.execute(candidate, 2);
+    expect(result.isConfirmed).toBe(false);
+    expect(stateMachine.state).toBe(PurchaseState.SESSION_REAUTH_REQUIRED);
+  });
+
   it('StopAssistantUseCase should transition active state to STOPPED and notify', async () => {
     stateMachine = new PurchaseStateMachine(PurchaseState.MONITORING, 'attempt_test');
     const useCase = new StopAssistantUseCase(stateMachine, storage, eventBus, logger);

@@ -54,6 +54,49 @@ describe('Security & Infrastructure Tests', () => {
       })
     ).toBe(true);
 
+    // Reject unknown message types
+    expect(
+      bus.isValidMessage({
+        type: 'FORGED_ADMIN_MESSAGE',
+        timestamp: '2026-09-26T23:00:00Z',
+      })
+    ).toBe(false);
+
+    // Reject payload missing required fields
+    expect(
+      bus.isValidMessage({
+        type: 'START_MONITORING',
+        timestamp: '2026-09-26T23:00:00Z',
+        // missing eventUrl and attemptId
+      })
+    ).toBe(false);
+
+    expect(
+      bus.isValidMessage({
+        type: 'RESERVATION_CONFIRMED',
+        timestamp: '2026-09-26T23:00:00Z',
+        reservationId: '   ', // empty string rejected
+      })
+    ).toBe(false);
+
+    // Accept properly formed messages
+    expect(
+      bus.isValidMessage({
+        type: 'START_MONITORING',
+        timestamp: '2026-09-26T23:00:00Z',
+        eventUrl: 'https://ticketbox.vn/event/123',
+        attemptId: 'att-123',
+      })
+    ).toBe(true);
+
+    expect(
+      bus.isValidMessage({
+        type: 'RESERVATION_CONFIRMED',
+        timestamp: '2026-09-26T23:00:00Z',
+        reservationId: 'RES-999',
+      })
+    ).toBe(true);
+
     await expect(bus.publish({} as never)).rejects.toThrow('Invalid message format');
   });
 

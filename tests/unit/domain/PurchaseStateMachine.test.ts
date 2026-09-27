@@ -64,8 +64,11 @@ describe('PurchaseStateMachine', () => {
     sm.transition({ type: 'PAYMENT_STARTED' });
     expect(sm.state).toBe(PurchaseState.PAYMENT);
 
-    // PAYMENT -> CONFIRMED
-    sm.transition({ type: 'PAYMENT_CONFIRMED' });
+    // PAYMENT -> CONFIRMED (Requires authoritative confirmation evidence)
+    sm.transition({
+      type: 'PAYMENT_CONFIRMED',
+      confirmationReference: 'CONF-PAY-998877',
+    });
     expect(sm.state).toBe(PurchaseState.CONFIRMED);
   });
 
