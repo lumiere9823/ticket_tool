@@ -2,6 +2,26 @@ import { EventBus, MessageHandler } from '../../application/ports/EventBus';
 import { ExtensionMessage } from '../../extension/shared/messages';
 import { LoggerPort } from '../../application/ports/LoggerPort';
 
+const VALID_MESSAGE_TYPES = new Set<string>([
+  'STATE_CHANGED',
+  'ARM_REQUESTED',
+  'START_MONITORING',
+  'STOP_REQUESTED',
+  'AVAILABILITY_DETECTED',
+  'SELECTION_STARTED',
+  'RESERVATION_STARTED',
+  'RESERVATION_CONFIRMED',
+  'RESERVATION_FAILED',
+  'HUMAN_INTERVENTION_REQUIRED',
+  'USER_COMPLETED_INTERVENTION',
+  'NOTIFICATION_EVENT',
+  'PAGE_DISCOVERY_SNAPSHOT',
+  'SYNC_STATE_REQUEST',
+  'SYNC_STATE_RESPONSE',
+  'JOURNEY_UPDATE',
+  'REQUEST_DISCOVERY_SCAN',
+]);
+
 export class ChromeMessageBus implements EventBus {
   private inMemoryListeners: Set<MessageHandler> = new Set();
   private chromeListenerAttached = false;
@@ -62,7 +82,13 @@ export class ChromeMessageBus implements EventBus {
       this.chromeListenerAttached = true;
       chrome.runtime.onMessage.addListener((message: unknown) => {
         if (this.isValidMessage(message)) {
-          handler(message as ExtensionMessage);
+          for (const listener of this.inMemoryListeners) {
+            try {
+              listener(message as ExtensionMessage);
+            } catch (err) {
+              this.logger?.error('Error in chrome message listener', err);
+            }
+          }
         } else {
           this.logger?.warn('Ignored invalid message received via chrome.runtime', { message });
         }
@@ -83,6 +109,73 @@ export class ChromeMessageBus implements EventBus {
       return false;
     }
     const msg = message as Record<string, unknown>;
-    return typeof msg['type'] === 'string' && typeof msg['timestamp'] === 'string';
+    if (typeof msg['type'] !== 'string' || typeof msg['timestamp'] !== 'string') {
+      return false;
+    }
+    if (!VALID_MESSAGE_TYPES.has(msg['type'])) {
+      return false;
+    }
+
+    switch (msg['type']) {
+      case 'STATE_CHANGED':
+      case 'SYNC_STATE_RESPONSE':
+        return typeof msg['context'] === 'object' && msg['context'] !== null;
+      case 'ARM_REQUESTED':
+        return (
+          typeof msg['eventUrl'] === 'string' &&
+          Array.isArray(msg['categoryPriority']) &&
+          typeof msg['quantity'] === 'number'
+        );
+      case 'START_MONITORING':
+        return typeof msg['eventUrl'] === 'string' && typeof msg['attemptId'] === 'string';
+      case 'AVAILABILITY_DETECTED':
+        return (
+          Array.isArray(msg['candidates']) &&
+          typeof msg['observedAt'] === 'string' &&
+          typeof msg['isAuthoritativeT0'] === 'boolean'
+        );
+      case 'SELECTION_STARTED':
+        return typeof msg['candidate'] === 'object' && msg['candidate'] !== null;
+      case 'RESERVATION_STARTED':
+        return (
+          typeof msg['candidate'] === 'object' &&
+          msg['candidate'] !== null &&
+          typeof msg['quantity'] === 'number'
+        );
+      case 'RESERVATION_CONFIRMED':
+        return (
+          typeof msg['reservationId'] === 'string' &&
+          (msg['reservationId'] as string).trim().length > 0
+        );
+      case 'RESERVATION_FAILED':
+        return typeof msg['reason'] === 'string' && typeof msg['canRetry'] === 'boolean';
+      case 'HUMAN_INTERVENTION_REQUIRED':
+        return (
+          typeof msg['challengeType'] === 'string' &&
+          typeof msg['interventionId'] === 'string' &&
+          typeof msg['instructions'] === 'string'
+        );
+      case 'USER_COMPLETED_INTERVENTION':
+        return typeof msg['interventionId'] === 'string';
+      case 'NOTIFICATION_EVENT':
+        return (
+          typeof msg['title'] === 'string' &&
+          typeof msg['body'] === 'string' &&
+          typeof msg['category'] === 'string'
+        );
+      case 'PAGE_DISCOVERY_SNAPSHOT':
+        return (
+          typeof msg['url'] === 'string' &&
+          typeof msg['domSummary'] === 'object' &&
+          typeof msg['timingMs'] === 'number'
+        );
+      case 'JOURNEY_UPDATE':
+      case 'REQUEST_DISCOVERY_SCAN':
+      case 'STOP_REQUESTED':
+      case 'SYNC_STATE_REQUEST':
+        return true;
+      default:
+        return false;
+    }
   }
 }

@@ -10,6 +10,7 @@ import { CandidateTicket } from '../../domain/entities/CandidateTicket';
 import { Reservation } from '../../domain/entities/Reservation';
 import { LoggerPort } from '../../application/ports/LoggerPort';
 import { Event } from '../../domain/entities/Event';
+import { DiscoverySanitizer } from '../../domain/policies/DiscoverySanitizer';
 
 export interface StructuredDiscoveryEvidence {
   observation: string;
@@ -46,12 +47,12 @@ export class TicketboxDiscoveryAdapter implements TicketboxPageAdapter {
     const evidence: StructuredDiscoveryEvidence = {
       observation: 'Observed Ticketbox event page header and title',
       evidence: {
-        pageUrl: this.sanitizeUrl(pageUrl),
+        pageUrl: DiscoverySanitizer.sanitizeUrl(pageUrl),
         documentTitle: title,
         detectedElements: {
           hasEventContainer:
             typeof document !== 'undefined' &&
-            !!document.querySelector('.event-container, #event-detail, main'),
+            !!document.querySelector('main, article, [role="main"]'),
         },
         timestamp: new Date().toISOString(),
       },
@@ -84,7 +85,7 @@ export class TicketboxDiscoveryAdapter implements TicketboxPageAdapter {
     const evidence: StructuredDiscoveryEvidence = {
       observation: 'Scanning DOM for visible ticket tier elements in discovery mode',
       evidence: {
-        pageUrl: this.sanitizeUrl(pageUrl),
+        pageUrl: DiscoverySanitizer.sanitizeUrl(pageUrl),
         documentTitle: typeof document !== 'undefined' ? document.title : '',
         detectedElements: {
           buttonsCount:
@@ -127,8 +128,8 @@ export class TicketboxDiscoveryAdapter implements TicketboxPageAdapter {
     candidate: CandidateTicket,
     quantity: number
   ): Promise<PageReservationResult> {
-    this.logger?.info(
-      'Discovery mode: logged reservation intent (no automated request dispatched)',
+    this.logger?.warn(
+      'TicketboxDiscoveryAdapter: submitReservation rejected — Discovery mode cannot dispatch purchase requests',
       {
         candidateId: candidate.id,
         quantity,
@@ -137,7 +138,7 @@ export class TicketboxDiscoveryAdapter implements TicketboxPageAdapter {
     return {
       isConfirmed: false,
       errorMessage:
-        'Discovery Mode: Automated purchase dispatch is disabled until network evidence is verified',
+        'BLOCKED_BY_DISCOVERY: Discovery Mode — automated purchase dispatch is disabled until network evidence is verified',
     };
   }
 
@@ -147,12 +148,122 @@ export class TicketboxDiscoveryAdapter implements TicketboxPageAdapter {
 
   public async getCheckoutState(): Promise<PageCheckoutState> {
     const pageUrl = typeof window !== 'undefined' ? window.location.href : '';
-    const isInCheckout = pageUrl.includes('/checkout') || pageUrl.includes('/payment');
+    const sanitizedUrl = DiscoverySanitizer.sanitizeUrl(pageUrl);
+    const isInCheckout = sanitizedUrl.includes('/checkout') || sanitizedUrl.includes('/payment');
 
     return {
       isInCheckout,
-      checkoutUrl: pageUrl,
+      checkoutUrl: sanitizedUrl,
     };
+  }
+
+  public async detectPage(): Promise<
+    import('../../domain/entities/EventCatalog').TicketboxPageType
+  > {
+    const pageUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const root =
+      typeof document !== 'undefined'
+        ? (await import('./parsing/DOMElementLike')).wrapBrowserElement(document)
+        : undefined;
+
+    const { TicketboxCatalogParser } = await import('./parsing/TicketboxCatalogParser');
+    return TicketboxCatalogParser.detectPageType(pageUrl, root);
+  }
+
+  public async discoverEvent(): Promise<Event | null> {
+    const state = await this.getEventState();
+    return state.event;
+  }
+
+  public async discoverShowings(): Promise<
+    import('../../domain/entities/EventCatalog').ShowingSnapshot[]
+  > {
+    const catalog = await this.discoverTicketCatalog();
+    return catalog.showings;
+  }
+
+  public async discoverTicketCatalog(
+    showingId?: string | null
+  ): Promise<import('../../domain/entities/EventCatalog').EventCatalog> {
+    const pageUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const sanitizedUrl = DiscoverySanitizer.sanitizeUrl(pageUrl);
+
+    if (typeof document !== 'undefined') {
+      const { wrapBrowserElement } = await import('./parsing/DOMElementLike');
+      const { TicketboxCatalogParser } = await import('./parsing/TicketboxCatalogParser');
+      const root = wrapBrowserElement(document);
+      const catalog = TicketboxCatalogParser.parseCatalog(root, sanitizedUrl);
+
+      if (showingId) {
+        return {
+          ...catalog,
+          showings: catalog.showings.filter((s) => s.id === showingId),
+        };
+      }
+      return catalog;
+    }
+
+    return {
+      eventId: null,
+      eventTitle: null,
+      eventUrl: sanitizedUrl,
+      showings: [],
+    };
+  }
+
+  public async revalidateTicket(
+    candidate: import('../../domain/entities/EventCatalog').TicketCandidate
+  ): Promise<{ isValid: boolean; reason?: string }> {
+    const catalog = await this.discoverTicketCatalog();
+    const matched = catalog.showings
+      .flatMap((s) => s.ticketTypes)
+      .find((t) => t.name === candidate.ticket.name || (t.id && t.id === candidate.ticket.id));
+
+    if (!matched) {
+      return {
+        isValid: false,
+        reason: 'Ticket category not observed in current catalog',
+      };
+    }
+
+    if (matched.availability !== 'AVAILABLE' || !matched.selectable) {
+      return {
+        isValid: false,
+        reason: `Ticket category status is '${matched.availability}' and not selectable`,
+      };
+    }
+
+    return { isValid: true };
+  }
+
+  public async selectQuantity(
+    ticket: import('../../domain/entities/EventCatalog').TicketType,
+    quantity: number
+  ): Promise<boolean> {
+    this.logger?.warn(
+      'TicketboxDiscoveryAdapter: selectQuantity rejected (BLOCKED_BY_DISCOVERY: Discovery mode cannot mutate form state)',
+      {
+        ticketName: ticket.name,
+        quantity,
+      }
+    );
+    return false;
+  }
+
+  public async detectSeatMap(): Promise<{ hasSeatMap: boolean; zones?: string[] }> {
+    const hasSeatMap =
+      typeof document !== 'undefined' &&
+      !!document.querySelector('.seat-map, #seat-map, svg.seatmap, [data-seatmap]');
+
+    return { hasSeatMap };
+  }
+
+  public async selectSeats(selection: { zoneId?: string; seatIds: string[] }): Promise<boolean> {
+    this.logger?.warn(
+      'TicketboxDiscoveryAdapter: selectSeats rejected (BLOCKED_BY_DISCOVERY: Discovery mode cannot select seats)',
+      selection
+    );
+    return false;
   }
 
   private recordEvidence(item: StructuredDiscoveryEvidence): void {
@@ -161,19 +272,5 @@ export class TicketboxDiscoveryAdapter implements TicketboxPageAdapter {
       confidence: item.confidence,
       consequence: item.implementationConsequence,
     });
-  }
-
-  private sanitizeUrl(rawUrl: string): string {
-    try {
-      const parsed = new URL(rawUrl);
-      // Remove any sensitive query parameters like token, auth, session
-      parsed.searchParams.delete('token');
-      parsed.searchParams.delete('auth');
-      parsed.searchParams.delete('session');
-      parsed.searchParams.delete('code');
-      return parsed.toString();
-    } catch {
-      return rawUrl;
-    }
   }
 }

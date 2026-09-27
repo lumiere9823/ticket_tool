@@ -69,7 +69,7 @@ export class SafeStubAdapter implements TicketboxPageAdapter {
     return {
       isConfirmed: false,
       errorMessage:
-        'TBD: Reservation request implementation is pending verified Ticketbox network evidence',
+        'BLOCKED_BY_DISCOVERY: Reservation request implementation is pending verified Ticketbox network evidence',
     };
   }
 
@@ -83,5 +83,62 @@ export class SafeStubAdapter implements TicketboxPageAdapter {
     return {
       isInCheckout: false,
     };
+  }
+
+  public async detectPage(): Promise<
+    import('../../domain/entities/EventCatalog').TicketboxPageType
+  > {
+    return 'UNKNOWN';
+  }
+
+  public async discoverEvent(): Promise<import('../../domain/entities/Event').Event | null> {
+    return null;
+  }
+
+  public async discoverShowings(): Promise<
+    import('../../domain/entities/EventCatalog').ShowingSnapshot[]
+  > {
+    return [];
+  }
+
+  public async discoverTicketCatalog(
+    showingId?: string | null
+  ): Promise<import('../../domain/entities/EventCatalog').EventCatalog> {
+    this.logger?.debug('SafeStubAdapter: discoverTicketCatalog called (TBD)', { showingId });
+    return {
+      eventId: null,
+      eventTitle: null,
+      eventUrl: '',
+      showings: [],
+    };
+  }
+
+  public async revalidateTicket(
+    _candidate: import('../../domain/entities/EventCatalog').TicketCandidate
+  ): Promise<{ isValid: boolean; reason?: string }> {
+    return {
+      isValid: false,
+      reason: 'BLOCKED_BY_DISCOVERY: Safe stub does not perform live booking revalidation',
+    };
+  }
+
+  public async selectQuantity(
+    ticket: import('../../domain/entities/EventCatalog').TicketType,
+    quantity: number
+  ): Promise<boolean> {
+    this.logger?.warn('SafeStubAdapter: selectQuantity rejected (BLOCKED_BY_DISCOVERY)', {
+      ticketName: ticket.name,
+      quantity,
+    });
+    return false;
+  }
+
+  public async detectSeatMap(): Promise<{ hasSeatMap: boolean; zones?: string[] }> {
+    return { hasSeatMap: false };
+  }
+
+  public async selectSeats(selection: { zoneId?: string; seatIds: string[] }): Promise<boolean> {
+    this.logger?.warn('SafeStubAdapter: selectSeats rejected (BLOCKED_BY_DISCOVERY)', selection);
+    return false;
   }
 }

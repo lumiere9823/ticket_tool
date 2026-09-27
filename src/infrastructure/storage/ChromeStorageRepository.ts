@@ -10,7 +10,25 @@ const STORAGE_KEYS = {
   CONFIG: 'ticketbox_assistant_config',
   STATE: 'ticketbox_assistant_last_state',
   PROFILES: 'ticketbox_assistant_profiles',
+  INTERVENTIONS: 'ticketbox_assistant_interventions',
 };
+
+const FORBIDDEN_STORAGE_KEYS = new Set([
+  'password',
+  'pass',
+  'otp',
+  'cvv',
+  'cvc',
+  'card',
+  'cardnumber',
+  'cookie',
+  'rawcookie',
+  'sessiontoken',
+  'rawtoken',
+  'accesstoken',
+  'refreshtoken',
+  'secret',
+]);
 
 export class ChromeStorageRepository implements StorageRepository {
   private inMemoryMap: Map<string, unknown> = new Map();
@@ -21,6 +39,31 @@ export class ChromeStorageRepository implements StorageRepository {
       typeof chrome.storage !== 'undefined' &&
       typeof chrome.storage.local !== 'undefined'
     );
+  }
+
+  /**
+   * Sanitizes objects before writing to storage to guarantee no credentials can be leaked.
+   */
+  private sanitizeData<T>(data: T): T {
+    if (!data || typeof data !== 'object') {
+      return data;
+    }
+
+    if (Array.isArray(data)) {
+      return data.map((item) => this.sanitizeData(item)) as unknown as T;
+    }
+
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      const lower = key.toLowerCase();
+      if (FORBIDDEN_STORAGE_KEYS.has(lower)) {
+        // Drop forbidden credential keys completely from storage
+        continue;
+      }
+      cleaned[key] = typeof value === 'object' && value !== null ? this.sanitizeData(value) : value;
+    }
+
+    return cleaned as T;
   }
 
   public async getConfiguration(): Promise<AssistantConfiguration | null> {
@@ -35,14 +78,15 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   public async saveConfiguration(config: AssistantConfiguration): Promise<void> {
+    const safeConfig = this.sanitizeData(config);
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
-        chrome.storage.local.set({ [STORAGE_KEYS.CONFIG]: config }, () => {
+        chrome.storage.local.set({ [STORAGE_KEYS.CONFIG]: safeConfig }, () => {
           resolve();
         });
       });
     }
-    this.inMemoryMap.set(STORAGE_KEYS.CONFIG, config);
+    this.inMemoryMap.set(STORAGE_KEYS.CONFIG, safeConfig);
   }
 
   public async getLastState(): Promise<StateContext | null> {
@@ -57,14 +101,15 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   public async saveCurrentState(state: StateContext): Promise<void> {
+    const safeState = this.sanitizeData(state);
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
-        chrome.storage.local.set({ [STORAGE_KEYS.STATE]: state }, () => {
+        chrome.storage.local.set({ [STORAGE_KEYS.STATE]: safeState }, () => {
           resolve();
         });
       });
     }
-    this.inMemoryMap.set(STORAGE_KEYS.STATE, state);
+    this.inMemoryMap.set(STORAGE_KEYS.STATE, safeState);
   }
 
   public async getProfiles(): Promise<AccountProfile[]> {
@@ -100,14 +145,43 @@ export class ChromeStorageRepository implements StorageRepository {
       displayName: p.displayName,
     }));
 
+    const safeSerialized = this.sanitizeData(serialized);
+
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
-        chrome.storage.local.set({ [STORAGE_KEYS.PROFILES]: serialized }, () => {
+        chrome.storage.local.set({ [STORAGE_KEYS.PROFILES]: safeSerialized }, () => {
           resolve();
         });
       });
     }
-    this.inMemoryMap.set(STORAGE_KEYS.PROFILES, serialized);
+    this.inMemoryMap.set(STORAGE_KEYS.PROFILES, safeSerialized);
+  }
+
+  public async getHumanInterventionRecord(id: string): Promise<Record<string, unknown> | null> {
+    const key = `${STORAGE_KEYS.INTERVENTIONS}_${id}`;
+    if (this.isChromeStorageAvailable()) {
+      return new Promise((resolve) => {
+        chrome.storage.local.get(key, (res) => {
+          resolve((res[key] as Record<string, unknown>) ?? null);
+        });
+      });
+    }
+    return (this.inMemoryMap.get(key) as Record<string, unknown>) ?? null;
+  }
+
+  public async saveHumanInterventionRecord(record: Record<string, unknown>): Promise<void> {
+    const id = record['id'] as string;
+    const key = `${STORAGE_KEYS.INTERVENTIONS}_${id}`;
+    const safeRecord = this.sanitizeData(record);
+
+    if (this.isChromeStorageAvailable()) {
+      return new Promise((resolve) => {
+        chrome.storage.local.set({ [key]: safeRecord }, () => {
+          resolve();
+        });
+      });
+    }
+    this.inMemoryMap.set(key, safeRecord);
   }
 
   public async clearSession(): Promise<void> {
