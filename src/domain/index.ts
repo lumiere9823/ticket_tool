@@ -18,6 +18,9 @@ export * from './entities/TicketPreference';
 export * from './entities/Reservation';
 export * from './entities/PurchaseAttempt';
 export * from './entities/AccountProfile';
+export * from './entities/HumanInterventionRecord';
+export * from './entities/DiscoverySnapshot';
+export * from './entities/EventCatalog';
 
 // Policies
 export * from './policies/SelectionStrategy';
@@ -25,3 +28,7 @@ export * from './policies/RetryPolicy';
 export * from './policies/ErrorClassifier';
 export * from './policies/ExecutionPolicy';
 export * from './policies/GlobalStopPolicy';
+export * from './policies/ActionGuard';
+export * from './policies/DiscoverySanitizer';
+export * from './policies/AvailabilityEvaluator';
+export * from './policies/TicketCandidateSelector';

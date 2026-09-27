@@ -9,6 +9,32 @@ export interface LatencyMarkers {
   t3ReservationInitiated?: number | undefined;
   t4ReservationResponse?: number | undefined;
   t5ServerConfirmedHold?: number | undefined;
+
+  // Extended Journey Timings (Section 30)
+  ticketDiscoveryStart?: number | undefined;
+  ticketDiscoveryEnd?: number | undefined;
+  ticketDecisionStart?: number | undefined;
+  ticketDecisionEnd?: number | undefined;
+  ticketSelectionStart?: number | undefined;
+  ticketSelectionEnd?: number | undefined;
+  areaSelectionStart?: number | undefined;
+  areaSelectionEnd?: number | undefined;
+  seatDiscoveryStart?: number | undefined;
+  seatDiscoveryEnd?: number | undefined;
+  seatSelectionStart?: number | undefined;
+  seatSelectionEnd?: number | undefined;
+  summaryVerificationStart?: number | undefined;
+  summaryVerificationEnd?: number | undefined;
+  formDetectionStart?: number | undefined;
+  formDetectionEnd?: number | undefined;
+  ticketDiscoveryDurationMs?: number | undefined;
+  ticketDecisionDurationMs?: number | undefined;
+  ticketSelectionDurationMs?: number | undefined;
+  areaSelectionDurationMs?: number | undefined;
+  seatDiscoveryDurationMs?: number | undefined;
+  seatSelectionDurationMs?: number | undefined;
+  summaryVerificationDurationMs?: number | undefined;
+  formDetectionDurationMs?: number | undefined;
 }
 
 export interface LatencyBreakdown {
@@ -19,6 +45,16 @@ export interface LatencyBreakdown {
   confirmationLatencyMs?: number | undefined;
   totalCriticalLatencyMs?: number | undefined;
   isT0Authoritative: boolean;
+
+  // Extended Journey Durations (Section 30)
+  ticketDiscoveryDurationMs?: number | undefined;
+  ticketDecisionDurationMs?: number | undefined;
+  ticketSelectionDurationMs?: number | undefined;
+  areaSelectionDurationMs?: number | undefined;
+  seatDiscoveryDurationMs?: number | undefined;
+  seatSelectionDurationMs?: number | undefined;
+  summaryVerificationDurationMs?: number | undefined;
+  formDetectionDurationMs?: number | undefined;
 }
 
 /**
