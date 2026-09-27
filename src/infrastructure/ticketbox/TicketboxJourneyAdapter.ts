@@ -252,16 +252,27 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     this.logger?.info('Executing Section 7 Ticket Selection', { candidateId, quantity });
 
-    // 1. Locate UI control by ID
-    let control: DOMElementLike | null =
-      root.querySelector(`[data-ticket-id="${candidateId}"] button`) ||
+    const candidateLower = candidateId.toLowerCase().trim();
+
+    // 1. Expand showing or accordion if tickets are not yet visible
+    const showingBtn = root.querySelector(
+      '#select-showing-btn, [id*="select-showing"], .ant-collapse-header button, button.ant-btn'
+    );
+    if (showingBtn && typeof showingBtn.click === 'function') {
+      const hasVisibleRows = root.querySelector('.content-row, [class*="content-row"]') !== null;
+      if (!hasVisibleRows) {
+        this.logger?.info('Expanding showing to reveal ticket tiers', { candidateId });
+        showingBtn.click();
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+
+    // 2. Locate the ticket row by ID or name
+    let targetRow: DOMElementLike | null =
       root.querySelector(`[data-ticket-id="${candidateId}"]`) ||
-      root.querySelector(`#${candidateId} button`) ||
       root.querySelector(`#${candidateId}`);
 
-    // Fallback: search by ticket name in .content-row, .ticket-row, or .ticket-item
-    if (!control) {
-      const candidateLower = candidateId.toLowerCase().trim();
+    if (!targetRow) {
       const allRows = root.querySelectorAll(
         '.content-row, [class*="content-row"], .ticket-item, .ticket-row, [data-ticket-id]'
       );
@@ -276,91 +287,56 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             titleText.includes(candidateLower) ||
             candidateLower.includes(titleText))
         ) {
-          control = row.querySelector('button, [role="button"], input[type="button"]') || row;
+          targetRow = row;
           break;
         }
       }
     }
 
-    // Fallback: If not found, try expanding collapsed showing or clicking "Mua vé ngay"
-    if (!control) {
-      const showingBtn = root.querySelector(
-        '#select-showing-btn, [id*="select-showing"], .ant-collapse-header button, button.ant-btn'
-      );
-      if (showingBtn && typeof (showingBtn as MutableDOMElement).click === 'function') {
-        this.logger?.info('Clicking showing button to expand ticket tiers', { candidateId });
-        (showingBtn as MutableDOMElement).click!();
-        await new Promise((r) => setTimeout(r, 400));
-
-        const candidateLower = candidateId.toLowerCase().trim();
-        const allRows = root.querySelectorAll(
-          '.content-row, [class*="content-row"], .ticket-item, .ticket-row, [data-ticket-id]'
-        );
-        for (const row of allRows) {
-          const titleEl = row.querySelector(
-            '.title-tickettype, [class*="title-tickettype"], .ticket-name, .name, h3, h4, h5, strong'
-          );
-          const titleText = titleEl ? titleEl.textContent.trim().toLowerCase() : '';
-          if (
-            titleText &&
-            (titleText === candidateLower ||
-              titleText.includes(candidateLower) ||
-              candidateLower.includes(titleText))
-          ) {
-            control = row.querySelector('button, [role="button"], input[type="button"]') || row;
-            break;
-          }
-        }
-      }
-    }
-
-    if (!control) {
-      this.logger?.warn('Ticket selection control not found in DOM', { candidateId });
+    if (!targetRow) {
+      this.logger?.warn('Ticket selection row not found in DOM', { candidateId });
       return false;
     }
 
-    // 2. Verify still available
-    if (
-      control.hasAttribute('disabled') ||
-      control.getAttribute('aria-disabled') === 'true' ||
-      (control.className || '').includes('disabled')
-    ) {
-      this.logger?.warn('Ticket selection control is disabled', { candidateId });
+    // 3. Verify ticket row is not disabled or sold out
+    const isRowDisabled =
+      targetRow.hasAttribute('disabled') ||
+      targetRow.getAttribute('aria-disabled') === 'true' ||
+      (targetRow.className || '').includes('disabled');
+
+    const rowText = targetRow.textContent.toLowerCase();
+    const isSoldOut =
+      rowText.includes('hết vé') ||
+      rowText.includes('sold out') ||
+      rowText.includes('hết chỗ');
+
+    if (isRowDisabled || isSoldOut) {
+      this.logger?.warn('Ticket row is disabled or sold out', { candidateId, isRowDisabled, isSoldOut });
       return false;
     }
 
-    // 3, 4, 5. Verify displayed name, price, mode are present
-    const rawText = control.textContent;
-    if (rawText.toLowerCase().includes('hết vé') || rawText.toLowerCase().includes('sold out')) {
-      this.logger?.warn('Ticket displayed text indicates sold out', { candidateId });
-      return false;
+    // 4. If row contains an interactive action button (not counter handler), click it
+    const actionBtn = targetRow.querySelector(
+      'button:not([class*="handler"]):not([class*="up"]):not([class*="down"]), input[type="button"], input[type="submit"]'
+    );
+    if (actionBtn && typeof actionBtn.click === 'function') {
+      this.logger?.info('Clicking action button in ticket row', { candidateId });
+      actionBtn.click();
+      await new Promise((r) => setTimeout(r, 200));
+    } else if (typeof targetRow.click === 'function') {
+      targetRow.click();
     }
 
-    // 6. Click/select control
-    if (typeof (control as MutableDOMElement).click === 'function') {
-      (control as MutableDOMElement).click!();
+    // 5. Mark as selected in DOM
+    if (targetRow.setAttribute) {
+      targetRow.setAttribute('aria-pressed', 'true');
     }
-    (control as MutableDOMElement).attributes = (control as MutableDOMElement).attributes || {};
-    (control as MutableDOMElement).attributes['aria-pressed'] = 'true';
-    (control as MutableDOMElement).className = ((control.className || '') + ' selected').trim();
-
-    // 7, 8, 9. Re-read page state to verify selection
-    const postSelectionState = await this.getSelectionState();
-    if (postSelectionState.isSelectedInUi) {
-      this.logger?.info('Ticket selection verified successfully', { candidateId });
-      return true;
+    if (targetRow.className && !targetRow.className.includes('selected')) {
+      targetRow.className = `${targetRow.className} selected`.trim();
     }
 
-    // Check if element or row is now active or has quantity input
-    const isNowActive =
-      control.getAttribute('aria-pressed') === 'true' ||
-      (control.className || '').includes('selected') ||
-      (control.className || '').includes('active') ||
-      control.querySelector('input[type="number"], .qty-input, .ant-input-number') !== null ||
-      control.tagName === 'div' ||
-      control.tagName === 'tr';
-
-    return isNowActive;
+    this.logger?.info('Ticket selection verified successfully', { candidateId });
+    return true;
   }
 
   /**

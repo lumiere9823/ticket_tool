@@ -85,12 +85,15 @@ export class SanitizedLogger implements LoggerPort {
         entry.attemptId ? ` [${entry.attemptId}]` : ''
       }${entry.state ? ` [${entry.state}]` : ''}`;
 
+      const errorDetail = entry.error || (entry.metadata?.error ? String(entry.metadata.error) : '');
+      const fullMessage = errorDetail ? `${formatted} — ${errorDetail}` : formatted;
+
       if (level === 'ERROR') {
-        console.error(formatted, entry.metadata ?? '', entry.error ?? '');
+        console.error(fullMessage, entry.metadata ?? '', entry.error ?? '');
       } else if (level === 'WARN') {
-        console.warn(formatted, entry.metadata ?? '');
+        console.warn(fullMessage, entry.metadata ?? '');
       } else {
-        console.info(formatted, entry.metadata ?? '');
+        console.info(fullMessage, entry.metadata ?? '');
       }
     }
   }
