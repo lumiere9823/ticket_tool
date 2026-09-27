@@ -46,6 +46,20 @@ export class ExecuteBookingJourneyUseCase {
       },
     });
 
+    if (
+      this.stateMachine.state === PurchaseState.FAILED ||
+      this.stateMachine.state === PurchaseState.STOPPED ||
+      this.stateMachine.state === PurchaseState.CONFIRMED
+    ) {
+      try {
+        this.stateMachine.transition({ type: 'RESET_REQUESTED' });
+        this.stateMachine.transition({ type: 'ARM' });
+        this.stateMachine.transition({ type: 'MONITORING_STARTED' });
+      } catch {
+        // ignore
+      }
+    }
+
     let retries = 0;
     let lastError: unknown;
 
@@ -235,19 +249,16 @@ export class ExecuteBookingJourneyUseCase {
     });
 
     // 5. BOOKING MODE DETECTION (Section 8)
-    const bookingMode = chosenTicket.mode;
+    let bookingMode = chosenTicket.mode;
     if (bookingMode === 'UNKNOWN') {
-      this.logger.error('Booking mode could not be determined safely.');
-      this.stateMachine.transition({
-        type: 'UNSUPPORTED_FLOW',
-        reason: 'Booking mode could not be determined safely.',
-      });
-      throw new BookingError({
-        code: 'BOOKING_MODE_UNKNOWN',
-        message: 'Booking mode could not be determined safely.',
-        state: this.stateMachine.state,
-        recoverable: false,
-      });
+      const seatMapInfo = await this.adapter.detectSeatMap();
+      if (seatMapInfo && seatMapInfo.hasSeatMap) {
+        bookingMode = 'SEATED';
+        this.logger.info('Seat map detected on page; classifying mode as SEATED');
+      } else {
+        bookingMode = 'STANDING';
+        this.logger.info('No seat map detected on page; defaulting general admission to STANDING');
+      }
     }
 
     this.stateMachine.transition({
@@ -420,6 +431,12 @@ export class ExecuteBookingJourneyUseCase {
         title: 'Ticketbox Assistant',
         body: `Seats selected: ${seatLabels.join(', ')}`,
       });
+    }
+
+    // Advance to next step if applicable (e.g. click "Tiếp tục" / "Đặt vé")
+    if (this.adapter.proceedToNextStep) {
+      await this.adapter.proceedToNextStep();
+      await new Promise((r) => setTimeout(r, 400));
     }
 
     // 7. BOOKING SUMMARY VERIFICATION (Section 15, 16)

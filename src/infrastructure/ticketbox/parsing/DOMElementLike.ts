@@ -12,8 +12,12 @@ export interface DOMElementLike {
   textContent: string;
   getAttribute(name: string): string | null;
   hasAttribute(name: string): boolean;
+  setAttribute?(name: string, value: string): void;
   querySelector(selector: string): DOMElementLike | null;
   querySelectorAll(selector: string): DOMElementLike[];
+  click?(): void;
+  value?: string;
+  rawElement?: Element | Document | undefined;
 }
 
 /**
@@ -42,6 +46,9 @@ export function wrapBrowserElement(el: Element | Document): DOMElementLike {
     hasAttribute(name: string): boolean {
       return element.hasAttribute(name);
     },
+    setAttribute(name: string, value: string): void {
+      element.setAttribute(name, value);
+    },
     querySelector(selector: string): DOMElementLike | null {
       const found = element.querySelector(selector);
       return found ? wrapBrowserElement(found) : null;
@@ -55,6 +62,24 @@ export function wrapBrowserElement(el: Element | Document): DOMElementLike {
       }
       return result;
     },
+    click(): void {
+      if (typeof (element as HTMLElement).click === 'function') {
+        (element as HTMLElement).click();
+      }
+    },
+    get value(): string {
+      return (element as HTMLInputElement).value !== undefined
+        ? String((element as HTMLInputElement).value)
+        : '';
+    },
+    set value(v: string) {
+      if ('value' in element) {
+        (element as HTMLInputElement).value = v;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    },
+    rawElement: element,
   };
 }
 
@@ -89,6 +114,25 @@ class SimpleDOMNode implements DOMElementLike {
 
   public hasAttribute(name: string): boolean {
     return this.attributes[name.toLowerCase()] !== undefined;
+  }
+
+  public setAttribute(name: string, value: string): void {
+    this.attributes[name.toLowerCase()] = value;
+  }
+
+  public click(): void {
+    this.attributes['aria-pressed'] = 'true';
+    if (!this.className?.includes('selected')) {
+      this.className = ((this.className || '') + ' selected').trim();
+    }
+  }
+
+  public get value(): string {
+    return this.attributes['value'] ?? '';
+  }
+
+  public set value(v: string) {
+    this.attributes['value'] = v;
   }
 
   public querySelector(selector: string): DOMElementLike | null {

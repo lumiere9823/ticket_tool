@@ -661,6 +661,10 @@ function updateStateBadge(state: PurchaseState, blockingReason?: string): void {
   if (blockingReason) {
     blockingReasonContainer.style.display = 'block';
     blockingReasonText.textContent = blockingReason;
+  } else if (state === PurchaseState.FAILED) {
+    blockingReasonContainer.style.display = 'block';
+    blockingReasonText.textContent =
+      'Quy trình gặp sự cố DOM hoặc vé hết. Vui lòng thử lại hoặc tải lại trang.';
   } else {
     blockingReasonContainer.style.display = 'none';
   }
@@ -1140,7 +1144,8 @@ btnArm.addEventListener('click', async () => {
   }
 
   await savePlan();
-  addLog('Arming assistant...');
+  updateStateBadge(PurchaseState.ARMED);
+  addLog('Đã kích hoạt trợ lý (ARMED)... Đang chuẩn bị đặt vé.');
 
   const userProfile = {
     fullName: profileNameInput.value.trim(),

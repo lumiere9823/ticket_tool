@@ -304,6 +304,19 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'ARM_REQUESTED': {
       logger.info('Content script received ARM_REQUESTED');
+      if (
+        stateMachine.state === PurchaseState.FAILED ||
+        stateMachine.state === PurchaseState.STOPPED ||
+        stateMachine.state === PurchaseState.CONFIRMED
+      ) {
+        try {
+          stateMachine.transition({ type: 'RESET_REQUESTED' });
+          stateMachine.transition({ type: 'ARM' });
+          stateMachine.transition({ type: 'MONITORING_STARTED' });
+        } catch {
+          // ignore
+        }
+      }
       isMonitoringActive = true;
       performDiscoveryScan();
       setTimeout(attemptBookingJourney, 400);
@@ -317,6 +330,19 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'START_MONITORING': {
       logger.info('Content script received START_MONITORING');
+      if (
+        stateMachine.state === PurchaseState.FAILED ||
+        stateMachine.state === PurchaseState.STOPPED ||
+        stateMachine.state === PurchaseState.CONFIRMED
+      ) {
+        try {
+          stateMachine.transition({ type: 'RESET_REQUESTED' });
+          stateMachine.transition({ type: 'ARM' });
+          stateMachine.transition({ type: 'MONITORING_STARTED' });
+        } catch {
+          // ignore
+        }
+      }
       isMonitoringActive = true;
       performDiscoveryScan();
       setTimeout(attemptBookingJourney, 400);

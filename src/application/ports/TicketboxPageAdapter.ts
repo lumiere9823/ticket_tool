@@ -86,4 +86,5 @@ export interface TicketboxPageAdapter {
     missingFields: string[];
     isConsentBlocked: boolean;
   }>;
+  proceedToNextStep?(): Promise<boolean>;
 }

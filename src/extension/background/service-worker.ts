@@ -118,6 +118,17 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
     case 'ARM_REQUESTED': {
       try {
         if (
+          stateMachine.state === PurchaseState.FAILED ||
+          stateMachine.state === PurchaseState.STOPPED ||
+          stateMachine.state === PurchaseState.CONFIRMED ||
+          stateMachine.state === PurchaseState.SOLD_OUT ||
+          stateMachine.state === PurchaseState.INVALID_SELECTION ||
+          stateMachine.state === PurchaseState.RESERVATION_FAILED
+        ) {
+          stateMachine.transition({ type: 'RESET_REQUESTED' });
+        }
+
+        if (
           stateMachine.state === PurchaseState.INIT ||
           stateMachine.state === PurchaseState.AUTH_CHECK ||
           stateMachine.state === PurchaseState.EVENT_CHECK

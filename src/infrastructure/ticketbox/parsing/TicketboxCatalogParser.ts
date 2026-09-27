@@ -444,8 +444,8 @@ export class TicketboxCatalogParser {
       return 'ZONE';
     }
 
-    evidence.push('MODE_UNKNOWN');
-    return 'UNKNOWN';
+    evidence.push('MODE_DEFAULT_STANDING');
+    return 'STANDING';
   }
 
   private static extractQuantityConstraints(
