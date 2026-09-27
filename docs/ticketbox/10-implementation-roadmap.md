@@ -56,9 +56,15 @@ AVAILABLE → HELD
 - `[x]` Authoritative Domain State Machine (`PurchaseStateMachine.ts`)
 - `[x]` Full canonical lifecycle states:
   `INIT → AUTH_CHECK → EVENT_CHECK → READY → ARMED → MONITORING → AVAILABLE_DETECTED → SELECTING → RESERVING → HELD → CHECKOUT → PAYMENT → CONFIRMED`
-- `[x]` Explicit failure states (`SOLD_OUT`, `SESSION_EXPIRED`, `RATE_LIMITED`, `RESERVATION_FAILED`, `PAYMENT_FAILED`, `UNKNOWN`)
+- `[x]` Selection sub-states: `TICKET_TYPE_SELECTION`, `QUANTITY_SELECTION`, `SEAT_SELECTION`
+- `[x]` Human Intervention first-class states: `CAPTCHA_REQUIRED`, `OTP_REQUIRED`, `PAYMENT_ACTION_REQUIRED`, `SESSION_REAUTH_REQUIRED`, `UNKNOWN_SECURITY_CHALLENGE`
+- `[x]` Transitional verification state: `STATE_RECHECK` (prevents blind resume without verified page state)
+- `[x]` Explicit failure & safe states (`SOLD_OUT`, `INVALID_SELECTION`, `SESSION_EXPIRED`, `RATE_LIMITED`, `RESERVATION_FAILED`, `CHECKOUT_FAILED`, `PAYMENT_FAILED`, `AUTH_FAILURE`, `UNKNOWN`)
 - `[x]` Fail-safe `STOPPED` transitions from any active state
-- `[x]` Bounded state machine rehydration across service worker lifecycle
+- `[x]` Action Guard policy (`ActionGuard.ts`) preventing unauthorized actions, context mismatches, or automation during security challenges
+- `[x]` Strict server-confirmation evidence enforcement for `RESERVING → HELD` and `PAYMENT → CONFIRMED`
+- `[x]` Human intervention persistence (`HumanInterventionRecord.ts`, `ChromeStorageRepository.ts`)
+- `[x]` Service Worker rehydration safety across all critical states (`RESERVING`, `HELD`, `CHECKOUT`, `PAYMENT`)
 
 ---
 
@@ -74,8 +80,8 @@ AVAILABLE → HELD
 # Phase 4 — Reservation Monitor (Critical Path)
 
 - `[?] Blocked / requires discovery`
-  - `[x]` Domain entities (`Reservation.ts`, `CandidateTicket.ts`)
-  - `[x]` Reservation use case (`ExecuteReservationUseCase.ts`) with strict server-confirmation rule
+  - `[x]` Domain entities (`Reservation.ts`, `CandidateTicket.ts`, `HumanInterventionRecord.ts`)
+  - `[x]` Reservation use case (`ExecuteReservationUseCase.ts`) with strict server-confirmation rule and `ActionGuard`
   - `[x]` Safe stub adapter (`SafeStubAdapter.ts`) that rejects unverified blind actions
   - `[?]` Live Ticketbox reservation endpoint, payload schema, and authoritative hold ID capture (Pending live sale DevTools session)
 
@@ -86,6 +92,7 @@ AVAILABLE → HELD
 - `[-] In progress`
   - `[x]` Checkout state detection in DiscoveryAdapter (`/checkout`, `/payment`)
   - `[x]` Transition from `HELD` to `CHECKOUT`
+  - `[x]` Authoritative confirmation evidence guard for `PAYMENT → CONFIRMED`
   - `[ ]` Live checkout form verification on Ticketbox production
 
 ---
@@ -94,6 +101,7 @@ AVAILABLE → HELD
 
 - `[x]` Structured Logging (`SanitizedLogger.ts`, `LoggerPort.ts`)
 - `[x]` Automatic credential/token/cookie/CVV sanitization
+- `[x]` Storage credential leak prevention in `ChromeStorageRepository.ts`
 - `[x]` $T_0 \dots T_5$ Latency Tracker service (`LatencyTracker.ts`)
 - `[x]` Attempt correlation tracking (`AttemptId`)
 - `[x]` Error classification policy (`ErrorClassifier.ts`)
@@ -104,6 +112,7 @@ AVAILABLE → HELD
 
 - `[x]` Profile isolation entity (`AccountProfile.ts`)
 - `[x]` Context & event assignment models (`AccountContext`, `EventAssignment`)
+- `[x]` Context validation in `ActionGuard` (Mismatched Profile/Account/Event rejected)
 - `[x]` Execution policies (`ONE_SUCCESS` vs `MULTIPLE_SUCCESS`)
 - `[x]` Global stop policy (`GlobalStopPolicy.ts` with instant rate-limit broadcast)
 - `[ ]` Multi-profile runtime runner (Deferred to Phase 2 per ADR-001)
@@ -124,7 +133,7 @@ AVAILABLE → HELD
 
 # Phase 10 — Production Hardening & CI Quality Gates
 
-- `[x]` Unit test suite passing 100% (36 tests in Vitest)
+- `[x]` Unit test suite passing 100% (66/66 tests in Vitest across 12 test suites)
 - `[x]` Static typing (Zero TypeScript errors with `strict: true`)
 - `[x]` Code style & linting (ESLint + Prettier checks passing)
 - `[x]` Automated build pipeline (`npm run build` -> `dist/`)
