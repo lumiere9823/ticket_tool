@@ -212,13 +212,25 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
 // Direct runtime listener fallback for tab messages
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
-  chrome.runtime.onMessage.addListener((message: unknown) => {
-    if (
-      message &&
-      typeof message === 'object' &&
-      (message as { type?: string }).type === 'REQUEST_DISCOVERY_SCAN'
-    ) {
-      performDiscoveryScan();
+  chrome.runtime.onMessage.addListener(
+    (message: unknown, _sender: unknown, sendResponse: (res?: unknown) => void) => {
+      if (
+        message &&
+        typeof message === 'object' &&
+        (message as { type?: string }).type === 'REQUEST_DISCOVERY_SCAN'
+      ) {
+        logger.info('Content script processing REQUEST_DISCOVERY_SCAN');
+        performDiscoveryScan()
+          .then(() => {
+            sendResponse({ success: true, timestamp: new Date().toISOString() });
+          })
+          .catch((err) => {
+            sendResponse({ success: false, error: String(err) });
+          });
+        return true; // Keep message channel open for async sendResponse
+      }
+      return undefined;
     }
-  });
+  );
 }
+

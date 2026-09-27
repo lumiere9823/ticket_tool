@@ -739,6 +739,141 @@ async function savePlan(): Promise<void> {
   });
 }
 
+// ─── Tab Discovery & Connection ──────────────────────────────────────────────
+
+/**
+ * Finds the most relevant Ticketbox tab:
+ * 1. Current active tab if it's on ticketbox.vn
+ * 2. Any open tab whose URL matches eventUrlInput
+ * 3. Any open tab on ticketbox.vn
+ */
+async function findTicketboxTab(): Promise<chrome.tabs.Tab | null> {
+  return new Promise((resolve) => {
+    if (typeof chrome === 'undefined' || !chrome.tabs || !chrome.tabs.query) {
+      resolve(null);
+      return;
+    }
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (activeTabs) => {
+      const active = activeTabs[0];
+      if (active?.url && active.url.includes('ticketbox.vn')) {
+        resolve(active);
+        return;
+      }
+
+      // If active tab is not ticketbox, search all tabs
+      chrome.tabs.query({ url: '*://*.ticketbox.vn/*' }, (tbTabs) => {
+        if (!tbTabs || tbTabs.length === 0) {
+          resolve(null);
+          return;
+        }
+
+        const inputUrl = eventUrlInput.value.trim().toLowerCase();
+        if (inputUrl) {
+          const cleanInput = inputUrl.split('?')[0]!;
+          const exactMatch = tbTabs.find(
+            (t) => t.url && t.url.toLowerCase().includes(cleanInput)
+          );
+          if (exactMatch) {
+            resolve(exactMatch);
+            return;
+          }
+        }
+
+        resolve(tbTabs[0] || null);
+      });
+    });
+  });
+}
+
+/**
+ * Triggers a discovery scan on the target Ticketbox tab.
+ * If the content script is detached or not yet loaded, dynamically injects content.js!
+ */
+async function requestDiscoveryFromTab(manual = false): Promise<void> {
+  const tab = await findTicketboxTab();
+
+  if (!tab || !tab.id) {
+    if (manual) {
+      const url = eventUrlInput.value.trim();
+      if (url && url.startsWith('http')) {
+        addLog(`Đang mở tab Ticketbox mới: ${url}`);
+        if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) {
+          chrome.tabs.create({ url });
+        }
+      } else {
+        updateCatalogStatus({
+          ...currentCatalog,
+          loadState: 'ERROR',
+          loadMessage: 'Chưa mở trang Ticketbox. Vui lòng mở trang sự kiện trên trình duyệt.',
+        });
+        addLog('Không tìm thấy tab Ticketbox nào đang mở.');
+      }
+    }
+    return;
+  }
+
+  const tabId = tab.id;
+
+  // Auto-populate URL if input is empty
+  if (tab.url && !eventUrlInput.value) {
+    eventUrlInput.value = tab.url;
+  }
+
+  updateCatalogStatus({
+    ...currentCatalog,
+    loadState: 'LOADING',
+    loadMessage: 'Đang kết nối và quét thông tin vé...',
+  });
+
+  chrome.tabs.sendMessage(
+    tabId,
+    { type: 'REQUEST_DISCOVERY_SCAN', timestamp: new Date().toISOString() },
+    async () => {
+      if (chrome.runtime.lastError) {
+        addLog('Content script chưa sẵn sàng. Đang tự động nạp content.js vào tab...');
+
+        // Try injecting content.js dynamically
+        if (typeof chrome !== 'undefined' && chrome.scripting && chrome.scripting.executeScript) {
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId },
+              files: ['content.js'],
+            });
+            addLog('Đã nạp content.js vào tab thành công. Đang quét lại...');
+            setTimeout(() => {
+              chrome.tabs.sendMessage(
+                tabId,
+                { type: 'REQUEST_DISCOVERY_SCAN', timestamp: new Date().toISOString() },
+                () => {
+                  if (chrome.runtime.lastError) {
+                    updateCatalogStatus({
+                      ...currentCatalog,
+                      loadState: 'ERROR',
+                      loadMessage: 'Vui lòng nhấn F5 tại tab Ticketbox để kích hoạt.',
+                    });
+                  }
+                }
+              );
+            }, 400);
+            return;
+          } catch (injectErr) {
+            addLog(`Không thể tự động nạp content script: ${injectErr}`);
+          }
+        }
+
+        updateCatalogStatus({
+          ...currentCatalog,
+          loadState: 'ERROR',
+          loadMessage: 'Vui lòng nhấn F5 (Tải lại) tab Ticketbox để kích hoạt.',
+        });
+      } else {
+        addLog('Đã gửi yêu cầu quét vé tới tab Ticketbox.');
+      }
+    }
+  );
+}
+
 // ─── Initial Data Load ────────────────────────────────────────────────────────
 
 async function loadInitialData(): Promise<void> {
@@ -835,28 +970,8 @@ async function loadInitialData(): Promise<void> {
     });
   }
 
-  // Auto-populate active Ticketbox tab URL if not configured
-  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const activeUrl = tabs[0]?.url;
-      if (activeUrl && activeUrl.includes('ticketbox.vn') && !eventUrlInput.value) {
-        eventUrlInput.value = activeUrl;
-      }
-
-      // Request active tab content script to run an immediate discovery scan
-      if (tabs[0]?.id) {
-        chrome.tabs.sendMessage(
-          tabs[0].id,
-          { type: 'REQUEST_DISCOVERY_SCAN', timestamp: new Date().toISOString() },
-          () => {
-            if (chrome.runtime.lastError) {
-              // Expected if content script not yet injected
-            }
-          }
-        );
-      }
-    });
-  }
+  // Discover from Ticketbox tab
+  await requestDiscoveryFromTab(false);
 
   // Request latest state synchronization from service worker
   await messageBus.publish({
@@ -1051,32 +1166,8 @@ btnAddTicketRow.addEventListener('click', () => {
 });
 
 btnRefreshCatalog.addEventListener('click', () => {
-  updateCatalogStatus({
-    ...currentCatalog,
-    loadState: 'LOADING',
-    loadMessage: 'Discovering tickets...',
-  });
-  addLog('Manual catalog refresh requested...');
-
-  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]?.id) {
-        chrome.tabs.sendMessage(
-          tabs[0].id,
-          { type: 'REQUEST_DISCOVERY_SCAN', timestamp: new Date().toISOString() },
-          () => {
-            if (chrome.runtime.lastError) {
-              updateCatalogStatus({
-                ...currentCatalog,
-                loadState: 'ERROR',
-                loadMessage: 'Content script not active on current tab.',
-              });
-            }
-          }
-        );
-      }
-    });
-  }
+  addLog('Làm mới danh mục vé theo yêu cầu...');
+  requestDiscoveryFromTab(true);
 });
 
 showingSelect.addEventListener('change', onShowingChange);
@@ -1092,6 +1183,33 @@ fallbackPolicySelect.addEventListener('change', () => {
   savePlan();
 });
 
+// Reactively update popup when new discovery scan is saved to storage
+if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes['latestJourneyUpdate']?.newValue) {
+      const update = changes['latestJourneyUpdate'].newValue;
+      if (update?.catalogSnapshot) {
+        applyNewCatalog(update.catalogSnapshot);
+      }
+    }
+  });
+}
+
+// Save and scan on URL input change
+eventUrlInput.addEventListener('change', () => {
+  savePlan();
+  requestDiscoveryFromTab(false);
+});
+
+eventUrlInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    savePlan();
+    requestDiscoveryFromTab(true);
+  }
+});
+
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', loadInitialData);
+
