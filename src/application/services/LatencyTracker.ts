@@ -52,6 +52,39 @@ export class LatencyTracker {
     });
   }
 
+  // Extended Journey Timings (Section 30)
+  public recordTicketDiscovery(durationMs: number): void {
+    this.markers.ticketDiscoveryDurationMs = durationMs;
+  }
+
+  public recordTicketDecision(durationMs: number): void {
+    this.markers.ticketDecisionDurationMs = durationMs;
+  }
+
+  public recordTicketSelection(durationMs: number): void {
+    this.markers.ticketSelectionDurationMs = durationMs;
+  }
+
+  public recordAreaSelection(durationMs: number): void {
+    this.markers.areaSelectionDurationMs = durationMs;
+  }
+
+  public recordSeatDiscovery(durationMs: number): void {
+    this.markers.seatDiscoveryDurationMs = durationMs;
+  }
+
+  public recordSeatSelection(durationMs: number): void {
+    this.markers.seatSelectionDurationMs = durationMs;
+  }
+
+  public recordSummaryVerification(durationMs: number): void {
+    this.markers.summaryVerificationDurationMs = durationMs;
+  }
+
+  public recordFormDetection(durationMs: number): void {
+    this.markers.formDetectionDurationMs = durationMs;
+  }
+
   public getBreakdown(): LatencyBreakdown {
     const {
       t0AvailabilityObserved: t0,
@@ -60,6 +93,14 @@ export class LatencyTracker {
       t3ReservationInitiated: t3,
       t4ReservationResponse: t4,
       t5ServerConfirmedHold: t5,
+      ticketDiscoveryDurationMs,
+      ticketDecisionDurationMs,
+      ticketSelectionDurationMs,
+      areaSelectionDurationMs,
+      seatDiscoveryDurationMs,
+      seatSelectionDurationMs,
+      summaryVerificationDurationMs,
+      formDetectionDurationMs,
     } = this.markers;
 
     return {
@@ -70,6 +111,14 @@ export class LatencyTracker {
       ...(t4 !== undefined && t5 !== undefined ? { confirmationLatencyMs: t5 - t4 } : {}),
       ...(t0 !== undefined && t5 !== undefined ? { totalCriticalLatencyMs: t5 - t0 } : {}),
       isT0Authoritative: this.isT0Authoritative,
+      ...(ticketDiscoveryDurationMs !== undefined ? { ticketDiscoveryDurationMs } : {}),
+      ...(ticketDecisionDurationMs !== undefined ? { ticketDecisionDurationMs } : {}),
+      ...(ticketSelectionDurationMs !== undefined ? { ticketSelectionDurationMs } : {}),
+      ...(areaSelectionDurationMs !== undefined ? { areaSelectionDurationMs } : {}),
+      ...(seatDiscoveryDurationMs !== undefined ? { seatDiscoveryDurationMs } : {}),
+      ...(seatSelectionDurationMs !== undefined ? { seatSelectionDurationMs } : {}),
+      ...(summaryVerificationDurationMs !== undefined ? { summaryVerificationDurationMs } : {}),
+      ...(formDetectionDurationMs !== undefined ? { formDetectionDurationMs } : {}),
     };
   }
 }

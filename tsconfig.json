@@ -32,13 +32,12 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
 
-    "baseUrl": ".",
     "paths": {
-      "@domain/*": ["src/domain/*"],
-      "@application/*": ["src/application/*"],
-      "@infrastructure/*": ["src/infrastructure/*"],
-      "@extension/*": ["src/extension/*"],
-      "@ui/*": ["src/ui/*"]
+      "@domain/*": ["./src/domain/*"],
+      "@application/*": ["./src/application/*"],
+      "@infrastructure/*": ["./src/infrastructure/*"],
+      "@extension/*": ["./src/extension/*"],
+      "@ui/*": ["./src/ui/*"]
     }
   },
   "include": ["src", "tests", "vite.config.ts"]

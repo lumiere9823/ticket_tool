@@ -6,6 +6,8 @@ import { LoggerPort } from '../ports/LoggerPort';
 import { LatencyTracker } from '../services/LatencyTracker';
 import { FailureReason, PurchaseState } from '../../domain/states/PurchaseState';
 import { StateTransitionError } from '../../domain/errors/DomainError';
+import { ActionGuard } from '../../domain/policies/ActionGuard';
+import { ErrorClassifier } from '../../domain/policies/ErrorClassifier';
 
 export interface ExecuteReservationResult {
   isConfirmed: boolean;
@@ -28,12 +30,21 @@ export class ExecuteReservationUseCase {
     quantity: number,
     latencyTracker?: LatencyTracker
   ): Promise<ExecuteReservationResult> {
-    if (this.stateMachine.state !== PurchaseState.SELECTING) {
+    const guardResult = ActionGuard.canExecuteAction({
+      currentState: this.stateMachine.state,
+      action: 'RESERVE',
+      profileId: this.stateMachine.profileId,
+      accountId: this.stateMachine.accountId,
+      eventId: this.stateMachine.eventId,
+      workflowId: this.stateMachine.workflowId,
+    });
+
+    if (!guardResult.allowed || this.stateMachine.state !== PurchaseState.SELECTING) {
       throw new StateTransitionError(
         this.stateMachine.state,
         PurchaseState.RESERVING,
         'RESERVATION_INITIATED',
-        'Reservation can only be executed from SELECTING state'
+        guardResult.reason ?? 'Reservation can only be executed from SELECTING state'
       );
     }
 
@@ -92,10 +103,49 @@ export class ExecuteReservationUseCase {
         };
       } else {
         // Server rejected or evidence absent
+        const classified = ErrorClassifier.classify(adapterResult.errorMessage);
+
+        if (classified.reason === FailureReason.RATE_LIMITED) {
+          this.stateMachine.transition({ type: 'RATE_LIMITED' });
+          await this.eventBus.publish({
+            type: 'RESERVATION_FAILED',
+            timestamp: new Date().toISOString(),
+            attemptId: this.stateMachine.attemptId,
+            state: PurchaseState.RATE_LIMITED,
+            reason: FailureReason.RATE_LIMITED,
+            errorMessage: adapterResult.errorMessage,
+            canRetry: false,
+          });
+          return {
+            isConfirmed: false,
+            failureReason: FailureReason.RATE_LIMITED,
+            errorMessage: adapterResult.errorMessage ?? 'Rate limited by platform',
+          };
+        }
+
+        if (classified.reason === FailureReason.SESSION_EXPIRED) {
+          this.stateMachine.transition({ type: 'SESSION_EXPIRED' });
+          await this.eventBus.publish({
+            type: 'RESERVATION_FAILED',
+            timestamp: new Date().toISOString(),
+            attemptId: this.stateMachine.attemptId,
+            state: PurchaseState.SESSION_REAUTH_REQUIRED,
+            reason: FailureReason.SESSION_EXPIRED,
+            errorMessage: adapterResult.errorMessage,
+            canRetry: false,
+          });
+          return {
+            isConfirmed: false,
+            failureReason: FailureReason.SESSION_EXPIRED,
+            errorMessage: adapterResult.errorMessage ?? 'Session expired',
+          };
+        }
+
         const failureReason = FailureReason.RESERVATION_FAILED;
         this.stateMachine.transition({
           type: 'RESERVATION_REJECTED',
           reason: failureReason,
+          message: adapterResult.errorMessage,
         });
 
         this.logger.warn('Reservation rejected or unconfirmed by server', {
@@ -110,7 +160,7 @@ export class ExecuteReservationUseCase {
           state: PurchaseState.FAILED,
           reason: failureReason,
           errorMessage: adapterResult.errorMessage,
-          canRetry: true,
+          canRetry: classified.isRetryable,
         });
 
         return {
@@ -120,12 +170,51 @@ export class ExecuteReservationUseCase {
         };
       }
     } catch (error) {
+      const classified = ErrorClassifier.classify(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      if (classified.reason === FailureReason.RATE_LIMITED) {
+        this.stateMachine.transition({ type: 'RATE_LIMITED' });
+        await this.eventBus.publish({
+          type: 'RESERVATION_FAILED',
+          timestamp: new Date().toISOString(),
+          attemptId: this.stateMachine.attemptId,
+          state: PurchaseState.RATE_LIMITED,
+          reason: FailureReason.RATE_LIMITED,
+          errorMessage,
+          canRetry: false,
+        });
+        return {
+          isConfirmed: false,
+          failureReason: FailureReason.RATE_LIMITED,
+          errorMessage,
+        };
+      }
+
+      if (classified.reason === FailureReason.SESSION_EXPIRED) {
+        this.stateMachine.transition({ type: 'SESSION_EXPIRED' });
+        await this.eventBus.publish({
+          type: 'RESERVATION_FAILED',
+          timestamp: new Date().toISOString(),
+          attemptId: this.stateMachine.attemptId,
+          state: PurchaseState.SESSION_REAUTH_REQUIRED,
+          reason: FailureReason.SESSION_EXPIRED,
+          errorMessage,
+          canRetry: false,
+        });
+        return {
+          isConfirmed: false,
+          failureReason: FailureReason.SESSION_EXPIRED,
+          errorMessage,
+        };
+      }
+
       // Handle network or unexpected platform error
       const failureReason = FailureReason.UNKNOWN;
       this.stateMachine.transition({
         type: 'FAILURE_OCCURRED',
         reason: failureReason,
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage,
       });
 
       this.logger.error('Unexpected error during reservation execution', error);
@@ -136,14 +225,14 @@ export class ExecuteReservationUseCase {
         attemptId: this.stateMachine.attemptId,
         state: PurchaseState.FAILED,
         reason: failureReason,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        canRetry: false,
+        errorMessage,
+        canRetry: classified.isRetryable,
       });
 
       return {
         isConfirmed: false,
         failureReason,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage,
       };
     }
   }
