@@ -31,7 +31,10 @@ export function wrapBrowserElement(el: Element | Document): DOMElementLike {
       return element.textContent || '';
     },
     getAttribute(name: string): string | null {
-      if (name.toLowerCase() === 'value' && (element as Element & { value?: unknown }).value !== undefined) {
+      if (
+        name.toLowerCase() === 'value' &&
+        (element as Element & { value?: unknown }).value !== undefined
+      ) {
         return String((element as Element & { value?: unknown }).value);
       }
       return element.getAttribute(name);

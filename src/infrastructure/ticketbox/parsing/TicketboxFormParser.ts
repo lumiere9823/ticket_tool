@@ -82,11 +82,7 @@ export class TicketboxFormParser {
     };
   }
 
-  private static classifyFieldType(
-    tag: string,
-    rawType: string,
-    label: string
-  ): FormFieldType {
+  private static classifyFieldType(tag: string, rawType: string, label: string): FormFieldType {
     const cleanLabel = label.toLowerCase();
 
     if (tag === 'select') return 'SELECT';
@@ -114,11 +110,7 @@ export class TicketboxFormParser {
     return 'UNKNOWN';
   }
 
-  private static extractFieldLabel(
-    el: DOMElementLike,
-    root: DOMElementLike,
-    id: string
-  ): string {
+  private static extractFieldLabel(el: DOMElementLike, root: DOMElementLike, id: string): string {
     const name = el.getAttribute('name');
 
     // 1. Associated <label for="id">
@@ -132,10 +124,7 @@ export class TicketboxFormParser {
     // 1b. Enclosing <label> containing this input
     const allLabels = root.querySelectorAll('label');
     for (const lbl of allLabels) {
-      if (
-        (id && lbl.querySelector(`#${id}`)) ||
-        (name && lbl.querySelector(`[name="${name}"]`))
-      ) {
+      if ((id && lbl.querySelector(`#${id}`)) || (name && lbl.querySelector(`[name="${name}"]`))) {
         if (lbl.textContent.trim()) {
           return lbl.textContent.trim();
         }

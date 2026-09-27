@@ -8,7 +8,9 @@ import { BOOKING_JOURNEY_FIXTURES } from '../../fixtures/booking/bookingFixtures
 describe('Ticketbox Parsers', () => {
   describe('TicketboxSeatMapParser', () => {
     it('should parse selectable seat areas from Case D', () => {
-      const root = parseHtmlToDOMElementLike(BOOKING_JOURNEY_FIXTURES.CASE_D_SEATED_WITH_AREA_SELECTION);
+      const root = parseHtmlToDOMElementLike(
+        BOOKING_JOURNEY_FIXTURES.CASE_D_SEATED_WITH_AREA_SELECTION
+      );
       const areas = TicketboxSeatMapParser.parseAreas(root);
 
       expect(areas.length).toBeGreaterThanOrEqual(3);
@@ -88,7 +90,9 @@ describe('Ticketbox Parsers', () => {
     });
 
     it('should parse seated booking summary with assigned seats from Case D', () => {
-      const root = parseHtmlToDOMElementLike(BOOKING_JOURNEY_FIXTURES.CASE_D_SEATED_WITH_AREA_SELECTION);
+      const root = parseHtmlToDOMElementLike(
+        BOOKING_JOURNEY_FIXTURES.CASE_D_SEATED_WITH_AREA_SELECTION
+      );
       const summary = TicketboxSummaryParser.parseSummary(root);
 
       expect(summary).not.toBeNull();

@@ -1,8 +1,4 @@
-import {
-  PurchasePlan,
-  TicketOption,
-  PurchasePlanValidationResult,
-} from '../entities/PurchasePlan';
+import { PurchasePlan, TicketOption, PurchasePlanValidationResult } from '../entities/PurchasePlan';
 
 /**
  * PurchasePlanValidator
@@ -133,9 +129,7 @@ export class PurchasePlanValidator {
   public static isReadyToArm(plan: PurchasePlan): boolean {
     return (
       plan.ticketRules.length > 0 &&
-      plan.ticketRules.every(
-        (r) => r.ticketId.length > 0 && r.quantity >= 1
-      )
+      plan.ticketRules.every((r) => r.ticketId.length > 0 && r.quantity >= 1)
     );
   }
 
@@ -147,7 +141,7 @@ export class PurchasePlanValidator {
   public static selectBestRule(
     plan: PurchasePlan,
     catalogTickets: TicketOption[]
-  ): { rule: typeof plan.ticketRules[number]; ticket: TicketOption; isFallback: boolean } | null {
+  ): { rule: (typeof plan.ticketRules)[number]; ticket: TicketOption; isFallback: boolean } | null {
     if (plan.ticketRules.length === 0) return null;
 
     const catalogById = new Map<string, TicketOption>();
@@ -181,7 +175,11 @@ export class PurchasePlanValidator {
       if (anyTicket) {
         const qty = Math.max(anyTicket.minQuantity ?? 1, 1);
         const rule = plan.ticketRules[0]!;
-        return { rule: { ...rule, ticketId: anyTicket.id ?? '', quantity: qty }, ticket: anyTicket, isFallback: true };
+        return {
+          rule: { ...rule, ticketId: anyTicket.id ?? '', quantity: qty },
+          ticket: anyTicket,
+          isFallback: true,
+        };
       }
     }
 

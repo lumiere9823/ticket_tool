@@ -132,7 +132,12 @@ describe('PurchasePlanValidator — Fixture E: Multiple Areas', () => {
     const plan: PurchasePlan = {
       showingId: null,
       ticketRules: [
-        { ticketId: 'area-ct2', ticketName: 'Chiến Tướng 2', quantity: 1, seatPolicy: 'ANY_AVAILABLE' },
+        {
+          ticketId: 'area-ct2',
+          ticketName: 'Chiến Tướng 2',
+          quantity: 1,
+          seatPolicy: 'ANY_AVAILABLE',
+        },
         { ticketId: 'area-ht1', ticketName: 'Hoả Tâm 1', quantity: 2, seatPolicy: 'ANY_AVAILABLE' },
       ],
       fallbackPolicy: 'NEXT_PRIORITY',
@@ -148,7 +153,12 @@ describe('PurchasePlanValidator — Fixture E: Multiple Areas', () => {
     const plan: PurchasePlan = {
       showingId: null,
       ticketRules: [
-        { ticketId: 'area-ct2', ticketName: 'Chiến Tướng 2', quantity: 1, seatPolicy: 'ANY_AVAILABLE' },
+        {
+          ticketId: 'area-ct2',
+          ticketName: 'Chiến Tướng 2',
+          quantity: 1,
+          seatPolicy: 'ANY_AVAILABLE',
+        },
         { ticketId: 'area-ht1', ticketName: 'Hoả Tâm 1', quantity: 2, seatPolicy: 'ANY_AVAILABLE' },
       ],
       fallbackPolicy: 'STOP_AND_NOTIFY',
@@ -294,7 +304,12 @@ describe('PurchasePlanValidator — FallbackPolicy behavior', () => {
     const plan: PurchasePlan = {
       showingId: null,
       ticketRules: [
-        { ticketId: 'area-ct2', ticketName: 'Chiến Tướng 2', quantity: 1, seatPolicy: 'ANY_AVAILABLE' },
+        {
+          ticketId: 'area-ct2',
+          ticketName: 'Chiến Tướng 2',
+          quantity: 1,
+          seatPolicy: 'ANY_AVAILABLE',
+        },
       ],
       fallbackPolicy: 'ANY_AVAILABLE',
       allowFallback: true,
@@ -309,7 +324,12 @@ describe('PurchasePlanValidator — FallbackPolicy behavior', () => {
     const plan: PurchasePlan = {
       showingId: null,
       ticketRules: [
-        { ticketId: 'area-ct2', ticketName: 'Chiến Tướng 2', quantity: 1, seatPolicy: 'ANY_AVAILABLE' },
+        {
+          ticketId: 'area-ct2',
+          ticketName: 'Chiến Tướng 2',
+          quantity: 1,
+          seatPolicy: 'ANY_AVAILABLE',
+        },
       ],
       fallbackPolicy: 'STOP_AND_NOTIFY',
       allowFallback: false,

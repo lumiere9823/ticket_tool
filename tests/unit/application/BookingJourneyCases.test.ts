@@ -122,7 +122,9 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
 
   // FLOW 2 & CASE D: Seated Flow with Area Selection
   it('Flow 2 & Case D: should execute seated flow with area selection and summary verification', async () => {
-    const root = parseHtmlToDOMElementLike(BOOKING_JOURNEY_FIXTURES.CASE_D_SEATED_WITH_AREA_SELECTION);
+    const root = parseHtmlToDOMElementLike(
+      BOOKING_JOURNEY_FIXTURES.CASE_D_SEATED_WITH_AREA_SELECTION
+    );
     const adapter = new TicketboxJourneyAdapter(logger, root);
     const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, logger);
 
@@ -168,7 +170,8 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
     const seats = await adapter.discoverSeats();
     expect(seats).toHaveLength(5);
 
-    const { AdjacentSeatStrategy } = await import('../../../src/domain/policies/AdjacentSeatStrategy');
+    const { AdjacentSeatStrategy } =
+      await import('../../../src/domain/policies/AdjacentSeatStrategy');
     const decision = AdjacentSeatStrategy.selectSeats(seats, 2);
 
     expect(decision.status).toBe('SUCCESS');
@@ -182,7 +185,8 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
     const adapter = new TicketboxJourneyAdapter(logger, root);
     const seats = await adapter.discoverSeats();
 
-    const { AdjacentSeatStrategy } = await import('../../../src/domain/policies/AdjacentSeatStrategy');
+    const { AdjacentSeatStrategy } =
+      await import('../../../src/domain/policies/AdjacentSeatStrategy');
 
     // Policy 1: WAIT
     const waitDecision = AdjacentSeatStrategy.selectSeats(

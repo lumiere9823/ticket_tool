@@ -1,7 +1,4 @@
-import {
-  BookingSummary,
-  CurrentSelection,
-} from '../entities/BookingJourneyModels';
+import { BookingSummary, CurrentSelection } from '../entities/BookingJourneyModels';
 
 export interface SummaryVerificationResult {
   isValid: boolean;

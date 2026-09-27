@@ -119,13 +119,7 @@ export interface TicketOption {
   mode: 'STANDING' | 'SEATED' | 'AREA_BASED' | 'UNKNOWN';
 
   /** Availability status from the catalog. */
-  availability:
-    | 'AVAILABLE'
-    | 'SOLD_OUT'
-    | 'OFFLINE_SALE'
-    | 'NOT_STARTED'
-    | 'CLOSED'
-    | 'UNKNOWN';
+  availability: 'AVAILABLE' | 'SOLD_OUT' | 'OFFLINE_SALE' | 'NOT_STARTED' | 'CLOSED' | 'UNKNOWN';
 
   /** Whether this option can be selected by the user. */
   selectable: boolean;
@@ -146,13 +140,7 @@ export interface TicketOption {
 /**
  * Catalog state for the popup UI.
  */
-export type CatalogLoadState =
-  | 'IDLE'
-  | 'LOADING'
-  | 'LOADED'
-  | 'EMPTY'
-  | 'ERROR'
-  | 'INVALID_URL';
+export type CatalogLoadState = 'IDLE' | 'LOADING' | 'LOADED' | 'EMPTY' | 'ERROR' | 'INVALID_URL';
 
 /**
  * Snapshot of the discovered Ticket Catalog for popup display.

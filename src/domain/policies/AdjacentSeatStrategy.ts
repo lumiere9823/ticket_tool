@@ -142,10 +142,7 @@ export class AdjacentSeatStrategy {
     };
   }
 
-  private static rankCandidates(
-    candidates: Seat[][],
-    preference: SeatPreferencePolicy
-  ): Seat[][] {
+  private static rankCandidates(candidates: Seat[][], preference: SeatPreferencePolicy): Seat[][] {
     switch (preference) {
       case 'SAME_ROW':
       case 'NEAREST_STAGE':

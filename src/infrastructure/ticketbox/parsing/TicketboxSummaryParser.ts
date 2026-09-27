@@ -1,7 +1,4 @@
-import {
-  BookingSummary,
-  SummaryItem,
-} from '../../../domain/entities/BookingJourneyModels';
+import { BookingSummary, SummaryItem } from '../../../domain/entities/BookingJourneyModels';
 import { DOMElementLike } from './DOMElementLike';
 
 export class TicketboxSummaryParser {
@@ -53,9 +50,7 @@ export class TicketboxSummaryParser {
     const items: SummaryItem[] = [];
 
     for (const el of itemElements) {
-      const nameEl = el.querySelector(
-        '.ticket-name, .item-name, .title, strong, h4, .name'
-      );
+      const nameEl = el.querySelector('.ticket-name, .item-name, .title, strong, h4, .name');
       const ticketName = nameEl ? nameEl.textContent.trim() : '';
       if (!ticketName) continue;
 

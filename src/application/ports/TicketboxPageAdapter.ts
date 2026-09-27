@@ -66,14 +66,22 @@ export interface TicketboxPageAdapter {
   selectSeats(selection: { zoneId?: string; seatIds: string[] }): Promise<boolean>;
 
   // Complete Booking Journey Port Methods
-  discoverJourneyTickets?(): Promise<import('../../domain/entities/BookingJourneyModels').JourneyTicketType[]>;
+  discoverJourneyTickets?(): Promise<
+    import('../../domain/entities/BookingJourneyModels').JourneyTicketType[]
+  >;
   discoverAreas?(): Promise<import('../../domain/entities/BookingJourneyModels').SeatArea[]>;
-  discoverSeats?(areaId?: string): Promise<import('../../domain/entities/BookingJourneyModels').Seat[]>;
+  discoverSeats?(
+    areaId?: string
+  ): Promise<import('../../domain/entities/BookingJourneyModels').Seat[]>;
   selectArea?(areaId: string): Promise<boolean>;
   selectSpecificSeats?(seatIds: string[]): Promise<boolean>;
-  getBookingSummary?(): Promise<import('../../domain/entities/BookingJourneyModels').BookingSummary | null>;
+  getBookingSummary?(): Promise<
+    import('../../domain/entities/BookingJourneyModels').BookingSummary | null
+  >;
   getFormSchema?(): Promise<import('../../domain/entities/BookingJourneyModels').FormSchema | null>;
-  fillAttendeeForm?(profile: import('../../domain/entities/BookingJourneyModels').UserProfileData): Promise<{
+  fillAttendeeForm?(
+    profile: import('../../domain/entities/BookingJourneyModels').UserProfileData
+  ): Promise<{
     allSatisfied: boolean;
     missingFields: string[];
     isConsentBlocked: boolean;

@@ -137,7 +137,9 @@ export class ExecuteBookingJourneyUseCase {
         showingId: activeShowing.id ?? undefined,
         date: activeShowing.date ?? undefined,
       });
-      this.logger.info(`Showing detected: ${activeShowing.name ?? activeShowing.date ?? 'Default'}`);
+      this.logger.info(
+        `Showing detected: ${activeShowing.name ?? activeShowing.date ?? 'Default'}`
+      );
     }
 
     // 2. TICKET DISCOVERY
@@ -422,9 +424,7 @@ export class ExecuteBookingJourneyUseCase {
 
     // 7. BOOKING SUMMARY VERIFICATION (Section 15, 16)
     const tSumStart = Date.now();
-    const summary = this.adapter.getBookingSummary
-      ? await this.adapter.getBookingSummary()
-      : null;
+    const summary = this.adapter.getBookingSummary ? await this.adapter.getBookingSummary() : null;
     latencyTracker?.recordSummaryVerification(Date.now() - tSumStart);
 
     if (summary) {

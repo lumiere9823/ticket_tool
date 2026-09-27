@@ -24,7 +24,6 @@ export interface AssistantConfiguration {
   };
 }
 
-
 export interface StorageRepository {
   getConfiguration(): Promise<AssistantConfiguration | null>;
   saveConfiguration(config: AssistantConfiguration): Promise<void>;

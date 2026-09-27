@@ -27,12 +27,7 @@ export interface Showing {
 export type JourneyTicketMode = 'STANDING' | 'SEATED' | 'AREA_BASED' | 'UNKNOWN';
 
 export type JourneyAvailability =
-  | 'AVAILABLE'
-  | 'SOLD_OUT'
-  | 'OFFLINE_SALE'
-  | 'NOT_STARTED'
-  | 'CLOSED'
-  | 'UNKNOWN';
+  'AVAILABLE' | 'SOLD_OUT' | 'OFFLINE_SALE' | 'NOT_STARTED' | 'CLOSED' | 'UNKNOWN';
 
 export interface JourneyTicketType {
   id: string | null;
@@ -50,12 +45,7 @@ export interface JourneyTicketType {
 }
 
 export type SeatStatus =
-  | 'AVAILABLE'
-  | 'SELECTED'
-  | 'OCCUPIED'
-  | 'BLOCKED'
-  | 'UNAVAILABLE'
-  | 'UNKNOWN';
+  'AVAILABLE' | 'SELECTED' | 'OCCUPIED' | 'BLOCKED' | 'UNAVAILABLE' | 'UNKNOWN';
 
 export interface Seat {
   id: string;
@@ -122,13 +112,7 @@ export interface BookingSummary {
 }
 
 export type FormFieldType =
-  | 'TEXT'
-  | 'EMAIL'
-  | 'PHONE'
-  | 'CHECKBOX'
-  | 'SELECT'
-  | 'RADIO'
-  | 'UNKNOWN';
+  'TEXT' | 'EMAIL' | 'PHONE' | 'CHECKBOX' | 'SELECT' | 'RADIO' | 'UNKNOWN';
 
 export interface FormField {
   id: string;
@@ -186,11 +170,7 @@ export interface ActionModel {
 }
 
 export type SeatPreferencePolicy =
-  | 'ANY_AVAILABLE'
-  | 'SAME_ROW'
-  | 'NEAREST_STAGE'
-  | 'AREA_PRIORITY'
-  | 'SPECIFIC_SEAT';
+  'ANY_AVAILABLE' | 'SAME_ROW' | 'NEAREST_STAGE' | 'AREA_PRIORITY' | 'SPECIFIC_SEAT';
 
 export type NonAdjacentFallbackPolicy = 'WAIT' | 'SELECT_NON_ADJACENT' | 'STOP';
 

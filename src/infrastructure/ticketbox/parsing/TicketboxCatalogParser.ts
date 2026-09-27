@@ -176,7 +176,8 @@ export class TicketboxCatalogParser {
     if (showingContainers.length > 0) {
       const snapshots: ShowingSnapshot[] = [];
       for (const showingEl of showingContainers) {
-        const id = showingEl.getAttribute('data-showing-id') || showingEl.getAttribute('id') || null;
+        const id =
+          showingEl.getAttribute('data-showing-id') || showingEl.getAttribute('id') || null;
         const nameEl = showingEl.querySelector('.showing-name, .tab-title, .second-row, h3, h4');
         const name = nameEl ? nameEl.textContent.trim() : null;
         const dateEl = showingEl.querySelector('.showing-date, .tab-date, .first-row, time');
@@ -187,7 +188,8 @@ export class TicketboxCatalogParser {
         );
         const isShowingBtnEnabled =
           showingBtn !== null
-            ? !showingBtn.hasAttribute('disabled') && showingBtn.getAttribute('aria-disabled') !== 'true'
+            ? !showingBtn.hasAttribute('disabled') &&
+              showingBtn.getAttribute('aria-disabled') !== 'true'
             : false;
 
         const ticketTypes = this.extractTicketTypesFromContainer(
@@ -232,7 +234,8 @@ export class TicketboxCatalogParser {
     );
     const isShowingBtnEnabled =
       showingBtn !== null
-        ? !showingBtn.hasAttribute('disabled') && showingBtn.getAttribute('aria-disabled') !== 'true'
+        ? !showingBtn.hasAttribute('disabled') &&
+          showingBtn.getAttribute('aria-disabled') !== 'true'
         : false;
 
     return this.extractTicketTypesFromContainer(ticketInfoContainer, pageType, isShowingBtnEnabled);

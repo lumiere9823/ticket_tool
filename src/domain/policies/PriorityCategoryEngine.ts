@@ -25,9 +25,7 @@ export class PriorityCategoryEngine {
     requestedQuantity = 1
   ): PriorityDecisionResult {
     // 1. Filter tickets to only strictly AVAILABLE and selectable tickets
-    const availableTickets = tickets.filter(
-      (t) => t.availability === 'AVAILABLE' && t.selectable
-    );
+    const availableTickets = tickets.filter((t) => t.availability === 'AVAILABLE' && t.selectable);
 
     if (availableTickets.length === 0) {
       return {
@@ -97,9 +95,7 @@ export class PriorityCategoryEngine {
       }
 
       // Step 2a: Exact normalized match
-      const exactMatch = eligibleTickets.find((t) =>
-        this.isExactNormalizedMatch(t.name, priority)
-      );
+      const exactMatch = eligibleTickets.find((t) => this.isExactNormalizedMatch(t.name, priority));
       if (exactMatch) {
         const isFallback = pIdx > 0;
         if (isFallback && !allowFallback) {
@@ -120,9 +116,7 @@ export class PriorityCategoryEngine {
       }
 
       // Step 2b: Explicitly supported normalized boundary match
-      const tokenMatch = eligibleTickets.find((t) =>
-        this.isSupportedTokenMatch(t.name, priority)
-      );
+      const tokenMatch = eligibleTickets.find((t) => this.isSupportedTokenMatch(t.name, priority));
       if (tokenMatch) {
         const isFallback = pIdx > 0;
         if (isFallback && !allowFallback) {

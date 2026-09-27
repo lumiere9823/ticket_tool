@@ -13,10 +13,38 @@ describe('FormAutofillPolicy', () => {
   it('should successfully satisfy all standard fields when profile is complete and terms agreed', () => {
     const schema: FormSchema = {
       fields: [
-        { id: 'f-name', label: 'Full Name', type: 'TEXT', required: true, value: '', selector: '#f-name' },
-        { id: 'f-email', label: 'Email Address', type: 'EMAIL', required: true, value: '', selector: '#f-email' },
-        { id: 'f-phone', label: 'Phone Number', type: 'PHONE', required: true, value: '', selector: '#f-phone' },
-        { id: 'f-terms', label: 'I agree to the terms and conditions', type: 'CHECKBOX', required: true, value: '', selector: '#f-terms' },
+        {
+          id: 'f-name',
+          label: 'Full Name',
+          type: 'TEXT',
+          required: true,
+          value: '',
+          selector: '#f-name',
+        },
+        {
+          id: 'f-email',
+          label: 'Email Address',
+          type: 'EMAIL',
+          required: true,
+          value: '',
+          selector: '#f-email',
+        },
+        {
+          id: 'f-phone',
+          label: 'Phone Number',
+          type: 'PHONE',
+          required: true,
+          value: '',
+          selector: '#f-phone',
+        },
+        {
+          id: 'f-terms',
+          label: 'I agree to the terms and conditions',
+          type: 'CHECKBOX',
+          required: true,
+          value: '',
+          selector: '#f-terms',
+        },
       ],
       hasConsentCheckbox: true,
       consentLabel: 'I agree to the terms and conditions',
@@ -38,7 +66,14 @@ describe('FormAutofillPolicy', () => {
   it('should block with isConsentBlocked=true when agreeToTerms is false', () => {
     const schema: FormSchema = {
       fields: [
-        { id: 'f-terms', label: 'Tôi đồng ý với điều khoản sử dụng', type: 'CHECKBOX', required: true, value: '', selector: '#f-terms' },
+        {
+          id: 'f-terms',
+          label: 'Tôi đồng ý với điều khoản sử dụng',
+          type: 'CHECKBOX',
+          required: true,
+          value: '',
+          selector: '#f-terms',
+        },
       ],
       hasConsentCheckbox: true,
       consentLabel: 'Tôi đồng ý với điều khoản sử dụng',
@@ -60,8 +95,22 @@ describe('FormAutofillPolicy', () => {
   it('should report missing required fields when profile lacks required phone or email', () => {
     const schema: FormSchema = {
       fields: [
-        { id: 'f-email', label: 'Email', type: 'EMAIL', required: true, value: '', selector: '#f-email' },
-        { id: 'f-phone', label: 'Số điện thoại', type: 'PHONE', required: true, value: '', selector: '#f-phone' },
+        {
+          id: 'f-email',
+          label: 'Email',
+          type: 'EMAIL',
+          required: true,
+          value: '',
+          selector: '#f-email',
+        },
+        {
+          id: 'f-phone',
+          label: 'Số điện thoại',
+          type: 'PHONE',
+          required: true,
+          value: '',
+          selector: '#f-phone',
+        },
       ],
       hasConsentCheckbox: false,
     };
@@ -84,10 +133,38 @@ describe('FormAutofillPolicy', () => {
   it('should recognize Vietnamese label variations for all fields', () => {
     const vnSchema: FormSchema = {
       fields: [
-        { id: 'f-1', label: 'Họ và tên người nhận', type: 'TEXT', required: true, value: '', selector: '#f-1' },
-        { id: 'f-2', label: 'Thư điện tử', type: 'TEXT', required: true, value: '', selector: '#f-2' },
-        { id: 'f-3', label: 'SĐT liên lạc', type: 'TEXT', required: true, value: '', selector: '#f-3' },
-        { id: 'f-4', label: 'Chính sách bảo mật', type: 'CHECKBOX', required: true, value: '', selector: '#f-4' },
+        {
+          id: 'f-1',
+          label: 'Họ và tên người nhận',
+          type: 'TEXT',
+          required: true,
+          value: '',
+          selector: '#f-1',
+        },
+        {
+          id: 'f-2',
+          label: 'Thư điện tử',
+          type: 'TEXT',
+          required: true,
+          value: '',
+          selector: '#f-2',
+        },
+        {
+          id: 'f-3',
+          label: 'SĐT liên lạc',
+          type: 'TEXT',
+          required: true,
+          value: '',
+          selector: '#f-3',
+        },
+        {
+          id: 'f-4',
+          label: 'Chính sách bảo mật',
+          type: 'CHECKBOX',
+          required: true,
+          value: '',
+          selector: '#f-4',
+        },
       ],
       hasConsentCheckbox: true,
       consentLabel: 'Chính sách bảo mật',
@@ -105,7 +182,14 @@ describe('FormAutofillPolicy', () => {
   it('should map configured additionalFields when available', () => {
     const schema: FormSchema = {
       fields: [
-        { id: 'f-idcard', label: 'CMND / CCCD', type: 'TEXT', required: true, value: '', selector: '#f-idcard' },
+        {
+          id: 'f-idcard',
+          label: 'CMND / CCCD',
+          type: 'TEXT',
+          required: true,
+          value: '',
+          selector: '#f-idcard',
+        },
       ],
       hasConsentCheckbox: false,
     };
@@ -113,7 +197,7 @@ describe('FormAutofillPolicy', () => {
     const profileWithAdd: UserProfileData = {
       ...completeProfile,
       additionalFields: {
-        'CCCD': '012345678901',
+        CCCD: '012345678901',
       },
     };
 
@@ -127,7 +211,14 @@ describe('FormAutofillPolicy', () => {
   it('should never guess unknown required event-specific questions', () => {
     const schema: FormSchema = {
       fields: [
-        { id: 'f-diet', label: 'Dietary Preference / Meal Type', type: 'TEXT', required: true, value: '', selector: '#f-diet' },
+        {
+          id: 'f-diet',
+          label: 'Dietary Preference / Meal Type',
+          type: 'TEXT',
+          required: true,
+          value: '',
+          selector: '#f-diet',
+        },
       ],
       hasConsentCheckbox: false,
     };
@@ -144,7 +235,14 @@ describe('FormAutofillPolicy', () => {
   it('should allow optional unknown questions without blocking proceed', () => {
     const schema: FormSchema = {
       fields: [
-        { id: 'f-diet', label: 'Optional Dietary Preference', type: 'TEXT', required: false, value: '', selector: '#f-diet' },
+        {
+          id: 'f-diet',
+          label: 'Optional Dietary Preference',
+          type: 'TEXT',
+          required: false,
+          value: '',
+          selector: '#f-diet',
+        },
       ],
       hasConsentCheckbox: false,
     };

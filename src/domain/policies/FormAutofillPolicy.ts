@@ -1,8 +1,4 @@
-import {
-  FormField,
-  FormSchema,
-  UserProfileData,
-} from '../entities/BookingJourneyModels';
+import { FormField, FormSchema, UserProfileData } from '../entities/BookingJourneyModels';
 
 export interface AutofillPlanItem {
   field: FormField;

@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { BookingSummaryVerifier } from '../../../src/domain/policies/BookingSummaryVerifier';
-import { BookingSummary, CurrentSelection } from '../../../src/domain/entities/BookingJourneyModels';
+import {
+  BookingSummary,
+  CurrentSelection,
+} from '../../../src/domain/entities/BookingJourneyModels';
 
 describe('BookingSummaryVerifier', () => {
   const validSelection: CurrentSelection = {
