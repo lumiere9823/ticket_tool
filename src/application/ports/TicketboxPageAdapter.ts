@@ -87,4 +87,5 @@ export interface TicketboxPageAdapter {
     isConsentBlocked: boolean;
   }>;
   proceedToNextStep?(): Promise<boolean>;
+  isNavigationPending?(): boolean;
 }

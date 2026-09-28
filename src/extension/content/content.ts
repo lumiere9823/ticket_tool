@@ -176,7 +176,17 @@ async function performDiscoveryScan(): Promise<void> {
     }
 
     // If monitoring is active, check if we should trigger the booking journey
-    if (isMonitoringActive && !isExecutingJourney && availableTickets.length > 0) {
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const isOnSpecialBookingPage =
+      currentUrl.includes('/question-form') ||
+      currentUrl.includes('/select-ticket') ||
+      currentUrl.includes('/payment');
+
+    if (
+      isMonitoringActive &&
+      !isExecutingJourney &&
+      (availableTickets.length > 0 || isOnSpecialBookingPage)
+    ) {
       attemptBookingJourney();
     }
   } catch (err: unknown) {
@@ -209,7 +219,11 @@ async function attemptBookingJourney(): Promise<void> {
       ? plan.ticketRules.map((r) => r.ticketName || r.ticketId).filter(Boolean)
       : config.preferences?.categoryPriority || [];
 
-    if (priorities.length === 0) {
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const isOnQuestionForm = currentUrl.includes('/question-form');
+    const isOnPayment = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
+
+    if (priorities.length === 0 && !isOnQuestionForm && !isOnPayment) {
       logger.info('No ticket priorities configured; waiting for user configuration');
       return;
     }
@@ -223,30 +237,32 @@ async function attemptBookingJourney(): Promise<void> {
       userProfile: config.userProfile,
     };
 
-    // Discover catalog
-    const catalog = await adapter.discoverTicketCatalog();
-    const allTickets = catalog.showings.flatMap((s) => s.ticketTypes);
-    const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
+    if (!isOnQuestionForm && !isOnPayment) {
+      // Discover catalog
+      const catalog = await adapter.discoverTicketCatalog();
+      const allTickets = catalog.showings.flatMap((s) => s.ticketTypes);
+      const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
 
-    if (availableTickets.length === 0) {
-      logger.info('No tickets currently available. Continuing monitoring...');
-      return;
-    }
+      if (availableTickets.length === 0) {
+        logger.info('No tickets currently available. Continuing monitoring...');
+        return;
+      }
 
-    // Check if any available ticket matches user priority or fallback
-    const hasMatch =
-      preferences.allowFallback ||
-      availableTickets.some((t) =>
-        priorities.some(
-          (p) =>
-            t.name.toLowerCase().includes(p.toLowerCase()) ||
-            p.toLowerCase().includes(t.name.toLowerCase())
-        )
-      );
+      // Check if any available ticket matches user priority or fallback
+      const hasMatch =
+        preferences.allowFallback ||
+        availableTickets.some((t) =>
+          priorities.some(
+            (p) =>
+              t.name.toLowerCase().includes(p.toLowerCase()) ||
+              p.toLowerCase().includes(t.name.toLowerCase())
+          )
+        );
 
-    if (!hasMatch) {
-      logger.info('Available tickets do not match priority rules. Continuing monitoring...');
-      return;
+      if (!hasMatch) {
+        logger.info('Available tickets do not match priority rules. Continuing monitoring...');
+        return;
+      }
     }
 
     logger.info('Matching ticket detected! Starting booking journey execution...', {
@@ -265,14 +281,15 @@ async function attemptBookingJourney(): Promise<void> {
       requiresUserAction: result.requiresUserAction,
     });
 
-    // When payment gate, consent, or reservation is reached: pause monitoring so we don't loop
+    // When payment gate, consent, or terminal state is reached requiring user action: pause monitoring
     if (
-      result.finalState === PurchaseState.PAYMENT_GATE ||
-      result.finalState === PurchaseState.CONSENT_REQUIRED ||
-      result.finalState === PurchaseState.HELD ||
-      result.finalState === PurchaseState.CONFIRMED ||
-      result.finalState === PurchaseState.STOPPED ||
-      result.finalState === PurchaseState.FAILED
+      (result.finalState === PurchaseState.PAYMENT_GATE ||
+        result.finalState === PurchaseState.CONSENT_REQUIRED ||
+        result.finalState === PurchaseState.HELD ||
+        result.finalState === PurchaseState.CONFIRMED ||
+        result.finalState === PurchaseState.STOPPED ||
+        result.finalState === PurchaseState.FAILED) &&
+      result.requiresUserAction
     ) {
       logger.info(`Journey reached target state ${result.finalState}. Halting monitoring loop.`);
       isMonitoringActive = false;
@@ -320,7 +337,13 @@ async function checkRehydration(): Promise<void> {
       lastState &&
       (lastState.currentState === PurchaseState.ARMED ||
         lastState.currentState === PurchaseState.MONITORING ||
-        lastState.currentState === PurchaseState.SELECTING)
+        lastState.currentState === PurchaseState.SELECTING ||
+        lastState.currentState === PurchaseState.RESERVING ||
+        lastState.currentState === PurchaseState.TICKET_SELECTED ||
+        lastState.currentState === PurchaseState.SEATS_SELECTED ||
+        lastState.currentState === PurchaseState.QUESTION_FORM_DETECTED ||
+        lastState.currentState === PurchaseState.FILLING_ATTENDEE_FORM ||
+        lastState.currentState === PurchaseState.FORM_VALIDATED)
     ) {
       logger.info('Rehydrating active monitoring state in content script', {
         state: lastState.currentState,
@@ -393,7 +416,12 @@ messageBus.subscribe((message: ExtensionMessage) => {
       if (
         stateMachine.state === PurchaseState.FAILED ||
         stateMachine.state === PurchaseState.STOPPED ||
-        stateMachine.state === PurchaseState.CONFIRMED
+        stateMachine.state === PurchaseState.CONFIRMED ||
+        stateMachine.state === PurchaseState.PAYMENT_GATE ||
+        stateMachine.state === PurchaseState.HELD ||
+        stateMachine.state === PurchaseState.CONSENT_REQUIRED ||
+        stateMachine.state === PurchaseState.SEATS_SELECTED ||
+        stateMachine.state === PurchaseState.FORM_VALIDATED
       ) {
         try {
           stateMachine.transition({ type: 'RESET_REQUESTED' });
@@ -405,6 +433,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
       }
       isMonitoringActive = true;
       performDiscoveryScan();
+      setTimeout(attemptBookingJourney, 400);
       if (!monitoringTimer) {
         monitoringTimer = window.setInterval(() => {
           if (!isExtensionContextValid()) {
@@ -425,7 +454,12 @@ messageBus.subscribe((message: ExtensionMessage) => {
       if (
         stateMachine.state === PurchaseState.FAILED ||
         stateMachine.state === PurchaseState.STOPPED ||
-        stateMachine.state === PurchaseState.CONFIRMED
+        stateMachine.state === PurchaseState.CONFIRMED ||
+        stateMachine.state === PurchaseState.PAYMENT_GATE ||
+        stateMachine.state === PurchaseState.HELD ||
+        stateMachine.state === PurchaseState.CONSENT_REQUIRED ||
+        stateMachine.state === PurchaseState.SEATS_SELECTED ||
+        stateMachine.state === PurchaseState.FORM_VALIDATED
       ) {
         try {
           stateMachine.transition({ type: 'RESET_REQUESTED' });
@@ -437,6 +471,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
       }
       isMonitoringActive = true;
       performDiscoveryScan();
+      setTimeout(attemptBookingJourney, 400);
       if (!monitoringTimer) {
         monitoringTimer = window.setInterval(() => {
           if (!isExtensionContextValid()) {

@@ -50,14 +50,13 @@ export class ExecuteBookingJourneyUseCase {
       },
     });
 
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const isOnPaymentPage = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
     const currentState = this.getState();
-    if (
-      currentState === PurchaseState.PAYMENT_GATE ||
-      currentState === PurchaseState.CONFIRMED ||
-      currentState === PurchaseState.HELD ||
-      currentState === PurchaseState.CONSENT_REQUIRED
-    ) {
-      this.logger.info(`State machine already in target state ${currentState}. Halting.`);
+
+    // If on actual payment page and state is PAYMENT_GATE, halt safely
+    if (isOnPaymentPage && currentState === PurchaseState.PAYMENT_GATE) {
+      this.logger.info(`Already on payment page with state ${currentState}. Halting.`);
       return {
         success: true,
         finalState: currentState,
@@ -65,7 +64,18 @@ export class ExecuteBookingJourneyUseCase {
       };
     }
 
+    if (currentState === PurchaseState.CONFIRMED || currentState === PurchaseState.HELD) {
+      this.logger.info(`State machine already ${currentState}. Halting.`);
+      return {
+        success: true,
+        finalState: currentState,
+        requiresUserAction: true,
+      };
+    }
+
+    // Reset if in stale terminal state on non-payment page
     if (
+      currentState === PurchaseState.PAYMENT_GATE ||
       currentState === PurchaseState.FAILED ||
       currentState === PurchaseState.STOPPED
     ) {
@@ -182,6 +192,110 @@ export class ExecuteBookingJourneyUseCase {
     preferences: BookingPreferences,
     latencyTracker?: LatencyTracker
   ): Promise<JourneyExecutionResult> {
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const isOnPayment = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
+    const isOnQuestionForm = currentUrl.includes('/question-form');
+    const isOnSelectTicket = currentUrl.includes('/select-ticket') || currentUrl.includes('/booking');
+
+    if (isOnPayment) {
+      this.stateMachine.transition({ type: 'PAYMENT_GATE' });
+      this.logger.info('Payment step reached — user action required.');
+      await this.eventBus.publish({
+        type: 'NOTIFICATION_EVENT',
+        timestamp: new Date().toISOString(),
+        category: 'PAYMENT_REQUIRED',
+        title: 'Ticketbox Assistant',
+        body: 'Payment step reached — user action required.',
+      });
+      return {
+        success: true,
+        finalState: PurchaseState.PAYMENT_GATE,
+        requiresUserAction: true,
+        actionRequiredReason: 'Payment step reached — user action required.',
+      };
+    }
+
+    if (isOnQuestionForm) {
+      this.logger.info('Executing Question / Attendee Form step on question-form page');
+      const tFormStart = Date.now();
+      const formSchema = this.adapter.getFormSchema ? await this.adapter.getFormSchema() : null;
+      latencyTracker?.recordFormDetection(Date.now() - tFormStart);
+
+      if (formSchema && formSchema.fields.length > 0) {
+        this.stateMachine.transition({
+          type: 'QUESTION_FORM_DETECTED',
+          fieldCount: formSchema.fields.length,
+        });
+        this.logger.info(`Question form detected: ${formSchema.fields.length} fields`);
+
+        this.stateMachine.transition({ type: 'FILLING_ATTENDEE_FORM' });
+
+        if (this.adapter.fillAttendeeForm && preferences.userProfile) {
+          const fillResult = await this.adapter.fillAttendeeForm(preferences.userProfile);
+
+          if (fillResult.isConsentBlocked) {
+            this.stateMachine.transition({
+              type: 'CONSENT_REQUIRED',
+              consentLabel: formSchema.consentLabel,
+            });
+            this.logger.warn('User consent required for terms and conditions');
+            await this.eventBus.publish({
+              type: 'NOTIFICATION_EVENT',
+              timestamp: new Date().toISOString(),
+              category: 'CONSENT_REQUIRED',
+              title: 'Ticketbox Assistant',
+              body: 'User consent required to proceed with booking',
+            });
+            return {
+              success: true,
+              finalState: PurchaseState.CONSENT_REQUIRED,
+              requiresUserAction: true,
+              actionRequiredReason: 'User consent required',
+            };
+          }
+
+          if (!fillResult.allSatisfied) {
+            this.logger.warn('Form has unsatisfied required fields', {
+              missing: fillResult.missingFields,
+            });
+            return {
+              success: true,
+              finalState: PurchaseState.FILLING_ATTENDEE_FORM,
+              requiresUserAction: true,
+              actionRequiredReason: `Required fields missing: ${fillResult.missingFields.join(', ')}`,
+            };
+          }
+        }
+
+        this.stateMachine.transition({ type: 'FORM_VALIDATED' });
+        this.logger.info('Form validated successfully');
+      }
+
+      // Submit question form by clicking "Tiếp tục"
+      if (this.adapter.proceedToNextStep) {
+        this.logger.info('Submitting attendee form / proceeding to payment step');
+        await this.adapter.proceedToNextStep();
+        await new Promise((r) => setTimeout(r, 600));
+      }
+
+      this.stateMachine.transition({ type: 'PAYMENT_GATE' });
+      this.logger.info('Payment step reached — user action required.');
+      await this.eventBus.publish({
+        type: 'NOTIFICATION_EVENT',
+        timestamp: new Date().toISOString(),
+        category: 'PAYMENT_REQUIRED',
+        title: 'Ticketbox Assistant',
+        body: 'Payment step reached — user action required.',
+      });
+
+      return {
+        success: true,
+        finalState: PurchaseState.PAYMENT_GATE,
+        requiresUserAction: true,
+        actionRequiredReason: 'Payment step reached — user action required.',
+      };
+    }
+
     // 1. EVENT & SHOWING DETECTION
     const eventState = await this.adapter.getEventState();
     if (eventState.event) {
@@ -300,6 +414,27 @@ export class ExecuteBookingJourneyUseCase {
       title: 'Ticketbox Assistant',
       body: `Ticket selected: ${chosenTicket.name} (Qty: ${preferences.quantity})`,
     });
+
+    // If navigation to /select-ticket was initiated from event page, yield for page navigation
+    if (this.adapter.isNavigationPending && this.adapter.isNavigationPending() && !isOnSelectTicket) {
+      this.logger.info('Navigation to seat selection page initiated. Yielding for page transition.');
+      return {
+        success: true,
+        finalState: PurchaseState.TICKET_SELECTED,
+        selection: {
+          ticketId,
+          name: chosenTicket.name,
+          price: chosenTicket.price,
+          currency: chosenTicket.currency,
+          mode: chosenTicket.mode,
+          quantity: preferences.quantity,
+          seats: [],
+          selectedAt: new Date().toISOString(),
+        },
+        requiresUserAction: false,
+        actionRequiredReason: 'Navigating to booking / seat selection page...',
+      };
+    }
 
     // 5. BOOKING MODE DETECTION (Section 8)
     let bookingMode = chosenTicket.mode;
@@ -519,6 +654,20 @@ export class ExecuteBookingJourneyUseCase {
     if (this.adapter.proceedToNextStep) {
       await this.adapter.proceedToNextStep();
       await new Promise((r) => setTimeout(r, 400));
+    }
+
+    // If on /select-ticket, clicking proceed navigates to /question-form
+    if (isOnSelectTicket) {
+      this.logger.info(
+        'Seat selection submitted on select-ticket page. Yielding for question form navigation.'
+      );
+      return {
+        success: true,
+        finalState: PurchaseState.SEATS_SELECTED,
+        selection: currentSelection,
+        requiresUserAction: false,
+        actionRequiredReason: 'Seats selected. Navigating to question form...',
+      };
     }
 
     // 7. BOOKING SUMMARY VERIFICATION (Section 15, 16)

@@ -11,12 +11,12 @@ export class TicketboxFormParser {
    * Conforms strictly to Sections 17 and 20.
    */
   public static parseForm(root: DOMElementLike): FormSchema | null {
-    const formContainer = root.querySelector(
-      'form.questionnaire-form, #question-form, [data-question-form], form.attendee-form, .attendee-container, #attendee-form, .questionnaire-container, [class*="attendee"], [class*="questionnaire"]'
+    let formContainer = root.querySelector(
+      'form.questionnaire-form, #question-form, [data-question-form], form.attendee-form, .attendee-container, #attendee-form, .questionnaire-container, [class*="attendee"], [class*="questionnaire"], [class*="question-form"], form, main, [role="main"]'
     );
 
     if (!formContainer) {
-      return null;
+      formContainer = root;
     }
 
     const rawInputs = formContainer.querySelectorAll('input, select, textarea');
@@ -37,7 +37,20 @@ export class TicketboxFormParser {
       const el = inputElements[i]!;
       const tag = el.tagName.toLowerCase();
       const rawType = (el.getAttribute('type') || 'text').toLowerCase();
-      const id = el.getAttribute('id') || el.getAttribute('name') || `field_${i}`;
+
+      // Ensure stable selector attribute is present
+      const stableFieldKey = `tb_field_${i}`;
+      if (el.setAttribute) {
+        el.setAttribute('data-tb-field', stableFieldKey);
+      }
+      if (
+        el.rawElement &&
+        typeof (el.rawElement as HTMLElement).setAttribute === 'function'
+      ) {
+        (el.rawElement as HTMLElement).setAttribute('data-tb-field', stableFieldKey);
+      }
+
+      const id = el.getAttribute('id') || el.getAttribute('name') || stableFieldKey;
 
       // Extract label
       const label = this.extractFieldLabel(el, root, id);
@@ -52,19 +65,28 @@ export class TicketboxFormParser {
         label.includes('*') ||
         label.toLowerCase().includes('bắt buộc');
 
-      // Check for consent checkbox
+      // Check for consent checkbox or radio
       const cleanLabel = label.toLowerCase();
       if (
-        fieldType === 'CHECKBOX' &&
+        (fieldType === 'CHECKBOX' || fieldType === 'RADIO') &&
         (cleanLabel.includes('agree') ||
           cleanLabel.includes('đồng ý') ||
           cleanLabel.includes('terms') ||
           cleanLabel.includes('điều khoản') ||
-          cleanLabel.includes('chính sách'))
+          cleanLabel.includes('chính sách') ||
+          cleanLabel.includes('vận hành') ||
+          cleanLabel.includes('btc') ||
+          cleanLabel.includes('sử dụng thông tin'))
       ) {
         hasConsentCheckbox = true;
         consentLabel = label;
       }
+
+      const selector = el.id
+        ? `[id="${el.id}"]`
+        : el.getAttribute('name')
+          ? `[name="${el.getAttribute('name')}"]`
+          : `[data-tb-field="${stableFieldKey}"]`;
 
       fields.push({
         id,
@@ -72,7 +94,7 @@ export class TicketboxFormParser {
         type: fieldType,
         required: isRequired,
         value: el.getAttribute('value') || '',
-        selector: el.id ? `[id="${el.id}"]` : `[name="${el.getAttribute('name')}"]`,
+        selector,
       });
     }
 
@@ -104,6 +126,16 @@ export class TicketboxFormParser {
       return 'PHONE';
     }
 
+    if (
+      cleanLabel.includes('họ & tên') ||
+      cleanLabel.includes('họ và tên') ||
+      cleanLabel.includes('họ tên') ||
+      cleanLabel.includes('full name') ||
+      cleanLabel.includes('người nhận')
+    ) {
+      return 'TEXT';
+    }
+
     if (tag === 'textarea' || rawType === 'text') {
       return 'TEXT';
     }
@@ -118,7 +150,8 @@ export class TicketboxFormParser {
     if (id) {
       const labelEl = root.querySelector(`label[for="${id}"]`);
       if (labelEl && labelEl.textContent.trim()) {
-        return labelEl.textContent.trim();
+        const text = labelEl.textContent.trim();
+        if (!text.toLowerCase().includes('điền câu trả lời')) return text;
       }
     }
 
@@ -127,19 +160,91 @@ export class TicketboxFormParser {
     for (const lbl of allLabels) {
       if ((id && lbl.querySelector(`[id="${id}"]`)) || (name && lbl.querySelector(`[name="${name}"]`))) {
         if (lbl.textContent.trim()) {
-          return lbl.textContent.trim();
+          const text = lbl.textContent.trim();
+          if (!text.toLowerCase().includes('điền câu trả lời')) return text;
         }
       }
     }
 
-    // 2. aria-label or placeholder
+    // 1c. Real browser DOM traversal via closest container or previous sibling
+    if (el.rawElement && typeof (el.rawElement as HTMLElement).closest === 'function') {
+      const native = el.rawElement as HTMLElement;
+
+      // Check previous siblings
+      let prev = native.previousElementSibling;
+      while (prev) {
+        const text = prev.textContent?.trim();
+        if (text && text.length > 1 && !text.toLowerCase().includes('điền câu trả lời')) {
+          return text;
+        }
+        prev = prev.previousElementSibling;
+      }
+
+      // Check parent's previous sibling
+      if (native.parentElement) {
+        let parentPrev = native.parentElement.previousElementSibling;
+        while (parentPrev) {
+          const text = parentPrev.textContent?.trim();
+          if (text && text.length > 1 && !text.toLowerCase().includes('điền câu trả lời')) {
+            return text;
+          }
+          parentPrev = parentPrev.previousElementSibling;
+        }
+      }
+
+      // Check enclosing question/form container
+      const container = native.closest(
+        '.ant-form-item, [class*="form-item"], [class*="question"], [class*="field"], .form-group'
+      );
+      if (container) {
+        const heading = container.querySelector(
+          '.ant-form-item-label, label, [class*="label"], [class*="title"], h3, h4, h5, p, span'
+        );
+        if (heading && heading.textContent?.trim()) {
+          const text = heading.textContent.trim();
+          if (!text.toLowerCase().includes('điền câu trả lời')) return text;
+        }
+      }
+    }
+
+    // 2. Sibling text or child in parent if available in DOMElementLike
+    if (el.parentElement) {
+      if (typeof el.parentElement.querySelector === 'function') {
+        const heading = el.parentElement.querySelector(
+          '.title, .label, [class*="title"], [class*="label"], h2, h3, h4, h5, p, span, div'
+        );
+        if (heading && heading !== el) {
+          const text = heading.textContent.trim();
+          if (text && text.length > 1 && !text.toLowerCase().includes('điền câu trả lời')) {
+            return text;
+          }
+        }
+      }
+      const parentText = el.parentElement.textContent.trim();
+      if (
+        parentText &&
+        parentText.length < 200 &&
+        !parentText.toLowerCase().includes('điền câu trả lời')
+      ) {
+        return parentText;
+      }
+    }
+
+    // 3. aria-label
     const ariaLabel = el.getAttribute('aria-label');
     if (ariaLabel && ariaLabel.trim()) return ariaLabel.trim();
 
+    // 4. placeholder only if it's descriptive
     const placeholder = el.getAttribute('placeholder');
-    if (placeholder && placeholder.trim()) return placeholder.trim();
+    if (
+      placeholder &&
+      placeholder.trim() &&
+      !placeholder.toLowerCase().includes('điền câu trả lời')
+    ) {
+      return placeholder.trim();
+    }
 
-    // 3. Name attribute
+    // 5. Name attribute
     if (name && name.trim()) return name.trim();
 
     return id;

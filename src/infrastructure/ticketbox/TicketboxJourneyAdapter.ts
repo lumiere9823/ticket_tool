@@ -59,6 +59,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   private cachedSeatmapData?: SeatmapApiResponse | null = null;
   private cachedShowingId?: string | null = null;
   private cachedSeats: Seat[] = [];
+  public navigationPending = false;
 
   constructor(
     private readonly logger?: LoggerPort,
@@ -91,6 +92,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
   public setSeatmapData(data: SeatmapApiResponse | null): void {
     this.cachedSeatmapData = data;
+  }
+
+  public isNavigationPending(): boolean {
+    return this.navigationPending;
   }
 
   public getShowingId(): string | null {
@@ -441,6 +446,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           this.logger?.info('Booking navigation initiated; ticket tier step fulfilled', {
             candidateId,
           });
+          this.navigationPending = true;
           return true;
         }
       }
@@ -1237,12 +1243,97 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         if (item.targetValue) {
           const safeFieldId = item.field.id.replace(/"/g, '\\"');
           const el =
-            root.querySelector(item.field.selector) || root.querySelector(`[id="${safeFieldId}"]`);
+            root.querySelector(item.field.selector) ||
+            root.querySelector(`[id="${safeFieldId}"]`) ||
+            root.querySelector(`[name="${safeFieldId}"]`);
+
           if (el) {
-            (el as MutableDOMElement).attributes = (el as MutableDOMElement).attributes || {};
-            (el as MutableDOMElement).attributes['value'] = item.targetValue;
-            if (item.field.type === 'CHECKBOX') {
-              (el as MutableDOMElement).attributes['checked'] = 'true';
+            const nativeEl = (el.rawElement || el) as HTMLElement;
+
+            if (item.field.type === 'CHECKBOX' || item.field.type === 'RADIO') {
+              if (item.targetValue === 'true') {
+                if (typeof (el as MutableDOMElement).click === 'function') {
+                  (el as MutableDOMElement).click!();
+                }
+                if (typeof nativeEl.click === 'function') {
+                  nativeEl.click();
+                }
+                const inputEl = nativeEl as HTMLInputElement;
+                if (typeof window !== 'undefined' && window.HTMLInputElement) {
+                  const desc = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype,
+                    'checked'
+                  );
+                  if (desc && desc.set) {
+                    desc.set.call(inputEl, true);
+                  } else {
+                    inputEl.checked = true;
+                  }
+                } else if ('checked' in inputEl) {
+                  inputEl.checked = true;
+                }
+
+                const EventCtor = (
+                  globalThis as unknown as {
+                    Event?: new (type: string, init?: Record<string, unknown>) => unknown;
+                  }
+                ).Event;
+                if (typeof EventCtor === 'function' && typeof nativeEl.dispatchEvent === 'function') {
+                  nativeEl.dispatchEvent(new EventCtor('change', { bubbles: true }) as never);
+                  nativeEl.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
+                }
+
+                // If element has a label or wrapper (e.g. Ant Design), click it too
+                if (typeof nativeEl.closest === 'function') {
+                  const parentWrapper = nativeEl.closest(
+                    'label, .ant-radio-wrapper, .ant-checkbox-wrapper, [class*="radio"], [class*="checkbox"]'
+                  ) as HTMLElement | null;
+                  if (parentWrapper && typeof parentWrapper.click === 'function') {
+                    parentWrapper.click();
+                  }
+                }
+
+                (el as MutableDOMElement).attributes = (el as MutableDOMElement).attributes || {};
+                (el as MutableDOMElement).attributes['checked'] = 'true';
+                (el as MutableDOMElement).attributes['aria-checked'] = 'true';
+                this.logger?.info('Consent radio/checkbox selected', { label: item.field.label });
+              }
+            } else {
+              // TEXT, EMAIL, PHONE
+              const inputEl = nativeEl as HTMLInputElement;
+              if (typeof window !== 'undefined' && window.HTMLInputElement) {
+                const desc = Object.getOwnPropertyDescriptor(
+                  window.HTMLInputElement.prototype,
+                  'value'
+                );
+                if (desc && desc.set) {
+                  desc.set.call(inputEl, item.targetValue);
+                } else {
+                  inputEl.value = item.targetValue;
+                }
+              } else if ('value' in inputEl) {
+                inputEl.value = item.targetValue;
+              }
+
+              const EventCtor = (
+                globalThis as unknown as {
+                  Event?: new (type: string, init?: Record<string, unknown>) => unknown;
+                }
+              ).Event;
+              if (typeof EventCtor === 'function' && typeof nativeEl.dispatchEvent === 'function') {
+                nativeEl.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
+                nativeEl.dispatchEvent(new EventCtor('change', { bubbles: true }) as never);
+              }
+
+              (el as MutableDOMElement).attributes = (el as MutableDOMElement).attributes || {};
+              (el as MutableDOMElement).attributes['value'] = item.targetValue;
+              if ('value' in (el as MutableDOMElement)) {
+                (el as MutableDOMElement).value = item.targetValue;
+              }
+              this.logger?.info('Form text input filled', {
+                label: item.field.label,
+                source: item.source,
+              });
             }
           }
         }

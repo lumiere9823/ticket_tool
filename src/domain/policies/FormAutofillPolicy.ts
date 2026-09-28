@@ -38,15 +38,18 @@ export class FormAutofillPolicy {
     for (const field of schema.fields) {
       const normalizedLabel = (field.label || '').toLowerCase();
 
-      // 1. Consent checkbox detection
+      // 1. Consent checkbox / radio detection
       const isConsent =
-        field.type === 'CHECKBOX' &&
+        (field.type === 'CHECKBOX' || field.type === 'RADIO') &&
         (normalizedLabel.includes('agree') ||
           normalizedLabel.includes('đồng ý') ||
           normalizedLabel.includes('terms') ||
           normalizedLabel.includes('điều khoản') ||
           normalizedLabel.includes('chính sách') ||
-          normalizedLabel.includes('policy'));
+          normalizedLabel.includes('policy') ||
+          normalizedLabel.includes('vận hành') ||
+          normalizedLabel.includes('btc') ||
+          normalizedLabel.includes('sử dụng thông tin'));
 
       if (isConsent) {
         consentField = field;
@@ -142,6 +145,7 @@ export class FormAutofillPolicy {
         normalizedLabel.includes('name') ||
         normalizedLabel.includes('họ tên') ||
         normalizedLabel.includes('họ và tên') ||
+        normalizedLabel.includes('họ & tên') ||
         normalizedLabel.includes('full name') ||
         normalizedLabel.includes('attendee') ||
         normalizedLabel.includes('người nhận')

@@ -10,6 +10,7 @@ export interface DOMElementLike {
   id?: string | undefined;
   className?: string | undefined;
   textContent: string;
+  parentElement?: DOMElementLike | null;
   getAttribute(name: string): string | null;
   hasAttribute(name: string): boolean;
   setAttribute?(name: string, value: string): void;
@@ -34,6 +35,9 @@ export function wrapBrowserElement(el: Element | Document): DOMElementLike {
       typeof element.className === 'string'
         ? element.className
         : (element as SVGElement).className?.baseVal || element.getAttribute('class') || undefined,
+    get parentElement(): DOMElementLike | null {
+      return element.parentElement ? wrapBrowserElement(element.parentElement) : null;
+    },
     get textContent() {
       return element.textContent || '';
     },
@@ -106,6 +110,7 @@ class SimpleDOMNode implements DOMElementLike {
   public className?: string | undefined;
   public attributes: Record<string, string> = {};
   public children: SimpleDOMNode[] = [];
+  public parentElement: SimpleDOMNode | null = null;
   public rawText = '';
 
   constructor(tagName: string) {
@@ -303,6 +308,7 @@ export function parseHtmlToDOMElementLike(html: string): DOMElementLike {
         }
 
         const parent = stack[stack.length - 1]!;
+        node.parentElement = parent;
         parent.children.push(node);
 
         // Self-closing void tags in HTML

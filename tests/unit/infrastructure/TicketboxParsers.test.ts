@@ -3,6 +3,7 @@ import { parseHtmlToDOMElementLike } from '../../../src/infrastructure/ticketbox
 import { TicketboxSeatMapParser } from '../../../src/infrastructure/ticketbox/parsing/TicketboxSeatMapParser';
 import { TicketboxSummaryParser } from '../../../src/infrastructure/ticketbox/parsing/TicketboxSummaryParser';
 import { TicketboxFormParser } from '../../../src/infrastructure/ticketbox/parsing/TicketboxFormParser';
+import { TicketboxJourneyAdapter } from '../../../src/infrastructure/ticketbox/TicketboxJourneyAdapter';
 import { BOOKING_JOURNEY_FIXTURES } from '../../fixtures/booking/bookingFixtures';
 
 describe('Ticketbox Parsers', () => {
@@ -149,6 +150,139 @@ describe('Ticketbox Parsers', () => {
       const root = parseHtmlToDOMElementLike(BOOKING_JOURNEY_FIXTURES.CASE_L_UNSUPPORTED_STRUCTURE);
       const formSchema = TicketboxFormParser.parseForm(root);
       expect(formSchema).toBeNull();
+    });
+
+    it('should parse real Ticketbox Vietnamese attendee questionnaire with consent radio and generic placeholder inputs', () => {
+      const html = `
+        <div class="question-container">
+          <h2>BẢNG CÂU HỎI</h2>
+          <div class="tier-section">
+            <h3>YELLOW</h3>
+            <div class="form-item">
+              <div class="title">TÔI ĐỒNG Ý CHO BTC VÀ TICKETBOX SỬ DỤNG THÔNG TIN CHO MỤC ĐÍCH VẬN HÀNH SỰ KIỆN *</div>
+              <label class="ant-radio-wrapper">
+                <input type="radio" name="consent" class="ant-radio-input" />
+                <span>Tôi đồng ý</span>
+              </label>
+            </div>
+            <div class="form-item">
+              <div class="title">Họ & tên / Full name</div>
+              <input type="text" name="full_name" placeholder="Điền câu trả lời của bạn" />
+            </div>
+            <div class="form-item">
+              <div class="title">Số điện thoại *</div>
+              <input type="tel" name="phone_number" placeholder="Điền câu trả lời của bạn" />
+            </div>
+            <div class="form-item">
+              <div class="title">Email *</div>
+              <input type="email" name="email_address" placeholder="Điền câu trả lời của bạn" />
+            </div>
+          </div>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const formSchema = TicketboxFormParser.parseForm(root);
+
+      expect(formSchema).not.toBeNull();
+      expect(formSchema?.hasConsentCheckbox).toBe(true);
+      expect(formSchema?.fields).toHaveLength(4);
+
+      const consentField = formSchema?.fields.find((f) => f.type === 'RADIO');
+      expect(consentField).toBeDefined();
+
+      const nameField = formSchema?.fields.find((f) => f.label.toLowerCase().includes('họ & tên'));
+      expect(nameField).toBeDefined();
+      expect(nameField?.type).toBe('TEXT');
+
+      const phoneField = formSchema?.fields.find((f) => f.type === 'PHONE');
+      expect(phoneField).toBeDefined();
+      expect(phoneField?.required).toBe(true);
+
+      const emailField = formSchema?.fields.find((f) => f.type === 'EMAIL');
+      expect(emailField).toBeDefined();
+      expect(emailField?.required).toBe(true);
+    });
+
+    it('should fill Vietnamese attendee questionnaire and tick consent radio when agreeToTerms is true', async () => {
+      const html = `
+        <div class="question-container">
+          <h2>BẢNG CÂU HỎI</h2>
+          <div class="tier-section">
+            <div class="form-item">
+              <div class="title">TÔI ĐỒNG Ý CHO BTC VÀ TICKETBOX SỬ DỤNG THÔNG TIN CHO MỤC ĐÍCH VẬN HÀNH SỰ KIỆN *</div>
+              <label class="ant-radio-wrapper">
+                <input type="radio" name="consent" class="ant-radio-input" />
+                <span>Tôi đồng ý</span>
+              </label>
+            </div>
+            <div class="form-item">
+              <div class="title">Họ & tên / Full name</div>
+              <input type="text" name="full_name" placeholder="Điền câu trả lời của bạn" />
+            </div>
+            <div class="form-item">
+              <div class="title">Số điện thoại *</div>
+              <input type="tel" name="phone_number" placeholder="Điền câu trả lời của bạn" />
+            </div>
+            <div class="form-item">
+              <div class="title">Email *</div>
+              <input type="email" name="email_address" placeholder="Điền câu trả lời của bạn" />
+            </div>
+          </div>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+
+      const fillResult = await adapter.fillAttendeeForm({
+        fullName: 'Nguyễn Văn A',
+        phone: '0901234567',
+        email: 'nguyenvana@gmail.com',
+        agreeToTerms: true,
+      });
+
+      expect(fillResult.isConsentBlocked).toBe(false);
+      expect(fillResult.allSatisfied).toBe(true);
+      expect(fillResult.missingFields).toHaveLength(0);
+
+      // Verify DOM inputs updated
+      const consentInput = root.querySelector('input[name="consent"]');
+      expect(consentInput?.getAttribute('checked')).toBe('true');
+
+      const nameInput = root.querySelector('input[name="full_name"]');
+      expect(nameInput?.getAttribute('value')).toBe('Nguyễn Văn A');
+
+      const phoneInput = root.querySelector('input[name="phone_number"]');
+      expect(phoneInput?.getAttribute('value')).toBe('0901234567');
+
+      const emailInput = root.querySelector('input[name="email_address"]');
+      expect(emailInput?.getAttribute('value')).toBe('nguyenvana@gmail.com');
+    });
+
+    it('should block with isConsentBlocked when agreeToTerms is false on Vietnamese questionnaire', async () => {
+      const html = `
+        <div class="question-container">
+          <div class="form-item">
+            <div class="title">TÔI ĐỒNG Ý CHO BTC VÀ TICKETBOX SỬ DỤNG THÔNG TIN CHO MỤC ĐÍCH VẬN HÀNH SỰ KIỆN *</div>
+            <input type="radio" name="consent" />
+          </div>
+          <div class="form-item">
+            <div class="title">Họ & tên / Full name</div>
+            <input type="text" name="full_name" />
+          </div>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+
+      const fillResult = await adapter.fillAttendeeForm({
+        fullName: 'Nguyễn Văn A',
+        phone: '0901234567',
+        email: 'nguyenvana@gmail.com',
+        agreeToTerms: false,
+      });
+
+      expect(fillResult.isConsentBlocked).toBe(true);
+      expect(fillResult.allSatisfied).toBe(false);
     });
   });
 });

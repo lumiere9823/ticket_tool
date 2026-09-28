@@ -307,6 +307,21 @@ export class PurchaseStateMachine {
         if (event.type === 'TICKETS_DETECTED') {
           return this.performTransition(PurchaseState.TICKETS_DETECTED);
         }
+        if (event.type === 'QUESTION_FORM_DETECTED') {
+          return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
+        }
+        if (event.type === 'SEAT_MAP_DETECTED') {
+          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
+        }
+        if (event.type === 'SEATS_SELECTED') {
+          return this.performTransition(PurchaseState.SEATS_SELECTED);
+        }
+        if (event.type === 'BOOKING_SUMMARY_DETECTED') {
+          return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
+        }
+        if (event.type === 'PAYMENT_GATE') {
+          return this.performTransition(PurchaseState.PAYMENT_GATE);
+        }
         if (event.type === 'INVENTORY_AVAILABLE') {
           return this.performTransition(PurchaseState.AVAILABLE_DETECTED);
         }
@@ -375,6 +390,18 @@ export class PurchaseStateMachine {
         }
         if (event.type === 'TICKETS_DETECTED') {
           return this.performTransition(PurchaseState.TICKETS_DETECTED);
+        }
+        if (event.type === 'QUESTION_FORM_DETECTED') {
+          return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
+        }
+        if (event.type === 'SEAT_MAP_DETECTED') {
+          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
+        }
+        if (event.type === 'SEATS_SELECTED') {
+          return this.performTransition(PurchaseState.SEATS_SELECTED);
+        }
+        if (event.type === 'PAYMENT_GATE') {
+          return this.performTransition(PurchaseState.PAYMENT_GATE);
         }
         if (event.type === 'EVALUATING_TICKETS') {
           return this.performTransition(PurchaseState.EVALUATING_TICKETS);
