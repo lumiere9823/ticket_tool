@@ -285,4 +285,103 @@ describe('Ticketbox Parsers', () => {
       expect(fillResult.allSatisfied).toBe(false);
     });
   });
+
+  describe('proceedToNextStep & Tailwind disabled handling', () => {
+    it('should successfully click continue button having Tailwind disabled: prefix classes', async () => {
+      let wasClicked = false;
+      const html = `
+        <div class="sidebar-footer">
+          <button id="btn-continue" class="flex items-center justify-center bg-green-500 text-white disabled:opacity-50 disabled:cursor-not-allowed">
+            <span>Tiếp tục - 1.000.000 đ &gt;&gt;</span>
+          </button>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const btn = root.querySelector('#btn-continue');
+      if (btn) {
+        btn.click = () => {
+          wasClicked = true;
+        };
+      }
+
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+      const result = await adapter.proceedToNextStep();
+
+      expect(result).toBe(true);
+      expect(wasClicked).toBe(true);
+      expect(adapter.isNavigationPending()).toBe(true);
+    });
+
+    it('should ignore prompt button containing "vui lòng"', async () => {
+      let wasClicked = false;
+      const html = `
+        <div class="sidebar-footer">
+          <button class="bg-gray-400 text-white">
+            <span>Vui lòng chọn vé &gt;&gt;</span>
+          </button>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const btn = root.querySelector('button');
+      if (btn) {
+        btn.click = () => {
+          wasClicked = true;
+        };
+      }
+
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+      const result = await adapter.proceedToNextStep();
+
+      expect(result).toBe(false);
+      expect(wasClicked).toBe(false);
+    });
+
+    it('should ignore button with native disabled attribute', async () => {
+      let wasClicked = false;
+      const html = `
+        <div class="sidebar-footer">
+          <button disabled="disabled" class="ant-btn">
+            <span>Tiếp tục &gt;&gt;</span>
+          </button>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const btn = root.querySelector('button');
+      if (btn) {
+        btn.click = () => {
+          wasClicked = true;
+        };
+      }
+
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+      const result = await adapter.proceedToNextStep();
+
+      expect(result).toBe(false);
+      expect(wasClicked).toBe(false);
+    });
+
+    it('should ignore button with aria-disabled="true" or ant-btn-disabled class', async () => {
+      let wasClicked = false;
+      const html = `
+        <div class="sidebar-footer">
+          <button class="ant-btn ant-btn-primary ant-btn-disabled" aria-disabled="true">
+            <span>Tiếp tục</span>
+          </button>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const btn = root.querySelector('button');
+      if (btn) {
+        btn.click = () => {
+          wasClicked = true;
+        };
+      }
+
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+      const result = await adapter.proceedToNextStep();
+
+      expect(result).toBe(false);
+      expect(wasClicked).toBe(false);
+    });
+  });
 });

@@ -46,6 +46,8 @@ let isMonitoringActive = false;
 let isExecutingJourney = false;
 let monitoringTimer: number | null = null;
 let debounceTimer: number | null = null;
+let awaitingNavigationFromUrl: string | null = null;
+let awaitingNavigationTimestamp = 0;
 
 logger.info('Ticketbox Content Script loaded on page', {
   url: window.location.href,
@@ -177,6 +179,24 @@ async function performDiscoveryScan(): Promise<void> {
 
     // If monitoring is active, check if we should trigger the booking journey
     const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+
+    // If awaiting page navigation from a completed step (e.g. from /select-ticket to /question-form)
+    if (awaitingNavigationFromUrl) {
+      if (currentUrl !== awaitingNavigationFromUrl) {
+        logger.info('Page navigated to new step URL', {
+          from: awaitingNavigationFromUrl,
+          to: currentUrl,
+        });
+        awaitingNavigationFromUrl = null;
+      } else if (Date.now() - awaitingNavigationTimestamp < 10000) {
+        logger.debug('Waiting for page navigation to complete...', { url: currentUrl });
+        return;
+      } else {
+        logger.warn('Timed out waiting for page navigation. Clearing wait flag.');
+        awaitingNavigationFromUrl = null;
+      }
+    }
+
     const isOnSpecialBookingPage =
       currentUrl.includes('/question-form') ||
       currentUrl.includes('/select-ticket') ||
@@ -280,6 +300,19 @@ async function attemptBookingJourney(): Promise<void> {
       finalState: result.finalState,
       requiresUserAction: result.requiresUserAction,
     });
+
+    // When seats are selected and continue button is submitted, yield and await navigation
+    if (
+      result.success &&
+      result.finalState === PurchaseState.SEATS_SELECTED &&
+      !result.requiresUserAction
+    ) {
+      awaitingNavigationFromUrl = typeof window !== 'undefined' ? window.location.href : null;
+      awaitingNavigationTimestamp = Date.now();
+      logger.info('Seats selected and submitted. Waiting for page navigation to next step...', {
+        currentUrl: awaitingNavigationFromUrl,
+      });
+    }
 
     // When payment gate, consent, or terminal state is reached requiring user action: pause monitoring
     if (
@@ -400,6 +433,28 @@ if (typeof MutationObserver !== 'undefined') {
       if (node) observer.observe(node, { childList: true, subtree: true });
     });
   }
+}
+
+// Detect SPA client-side routing transitions (Next.js / HTML5 History API)
+if (typeof window !== 'undefined') {
+  let prevUrl = window.location.href;
+  const checkUrlChange = () => {
+    if (!isExtensionContextValid()) return;
+    const nowUrl = window.location.href;
+    if (nowUrl !== prevUrl) {
+      const oldUrl = prevUrl;
+      prevUrl = nowUrl;
+      logger.info('Detected SPA URL transition', { from: oldUrl, to: nowUrl });
+      if (awaitingNavigationFromUrl && nowUrl !== awaitingNavigationFromUrl) {
+        awaitingNavigationFromUrl = null;
+      }
+      scheduleDiscoveryScan(150);
+    }
+  };
+
+  window.addEventListener('popstate', checkUrlChange);
+  window.addEventListener('hashchange', checkUrlChange);
+  window.setInterval(checkUrlChange, 250);
 }
 
 // Handle coordination messages from the Service Worker and Popup

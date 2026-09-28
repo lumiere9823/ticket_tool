@@ -20,6 +20,7 @@ export type BookingErrorCode =
   | 'PAYMENT_REQUIRED'
   | 'PAGE_CHANGED'
   | 'STALE_ELEMENT'
+  | 'PROCEED_FAILED'
   | 'UNSUPPORTED_FLOW';
 
 export class BookingError extends Error {

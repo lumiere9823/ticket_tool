@@ -652,8 +652,18 @@ export class ExecuteBookingJourneyUseCase {
 
     // Advance to next step if applicable (e.g. click "Tiếp tục" / "Đặt vé")
     if (this.adapter.proceedToNextStep) {
-      await this.adapter.proceedToNextStep();
-      await new Promise((r) => setTimeout(r, 400));
+      const proceedOk = await this.adapter.proceedToNextStep();
+      if (proceedOk) {
+        await new Promise((r) => setTimeout(r, 400));
+      } else if (isOnSelectTicket) {
+        this.logger.warn('Failed to proceed to next step after seat selection on select-ticket');
+        throw new BookingError({
+          code: 'PROCEED_FAILED',
+          message: 'Failed to click continue button after seat selection',
+          state: this.stateMachine.state,
+          recoverable: true,
+        });
+      }
     }
 
     // If on /select-ticket, clicking proceed navigates to /question-form

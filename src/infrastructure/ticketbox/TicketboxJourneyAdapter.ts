@@ -485,10 +485,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     }
 
     // 3. Verify ticket row is not disabled or sold out
-    const isRowDisabled =
-      targetRow.hasAttribute('disabled') ||
-      targetRow.getAttribute('aria-disabled') === 'true' ||
-      (targetRow.className || '').includes('disabled');
+    const isRowDisabled = this.isElementDisabled(targetRow);
 
     const rowText = targetRow.textContent.toLowerCase();
     const isSoldOut =
@@ -671,61 +668,168 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   }
 
   /**
+   * Evaluates if a button or container element is disabled.
+   * Accurately avoids false positives on Tailwind CSS utility classes like disabled:opacity-50.
+   */
+  private isElementDisabled(el: DOMElementLike): boolean {
+    if (el.hasAttribute('disabled')) {
+      const val = el.getAttribute('disabled');
+      if (val !== 'false') return true;
+    }
+    if (el.getAttribute('aria-disabled') === 'true') {
+      return true;
+    }
+
+    const raw = el.rawElement as HTMLElement | undefined;
+    if (raw) {
+      if ('disabled' in raw && (raw as HTMLButtonElement).disabled === true) {
+        return true;
+      }
+      if (typeof raw.matches === 'function' && raw.matches(':disabled')) {
+        return true;
+      }
+    }
+
+    // Exact class token match: DO NOT match Tailwind prefix classes like disabled:opacity-50 or disabled:cursor-not-allowed
+    const classTokens = (el.className || '').split(/\s+/);
+    for (const token of classTokens) {
+      const lower = token.toLowerCase();
+      if (
+        lower === 'disabled' ||
+        lower === 'ant-btn-disabled' ||
+        lower === 'btn-disabled' ||
+        lower === 'is-disabled' ||
+        lower === 'button--disabled'
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Robust click dispatcher for interactive buttons and child nodes.
+   */
+  private clickElement(btn: DOMElementLike): void {
+    const nativeEl = (btn.rawElement || btn) as HTMLElement;
+
+    if (typeof nativeEl.focus === 'function') {
+      try {
+        nativeEl.focus();
+      } catch {
+        // ignore
+      }
+    }
+
+    if (typeof window !== 'undefined' && typeof window.MouseEvent === 'function') {
+      const rect =
+        typeof nativeEl.getBoundingClientRect === 'function'
+          ? nativeEl.getBoundingClientRect()
+          : { left: 0, top: 0, width: 0, height: 0 };
+      const clientX = rect.left + rect.width / 2;
+      const clientY = rect.top + rect.height / 2;
+      const opts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
+
+      if (typeof window.PointerEvent === 'function') {
+        nativeEl.dispatchEvent(new PointerEvent('pointerdown', opts));
+      }
+      nativeEl.dispatchEvent(new MouseEvent('mousedown', opts));
+      if (typeof window.PointerEvent === 'function') {
+        nativeEl.dispatchEvent(new PointerEvent('pointerup', opts));
+      }
+      nativeEl.dispatchEvent(new MouseEvent('mouseup', opts));
+      nativeEl.dispatchEvent(new MouseEvent('click', opts));
+    }
+
+    if (typeof nativeEl.click === 'function') {
+      nativeEl.click();
+    } else if (typeof (btn as MutableDOMElement).click === 'function') {
+      (btn as MutableDOMElement).click!();
+    }
+
+    if (typeof nativeEl.closest === 'function') {
+      const parentClickable = nativeEl.closest('button, [role="button"], a') as HTMLElement | null;
+      if (
+        parentClickable &&
+        parentClickable !== nativeEl &&
+        typeof parentClickable.click === 'function'
+      ) {
+        parentClickable.click();
+      }
+    }
+  }
+
+  /**
    * Clicks the primary proceed/continue/checkout button on Ticketbox to advance the flow.
+   * Employs polling retries (up to 10 attempts x 250ms) to allow React state / cart calculation
+   * to remove disabled state and render the active continue button.
    */
   public async proceedToNextStep(): Promise<boolean> {
     const root = this.getRoot();
     if (!root) return false;
 
-    // Allow UI state to settle after seat/quantity selection
-    await new Promise((r) => setTimeout(r, 400));
+    const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 10 : 1;
 
-    const candidates = root.querySelectorAll(
-      '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, button[type="submit"], .btn-checkout, [class*="checkout"], .ant-drawer-footer button, [class*="bottom"] button, [class*="bottom"] a, [class*="sidebar"] button, [class*="sidebar"] a, [class*="action"] button, [class*="action"] a, button, a.btn, a[class*="button"], [role="button"], div[role="button"]'
-    );
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const selector =
+        '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, button[type="submit"], .btn-checkout, [class*="checkout"], .ant-drawer-footer button, [class*="bottom"] button, [class*="bottom"] a, [class*="sidebar"] button, [class*="sidebar"] a, [class*="action"] button, [class*="action"] a, button, a.btn, a[class*="button"], [role="button"], div[role="button"]';
 
-    for (const btn of candidates) {
-      const isAttrDisabled =
-        btn.hasAttribute('disabled') || btn.getAttribute('aria-disabled') === 'true';
-      const isClassDisabled = (btn.className || '').toLowerCase().includes('disabled');
-      if (isAttrDisabled || isClassDisabled) {
-        continue;
+      let candidates = root.querySelectorAll(selector);
+
+      // In live browser, also check direct document query if candidate list is empty
+      if (candidates.length === 0 && typeof document !== 'undefined') {
+        const liveElements = document.querySelectorAll(
+          'button, [role="button"], a, div[class*="btn"], div[class*="button"], div[class*="continue"], div[class*="bottom"] div, [class*="sidebar"] div'
+        );
+        candidates = [];
+        for (let i = 0; i < liveElements.length; i++) {
+          const el = liveElements[i];
+          if (el) candidates.push(wrapBrowserElement(el));
+        }
       }
-      const text = btn.textContent.toLowerCase().trim();
-      if (
-        text.includes('tiếp tục') ||
-        text.includes('mua vé') ||
-        text.includes('đặt vé') ||
-        text.includes('thanh toán') ||
-        text.includes('continue') ||
-        text.includes('checkout') ||
-        text.includes('xác nhận') ||
-        text.includes('chọn vé')
-      ) {
-        // Avoid clicking a disabled prompt button like "vui lòng chọn vé"
+
+      for (const btn of candidates) {
+        if (this.isElementDisabled(btn)) {
+          continue;
+        }
+        const text = btn.textContent.toLowerCase().trim();
+        // Avoid clicking a disabled prompt button like "vui lòng chọn vé" or "vui lòng trả lời"
         if (text.includes('vui lòng')) {
           continue;
         }
 
-        this.logger?.info('Clicking next step / continue button', { buttonText: text });
-        if (typeof (btn as MutableDOMElement).click === 'function') {
-          (btn as MutableDOMElement).click!();
-        }
-        const nativeEl = (btn.rawElement || btn) as Element;
         if (
-          typeof window !== 'undefined' &&
-          typeof window.MouseEvent === 'function' &&
-          'dispatchEvent' in (nativeEl as object)
+          text.includes('tiếp tục') ||
+          text.includes('mua vé') ||
+          text.includes('đặt vé') ||
+          text.includes('thanh toán') ||
+          text.includes('continue') ||
+          text.includes('checkout') ||
+          text.includes('xác nhận') ||
+          text.includes('proceed') ||
+          text.includes('chọn vé')
         ) {
-          nativeEl.dispatchEvent(
-            new MouseEvent('click', { bubbles: true, cancelable: true })
-          );
+          this.logger?.info('Clicking next step / continue button', {
+            buttonText: text,
+            tagName: btn.tagName,
+            attempt,
+          });
+
+          this.clickElement(btn);
+          this.navigationPending = true;
+          await new Promise((r) => setTimeout(r, 600));
+          return true;
         }
-        await new Promise((r) => setTimeout(r, 600));
-        return true;
+      }
+
+      // If not yet available/enabled, wait 250ms before next attempt
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 250));
       }
     }
 
+    this.logger?.warn('Proceed / continue button not found or remained disabled after polling');
     return false;
   }
 
