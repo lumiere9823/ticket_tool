@@ -554,6 +554,13 @@ export class PurchaseStateMachine {
         break;
 
       case PurchaseState.AREA_SELECTION_REQUIRED:
+        if (event.type === 'EVENT_DETECTED') {
+          if (event.eventId) this._eventId = event.eventId;
+          return this.performTransition(PurchaseState.EVENT_DETECTED);
+        }
+        if (event.type === 'SHOWING_DETECTED') {
+          return this.performTransition(PurchaseState.SHOWING_DETECTED);
+        }
         if (event.type === 'SELECTING_AREA') {
           return this.performTransition(PurchaseState.SELECTING_AREA);
         }
@@ -569,6 +576,13 @@ export class PurchaseStateMachine {
         break;
 
       case PurchaseState.SELECTING_AREA:
+        if (event.type === 'EVENT_DETECTED') {
+          if (event.eventId) this._eventId = event.eventId;
+          return this.performTransition(PurchaseState.EVENT_DETECTED);
+        }
+        if (event.type === 'SHOWING_DETECTED') {
+          return this.performTransition(PurchaseState.SHOWING_DETECTED);
+        }
         if (event.type === 'SEAT_MAP_DETECTED') {
           return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
         }
@@ -581,6 +595,13 @@ export class PurchaseStateMachine {
         break;
 
       case PurchaseState.SEAT_MAP_DETECTED:
+        if (event.type === 'EVENT_DETECTED') {
+          if (event.eventId) this._eventId = event.eventId;
+          return this.performTransition(PurchaseState.EVENT_DETECTED);
+        }
+        if (event.type === 'SHOWING_DETECTED') {
+          return this.performTransition(PurchaseState.SHOWING_DETECTED);
+        }
         if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
           return this.performTransition(PurchaseState.SELECTING_SEATS);
         }
@@ -598,6 +619,13 @@ export class PurchaseStateMachine {
 
       case PurchaseState.SEAT_SELECTION:
       case PurchaseState.SELECTING_SEATS:
+        if (event.type === 'EVENT_DETECTED') {
+          if (event.eventId) this._eventId = event.eventId;
+          return this.performTransition(PurchaseState.EVENT_DETECTED);
+        }
+        if (event.type === 'SHOWING_DETECTED') {
+          return this.performTransition(PurchaseState.SHOWING_DETECTED);
+        }
         if (event.type === 'SEATS_SELECTED') {
           return this.performTransition(PurchaseState.SEATS_SELECTED);
         }
@@ -624,6 +652,16 @@ export class PurchaseStateMachine {
         break;
 
       case PurchaseState.SEATS_SELECTED:
+        if (event.type === 'SEATS_SELECTED') {
+          return this.getContext();
+        }
+        if (event.type === 'EVENT_DETECTED') {
+          if (event.eventId) this._eventId = event.eventId;
+          return this.performTransition(PurchaseState.EVENT_DETECTED);
+        }
+        if (event.type === 'SHOWING_DETECTED') {
+          return this.performTransition(PurchaseState.SHOWING_DETECTED);
+        }
         if (event.type === 'BOOKING_SUMMARY_DETECTED') {
           return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
         }
@@ -727,6 +765,9 @@ export class PurchaseStateMachine {
         break;
 
       case PurchaseState.PAYMENT_GATE:
+        if (event.type === 'PAYMENT_GATE') {
+          return this.getContext();
+        }
         if (event.type === 'PAYMENT_STARTED') {
           return this.performTransition(PurchaseState.PAYMENT);
         }

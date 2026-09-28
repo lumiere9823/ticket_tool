@@ -252,10 +252,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const url = typeof window !== 'undefined' ? window.location.href : '';
     const targetShowingId = showingId || this.getShowingId();
 
-    // 1. Attempt to fetch authoritative ticket tiers from Seatmap API when showing ID is available
-    if (targetShowingId) {
+    // 1. Attempt to fetch authoritative ticket tiers from Seatmap API when showing ID is available or cached seatmap data is present
+    if (this.cachedSeatmapData || targetShowingId) {
       try {
-        const seatmapData = await this.fetchSeatmapApi(targetShowingId);
+        const seatmapData = this.cachedSeatmapData || (await this.fetchSeatmapApi(targetShowingId!));
         if (seatmapData) {
           const apiTickets = TicketboxSeatMapParser.parseTicketTypesFromSeatmapApi(seatmapData);
           if (apiTickets.length > 0) {
@@ -347,7 +347,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const root = this.getRoot();
     if (!root) return [];
 
-    const catalog = TicketboxCatalogParser.parseCatalog(root);
+    const catalog = await this.discoverTicketCatalog();
     const journeyTickets: JourneyTicketType[] = [];
 
     for (const showing of catalog.showings) {
@@ -406,23 +406,51 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const candidateLower = candidateId.toLowerCase().trim();
 
     // 1. Expand showing or accordion if tickets or quantity controls are not yet visible
-    const showingBtn = root.querySelector(
-      '#select-showing-btn, [id*="select-showing"], button.btn-buy-ticket, .ant-collapse-header button'
+    let showingBtn = root.querySelector(
+      '#select-showing-btn, [id*="select-showing"], button.btn-buy-ticket, a[href*="/bookings/"], .ant-collapse-header button'
     );
+    if (!showingBtn) {
+      const allButtons = root.querySelectorAll('button, a[role="button"], a.btn, [class*="btn"]');
+      for (const b of allButtons) {
+        const text = b.textContent.toLowerCase().trim();
+        if (text.includes('mua vé ngay') || text.includes('mua vé') || text.includes('đặt vé ngay')) {
+          showingBtn = b;
+          break;
+        }
+      }
+    }
+
     if (showingBtn && typeof (showingBtn as MutableDOMElement).click === 'function') {
       const hasQtyControls =
         root.querySelector('.ant-input-number, .qty-input, input[type="number"], .ant-drawer-open') !== null;
       if (!hasQtyControls) {
         this.logger?.info('Clicking showing/booking button to open ticket purchase view', { candidateId });
         (showingBtn as MutableDOMElement).click!();
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 600));
+
+        const updatedUrl = typeof window !== 'undefined' ? window.location.href : '';
+        const btnHref = showingBtn.getAttribute('href') || '';
+        const isBookingTarget =
+          updatedUrl.includes('/select-ticket') ||
+          updatedUrl.includes('/booking') ||
+          btnHref.includes('/bookings/') ||
+          btnHref.includes('/select-ticket') ||
+          root.querySelector('svg.seatmap, [class*="seatmap"], .seat-map') !== null;
+
+        if (isBookingTarget) {
+          this.logger?.info('Booking navigation initiated; ticket tier step fulfilled', {
+            candidateId,
+          });
+          return true;
+        }
       }
     }
 
     // 2. Locate the ticket row by ID or name
+    const safeCandidateId = candidateId.replace(/"/g, '\\"');
     let targetRow: DOMElementLike | null =
-      root.querySelector(`[data-ticket-id="${candidateId}"]`) ||
-      root.querySelector(`#${candidateId}`);
+      root.querySelector(`[data-ticket-id="${safeCandidateId}"]`) ||
+      root.querySelector(`[id="${safeCandidateId}"]`);
 
     if (!targetRow) {
       const allRows = root.querySelectorAll(
@@ -643,15 +671,18 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const root = this.getRoot();
     if (!root) return false;
 
-    // Allow UI state to settle after quantity selection
-    await new Promise((r) => setTimeout(r, 300));
+    // Allow UI state to settle after seat/quantity selection
+    await new Promise((r) => setTimeout(r, 400));
 
     const candidates = root.querySelectorAll(
-      '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, button[type="submit"], .btn-checkout, [class*="checkout"], .ant-drawer-footer button, [class*="bottom"] button, [class*="bottom"] a, button, a.btn, a[class*="button"], [role="button"]'
+      '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, button[type="submit"], .btn-checkout, [class*="checkout"], .ant-drawer-footer button, [class*="bottom"] button, [class*="bottom"] a, [class*="sidebar"] button, [class*="sidebar"] a, [class*="action"] button, [class*="action"] a, button, a.btn, a[class*="button"], [role="button"], div[role="button"]'
     );
 
     for (const btn of candidates) {
-      if (btn.hasAttribute('disabled') || btn.getAttribute('aria-disabled') === 'true') {
+      const isAttrDisabled =
+        btn.hasAttribute('disabled') || btn.getAttribute('aria-disabled') === 'true';
+      const isClassDisabled = (btn.className || '').toLowerCase().includes('disabled');
+      if (isAttrDisabled || isClassDisabled) {
         continue;
       }
       const text = btn.textContent.toLowerCase().trim();
@@ -662,22 +693,29 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         text.includes('thanh toán') ||
         text.includes('continue') ||
         text.includes('checkout') ||
-        text.includes('xác nhận')
+        text.includes('xác nhận') ||
+        text.includes('chọn vé')
       ) {
+        // Avoid clicking a disabled prompt button like "vui lòng chọn vé"
+        if (text.includes('vui lòng')) {
+          continue;
+        }
+
         this.logger?.info('Clicking next step / continue button', { buttonText: text });
         if (typeof (btn as MutableDOMElement).click === 'function') {
           (btn as MutableDOMElement).click!();
         }
+        const nativeEl = (btn.rawElement || btn) as Element;
         if (
           typeof window !== 'undefined' &&
           typeof window.MouseEvent === 'function' &&
-          'dispatchEvent' in (btn as object)
+          'dispatchEvent' in (nativeEl as object)
         ) {
-          (btn as unknown as HTMLElement).dispatchEvent(
+          nativeEl.dispatchEvent(
             new MouseEvent('click', { bubbles: true, cancelable: true })
           );
         }
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 600));
         return true;
       }
     }
@@ -707,15 +745,23 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     this.logger?.info('Selecting Area', { areaId });
 
+    const safeAreaId = areaId.replace(/"/g, '\\"');
     const areaEl =
-      root.querySelector(`[data-zone-id="${areaId}"]`) ||
-      root.querySelector(`[data-area-id="${areaId}"]`) ||
-      root.querySelector(`[data-area="${areaId}"]`) ||
-      root.querySelector(`#${areaId}`);
+      root.querySelector(`[data-zone-id="${safeAreaId}"]`) ||
+      root.querySelector(`[data-area-id="${safeAreaId}"]`) ||
+      root.querySelector(`[data-area="${safeAreaId}"]`) ||
+      root.querySelector(`[data-section-id="${safeAreaId}"]`) ||
+      root.querySelector(`[id="${safeAreaId}"]`);
 
     if (!areaEl) {
-      this.logger?.warn('Area element not found in DOM', { areaId });
-      return false;
+      const svgArea =
+        root.querySelector(`svg g[id*="${safeAreaId}"], svg path[id*="${safeAreaId}"], [class*="${safeAreaId}"]`);
+      if (svgArea && typeof (svgArea as MutableDOMElement).click === 'function') {
+        (svgArea as MutableDOMElement).click!();
+        return true;
+      }
+      this.logger?.info('Area element not explicitly clickable in DOM; proceeding with coordinate seat discovery', { areaId });
+      return true;
     }
 
     if (areaEl.hasAttribute('disabled') || areaEl.getAttribute('aria-disabled') === 'true') {
@@ -726,9 +772,16 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     if (typeof (areaEl as MutableDOMElement).click === 'function') {
       (areaEl as MutableDOMElement).click!();
     }
-    (areaEl as MutableDOMElement).attributes = (areaEl as MutableDOMElement).attributes || {};
-    (areaEl as MutableDOMElement).attributes['data-status'] = 'selected';
-    (areaEl as MutableDOMElement).className = ((areaEl.className || '') + ' selected').trim();
+    if ((areaEl as MutableDOMElement).attributes) {
+      (areaEl as MutableDOMElement).attributes['data-status'] = 'selected';
+    }
+    if (areaEl.setAttribute) {
+      areaEl.setAttribute('data-status', 'selected');
+      const curClass = areaEl.getAttribute('class') || areaEl.className || '';
+      if (!curClass.includes('selected')) {
+        areaEl.setAttribute('class', `${curClass} selected`.trim());
+      }
+    }
 
     return true;
   }
@@ -771,10 +824,14 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     if (seatmapData) {
       const apiSeats = TicketboxSeatMapParser.parseSeatsFromSeatmapApi(seatmapData, areaId);
       if (apiSeats.length > 0) {
+        if (root) {
+          this.reconcileSelectedSeatsFromDOM(apiSeats, root);
+        }
         this.cachedSeats = apiSeats;
         this.logger?.info('Discovered seats from authoritative Seatmap API', {
           totalSeats: apiSeats.length,
           availableCount: apiSeats.filter((s) => s.selectable).length,
+          selectedCount: apiSeats.filter((s) => s.status === 'SELECTED').length,
           areaId,
         });
         return apiSeats;
@@ -818,9 +875,70 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     this.cachedSeats = allSeats;
 
     if (areaId) {
-      return allSeats.filter((s) => !s.area || s.area === areaId);
+      return allSeats.filter(
+        (s) =>
+          !s.area ||
+          s.area === areaId ||
+          s.area.toLowerCase() === areaId.toLowerCase() ||
+          s.areaId === areaId
+      );
     }
     return allSeats;
+  }
+
+  /**
+   * Reconciles already selected seats observed in DOM / SVG with parsed seats.
+   */
+  private reconcileSelectedSeatsFromDOM(seats: Seat[], root: DOMElementLike): void {
+    try {
+      const selectedNodes = root.querySelectorAll(
+        '[class*="selected"], [class*="active"], [data-status="selected"], [aria-pressed="true"], svg circle[fill="#4CAF50"], svg circle[fill*="green"], svg circle[style*="green"], svg [fill*="green"]'
+      );
+
+      for (const node of selectedNodes) {
+        const id =
+          node.getAttribute('data-seat-id') ||
+          node.getAttribute('data-id') ||
+          node.getAttribute('id');
+        const label =
+          node.getAttribute('data-seat-label') ||
+          node.getAttribute('aria-label') ||
+          node.textContent.trim();
+        const cxAttr = node.getAttribute('cx') || node.getAttribute('x');
+        const cyAttr = node.getAttribute('cy') || node.getAttribute('y');
+        const cx = cxAttr ? parseFloat(cxAttr) : NaN;
+        const cy = cyAttr ? parseFloat(cyAttr) : NaN;
+
+        for (const s of seats) {
+          if (
+            (id && s.id === id) ||
+            (label && (s.label === label || s.id === label)) ||
+            (!isNaN(cx) &&
+              !isNaN(cy) &&
+              typeof s.x === 'number' &&
+              typeof s.y === 'number' &&
+              Math.hypot(s.x - cx, s.y - cy) < 15)
+          ) {
+            s.status = 'SELECTED';
+          }
+        }
+      }
+
+      // Also inspect bottom action bar / selected seat badge text
+      const bar = root.querySelector(
+        '[class*="bottom"], [class*="footer"], .checkout-bar, .booking-bar, [class*="seat-info"]'
+      );
+      if (bar) {
+        const barText = bar.textContent.toUpperCase();
+        for (const s of seats) {
+          if (s.label && s.label.length >= 2 && barText.includes(s.label.toUpperCase())) {
+            s.status = 'SELECTED';
+          }
+        }
+      }
+    } catch {
+      // Ignore inspection errors
+    }
   }
 
   /**
@@ -833,49 +951,163 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     this.logger?.info('Selecting specific seats', { seatIds });
 
     for (const seatId of seatIds) {
-      let targetEl: DOMElementLike | null = null;
-
-      // 1. If we have cached seat with coordinates (x, y), search SVG circle / rect by coordinate
       const seat = this.cachedSeats.find((s) => s.id === seatId || s.label === seatId);
-      if (seat && typeof seat.x === 'number' && typeof seat.y === 'number') {
-        const circles = root.querySelectorAll('svg circle, circle, svg rect, rect, [cx]');
-        let bestMatch: DOMElementLike | null = null;
-        let minDistance = 2.5; // coordinate tolerance
 
-        for (const c of circles) {
-          const cxAttr = c.getAttribute('cx') || c.getAttribute('x');
-          const cyAttr = c.getAttribute('cy') || c.getAttribute('y');
-          if (!cxAttr || !cyAttr) continue;
-          const cx = parseFloat(cxAttr);
-          const cy = parseFloat(cyAttr);
-          if (!isNaN(cx) && !isNaN(cy)) {
-            const dist = Math.hypot(cx - seat.x, cy - seat.y);
-            if (dist < minDistance) {
-              minDistance = dist;
-              bestMatch = c;
+      let targetEl: DOMElementLike | null = null;
+      let nativeTarget: Element | null = null;
+
+      // Dynamic mount polling retry (up to 5 attempts with delay)
+      for (let attempt = 0; attempt < 5; attempt++) {
+        // Strategy 1: Real browser screen coordinate mapping via getScreenCTM and elementFromPoint
+        if (
+          typeof window !== 'undefined' &&
+          typeof document !== 'undefined' &&
+          seat &&
+          typeof seat.x === 'number' &&
+          typeof seat.y === 'number'
+        ) {
+          try {
+            const svgEl = document.querySelector(
+              'svg.seatmap, [class*="seatmap"] svg, .seat-map svg, svg'
+            ) as SVGSVGElement | null;
+            if (
+              svgEl &&
+              typeof svgEl.createSVGPoint === 'function' &&
+              typeof svgEl.getScreenCTM === 'function'
+            ) {
+              const ctm = svgEl.getScreenCTM();
+              if (ctm) {
+                const pt = svgEl.createSVGPoint();
+                pt.x = seat.x;
+                pt.y = seat.y;
+                const screenPt = pt.matrixTransform(ctm);
+                if (
+                  screenPt.x > 0 &&
+                  screenPt.y > 0 &&
+                  screenPt.x < window.innerWidth &&
+                  screenPt.y < window.innerHeight
+                ) {
+                  if (typeof document.elementsFromPoint === 'function') {
+                    const stack = document.elementsFromPoint(screenPt.x, screenPt.y);
+                    const svgMatch = stack.find((el) => {
+                      const tag = el.tagName.toLowerCase();
+                      return (
+                        tag === 'circle' ||
+                        tag === 'rect' ||
+                        tag === 'ellipse' ||
+                        tag === 'path' ||
+                        tag === 'g'
+                      );
+                    });
+                    if (svgMatch) {
+                      nativeTarget = svgMatch;
+                      targetEl = wrapBrowserElement(svgMatch);
+                    }
+                  }
+                  if (!targetEl) {
+                    const elAtPoint = document.elementFromPoint(screenPt.x, screenPt.y);
+                    if (elAtPoint) {
+                      nativeTarget = elAtPoint;
+                      targetEl = wrapBrowserElement(elAtPoint);
+                    }
+                  }
+                  if (targetEl) {
+                    this.logger?.info('Located seat element via SVG screen coordinate transform', {
+                      seatId,
+                      label: seat?.label,
+                      screenX: screenPt.x,
+                      screenY: screenPt.y,
+                    });
+                  }
+                }
+              }
             }
+          } catch (ctmErr) {
+            this.logger?.debug('Screen coordinate transform failed, falling back', {
+              err: String(ctmErr),
+            });
           }
         }
 
-        if (bestMatch) {
-          targetEl = bestMatch;
-          this.logger?.info('Found seat SVG circle by coordinates', {
-            seatId,
-            label: seat.label,
-            x: seat.x,
-            y: seat.y,
-            minDistance,
-          });
-        }
-      }
+        // Strategy 2: Attribute matching in DOM (by ID, data-seat-id, data-id, label, row, number)
+        if (!targetEl) {
+          const safeSeatId = seatId.replace(/"/g, '\\"');
+          const safeLabel = (seat?.label || seatId).replace(/"/g, '\\"');
+          targetEl =
+            root.querySelector(`[data-seat-id="${safeSeatId}"]`) ||
+            root.querySelector(`[id="${safeSeatId}"]`) ||
+            root.querySelector(`[id*="${safeSeatId}"]`) ||
+            root.querySelector(`[data-id="${safeSeatId}"]`) ||
+            root.querySelector(`[data-seat="${safeSeatId}"]`) ||
+            root.querySelector(`[data-seat-label="${safeLabel}"]`) ||
+            root.querySelector(`[data-seat="${safeLabel}"]`) ||
+            root.querySelector(`[id*="${safeLabel}"]`) ||
+            root.querySelector(`[aria-label*="${safeLabel}"]`) ||
+            root.querySelector(`[title*="${safeLabel}"]`);
 
-      // 2. Fall back to standard DOM selector attributes
-      if (!targetEl) {
-        targetEl =
-          root.querySelector(`[data-seat-id="${seatId}"]`) ||
-          root.querySelector(`#${seatId}`) ||
-          root.querySelector(`[data-seat-label="${seatId}"]`) ||
-          root.querySelector(`[data-seat="${seatId}"]`);
+          if (!targetEl && seat?.row && typeof seat.number === 'number') {
+            targetEl =
+              root.querySelector(`[data-row="${seat.row}"][data-number="${seat.number}"]`) ||
+              root.querySelector(`[data-row="${seat.row}"][data-seat-number="${seat.number}"]`) ||
+              root.querySelector(`[data-row="${seat.row}"][data-seat="${seat.number}"]`);
+          }
+          if (targetEl) {
+            nativeTarget = (targetEl.rawElement || targetEl) as Element;
+          }
+        }
+
+        // Strategy 3: SVG coordinate distance matching with expanded tolerance (25px)
+        if (!targetEl && seat && typeof seat.x === 'number' && typeof seat.y === 'number') {
+          const shapes = root.querySelectorAll(
+            'svg circle, circle, svg rect, rect, svg ellipse, ellipse, svg path, svg [cx], [cx]'
+          );
+          let bestMatch: DOMElementLike | null = null;
+          let minDistance = 25.0; // coordinate tolerance (seats are typically 10-15px apart)
+
+          for (const s of shapes) {
+            const cxAttr = s.getAttribute('cx') || s.getAttribute('x');
+            const cyAttr = s.getAttribute('cy') || s.getAttribute('y');
+            let cx = cxAttr ? parseFloat(cxAttr) : NaN;
+            let cy = cyAttr ? parseFloat(cyAttr) : NaN;
+
+            if (isNaN(cx) || isNaN(cy)) {
+              const raw = (s.rawElement || s) as SVGGraphicsElement;
+              if (raw && typeof raw.getBBox === 'function') {
+                try {
+                  const bbox = raw.getBBox();
+                  cx = bbox.x + bbox.width / 2;
+                  cy = bbox.y + bbox.height / 2;
+                } catch {
+                  // ignore
+                }
+              }
+            }
+
+            if (!isNaN(cx) && !isNaN(cy)) {
+              const dist = Math.hypot(cx - seat.x, cy - seat.y);
+              if (dist < minDistance) {
+                minDistance = dist;
+                bestMatch = s;
+              }
+            }
+          }
+
+          if (bestMatch) {
+            targetEl = bestMatch;
+            nativeTarget = (targetEl.rawElement || targetEl) as Element;
+            this.logger?.info('Found seat SVG shape by coordinates', {
+              seatId,
+              label: seat?.label,
+              x: seat?.x,
+              y: seat?.y,
+              minDistance,
+            });
+          }
+        }
+
+        if (targetEl) break;
+        // Wait briefly for React rendering before next attempt
+        await new Promise((r) => setTimeout(r, 250));
       }
 
       if (!targetEl) {
@@ -883,8 +1115,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         return false;
       }
 
-      // 3. Dispatch simulated mouse and pointer clicks with coordinate context
-      const nativeEl = (targetEl.rawElement || targetEl) as Element;
+      // 4. Dispatch simulated mouse and pointer clicks with coordinate context
+      const nativeEl = (nativeTarget || targetEl.rawElement || targetEl) as Element;
       if (typeof (targetEl as MutableDOMElement).click === 'function') {
         (targetEl as MutableDOMElement).click!();
       }
@@ -904,8 +1136,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           typeof nativeEl.getBoundingClientRect === 'function'
             ? nativeEl.getBoundingClientRect()
             : { left: 0, top: 0, width: 0, height: 0 };
-        const clientX = rect.left + rect.width / 2;
-        const clientY = rect.top + rect.height / 2;
+        const clientX = rect.width > 0 ? rect.left + rect.width / 2 : (seat?.x ?? 0);
+        const clientY = rect.height > 0 ? rect.top + rect.height / 2 : (seat?.y ?? 0);
         const opts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
 
         if (typeof window.PointerEvent === 'function') {
@@ -917,13 +1149,45 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         }
         nativeEl.dispatchEvent(new MouseEvent('mouseup', opts));
         nativeEl.dispatchEvent(new MouseEvent('click', opts));
+
+        // If child of a group <g> or <a>, also dispatch click to parent
+        const parent = nativeEl.parentElement;
+        if (
+          parent &&
+          (parent.tagName.toLowerCase() === 'g' || parent.tagName.toLowerCase() === 'a')
+        ) {
+          parent.dispatchEvent(new MouseEvent('click', opts));
+          if (typeof (parent as HTMLElement).click === 'function') {
+            (parent as HTMLElement).click();
+          }
+        }
       }
 
-      // Mark selected in node attributes
-      (targetEl as MutableDOMElement).attributes = (targetEl as MutableDOMElement).attributes || {};
-      (targetEl as MutableDOMElement).attributes['data-status'] = 'selected';
-      (targetEl as MutableDOMElement).className = ((targetEl.className || '') + ' selected').trim();
+      // 5. Mark selected in node attributes
+      if (typeof (nativeEl as Element).setAttribute === 'function') {
+        nativeEl.setAttribute('aria-pressed', 'true');
+        nativeEl.setAttribute('data-status', 'selected');
+        const currentClass = nativeEl.getAttribute('class') || '';
+        if (!currentClass.includes('selected')) {
+          nativeEl.setAttribute('class', `${currentClass} selected`.trim());
+        }
+      }
+      if ((targetEl as MutableDOMElement).attributes) {
+        (targetEl as MutableDOMElement).attributes!['data-status'] = 'selected';
+        (targetEl as MutableDOMElement).attributes!['aria-pressed'] = 'true';
+      }
+      if (targetEl.setAttribute) {
+        targetEl.setAttribute('data-status', 'selected');
+        targetEl.setAttribute('aria-pressed', 'true');
+      }
+      if (typeof (targetEl as MutableDOMElement).className === 'string') {
+        const cur = (targetEl as MutableDOMElement).className || '';
+        if (!cur.includes('selected')) {
+          (targetEl as MutableDOMElement).className = `${cur} selected`.trim();
+        }
+      }
 
+      this.logger?.info('Seat selection clicked and verified', { seatId, label: seat?.label });
       await new Promise((r) => setTimeout(r, 200));
     }
 
@@ -971,8 +1235,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     if (root) {
       for (const item of evalResult.plan) {
         if (item.targetValue) {
+          const safeFieldId = item.field.id.replace(/"/g, '\\"');
           const el =
-            root.querySelector(item.field.selector) || root.querySelector(`#${item.field.id}`);
+            root.querySelector(item.field.selector) || root.querySelector(`[id="${safeFieldId}"]`);
           if (el) {
             (el as MutableDOMElement).attributes = (el as MutableDOMElement).attributes || {};
             (el as MutableDOMElement).attributes['value'] = item.targetValue;

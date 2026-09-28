@@ -198,6 +198,7 @@ async function performDiscoveryScan(): Promise<void> {
  */
 async function attemptBookingJourney(): Promise<void> {
   if (!isMonitoringActive || isExecutingJourney) return;
+  isExecutingJourney = true;
 
   try {
     const config = await storage.getConfiguration();
@@ -253,7 +254,6 @@ async function attemptBookingJourney(): Promise<void> {
       quantity: preferences.quantity,
     });
 
-    isExecutingJourney = true;
     const tracker = new LatencyTracker(stateMachine.attemptId || `attempt_${Date.now()}`, logger);
     tracker.recordT0(Date.now(), true);
 
@@ -271,7 +271,8 @@ async function attemptBookingJourney(): Promise<void> {
       result.finalState === PurchaseState.CONSENT_REQUIRED ||
       result.finalState === PurchaseState.HELD ||
       result.finalState === PurchaseState.CONFIRMED ||
-      result.finalState === PurchaseState.STOPPED
+      result.finalState === PurchaseState.STOPPED ||
+      result.finalState === PurchaseState.FAILED
     ) {
       logger.info(`Journey reached target state ${result.finalState}. Halting monitoring loop.`);
       isMonitoringActive = false;
@@ -326,7 +327,7 @@ async function checkRehydration(): Promise<void> {
       });
       isMonitoringActive = true;
       scheduleDiscoveryScan(200);
-      setTimeout(attemptBookingJourney, 600);
+      setTimeout(attemptBookingJourney, 800);
       if (!monitoringTimer) {
         monitoringTimer = window.setInterval(() => {
           if (!isExtensionContextValid()) {
@@ -404,7 +405,6 @@ messageBus.subscribe((message: ExtensionMessage) => {
       }
       isMonitoringActive = true;
       performDiscoveryScan();
-      setTimeout(attemptBookingJourney, 400);
       if (!monitoringTimer) {
         monitoringTimer = window.setInterval(() => {
           if (!isExtensionContextValid()) {
@@ -437,7 +437,6 @@ messageBus.subscribe((message: ExtensionMessage) => {
       }
       isMonitoringActive = true;
       performDiscoveryScan();
-      setTimeout(attemptBookingJourney, 400);
       if (!monitoringTimer) {
         monitoringTimer = window.setInterval(() => {
           if (!isExtensionContextValid()) {

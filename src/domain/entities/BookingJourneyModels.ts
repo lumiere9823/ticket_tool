@@ -53,12 +53,14 @@ export interface Seat {
   row: string;
   number: number;
   area: string;
+  areaId?: string | undefined;
   status: SeatStatus;
   selectable: boolean;
   price?: number | undefined;
   element?: unknown;
   x?: number | undefined;
   y?: number | undefined;
+  position?: number | undefined;
 }
 
 export interface SeatArea {

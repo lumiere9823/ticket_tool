@@ -420,14 +420,18 @@ export class TicketboxSeatMapParser {
     let targetSections = sections;
     if (normTarget) {
       const matched = sections.filter((s) => {
+        const secId = String(s.id || '');
         const ttName = s.ticketType?.name?.toLowerCase() || '';
         const ttId = String(s.ticketType?.id || '');
         const secName = s.name.toLowerCase();
         return (
-          ttName === normTarget ||
+          secId === normTarget ||
           ttId === normTarget ||
           secName === normTarget ||
-          (normTarget.length > 2 && (ttName.includes(normTarget) || normTarget.includes(ttName)))
+          (ttName.length > 0 && ttName === normTarget) ||
+          (normTarget.length > 2 &&
+            ((ttName.length > 0 && (ttName.includes(normTarget) || normTarget.includes(ttName))) ||
+              (secName.length > 0 && (secName.includes(normTarget) || normTarget.includes(secName)))))
         );
       });
       if (matched.length > 0) {
@@ -450,11 +454,13 @@ export class TicketboxSeatMapParser {
             row: row.name,
             number: num,
             area: section.name,
+            areaId: String(section.id),
             status: isAvailable ? 'AVAILABLE' : 'UNAVAILABLE',
             selectable: isAvailable,
             price: section.ticketType?.price,
             x: seat.x,
             y: seat.y,
+            position: seat.position,
           });
         }
       }

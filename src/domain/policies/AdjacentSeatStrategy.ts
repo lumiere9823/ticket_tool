@@ -37,8 +37,13 @@ export class AdjacentSeatStrategy {
       if (seat.status !== 'AVAILABLE' || !seat.selectable) {
         return false;
       }
-      if (targetArea && seat.area && seat.area !== targetArea) {
-        return false;
+      if (targetArea) {
+        const matchesArea =
+          seat.area === targetArea ||
+          seat.area?.toLowerCase() === targetArea.toLowerCase() ||
+          (seat.areaId &&
+            (seat.areaId === targetArea || seat.areaId.toLowerCase() === targetArea.toLowerCase()));
+        if (!matchesArea) return false;
       }
       return true;
     });
@@ -79,14 +84,23 @@ export class AdjacentSeatStrategy {
     for (const group of seatsByAreaAndRow.values()) {
       if (group.length < quantity) continue;
 
-      // Sort seats by numeric number
-      group.sort((a, b) => a.number - b.number);
+      // Sort seats by position index if available, or horizontal coordinate x, or numeric number
+      const hasPositions = group.every((s) => typeof s.position === 'number');
+      const hasCoords = group.every((s) => typeof s.x === 'number');
+
+      if (hasPositions) {
+        group.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      } else if (hasCoords) {
+        group.sort((a, b) => (a.x ?? 0) - (b.x ?? 0));
+      } else {
+        group.sort((a, b) => a.number - b.number);
+      }
 
       // Slide window of length `quantity`
       for (let i = 0; i <= group.length - quantity; i++) {
         let isContiguous = true;
         for (let j = 0; j < quantity - 1; j++) {
-          if (group[i + j + 1]!.number !== group[i + j]!.number + 1) {
+          if (!this.areContiguous(group[i + j]!, group[i + j + 1]!)) {
             isContiguous = false;
             break;
           }
@@ -163,5 +177,30 @@ export class AdjacentSeatStrategy {
       default:
         return candidates;
     }
+  }
+
+  private static areContiguous(s1: Seat, s2: Seat): boolean {
+    // 1. If explicit row position index is provided (e.g. from Seatmap API)
+    if (typeof s1.position === 'number' && typeof s2.position === 'number') {
+      return Math.abs(s2.position - s1.position) === 1;
+    }
+
+    // 2. If SVG coordinates are present on the same horizontal row
+    if (
+      typeof s1.x === 'number' &&
+      typeof s2.x === 'number' &&
+      typeof s1.y === 'number' &&
+      typeof s2.y === 'number' &&
+      Math.abs(s1.y - s2.y) <= 5
+    ) {
+      return Math.abs(s2.x - s1.x) <= 25;
+    }
+
+    // 3. Standard sequential seat numbering (1, 2, 3...)
+    if (s2.number === s1.number + 1) {
+      return true;
+    }
+
+    return false;
   }
 }

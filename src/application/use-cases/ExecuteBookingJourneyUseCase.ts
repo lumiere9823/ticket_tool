@@ -33,6 +33,10 @@ export class ExecuteBookingJourneyUseCase {
     private readonly logger: LoggerPort
   ) {}
 
+  private getState(): PurchaseState {
+    return this.stateMachine.state;
+  }
+
   public async execute(
     preferences: BookingPreferences,
     latencyTracker?: LatencyTracker
@@ -46,10 +50,24 @@ export class ExecuteBookingJourneyUseCase {
       },
     });
 
+    const currentState = this.getState();
     if (
-      this.stateMachine.state === PurchaseState.FAILED ||
-      this.stateMachine.state === PurchaseState.STOPPED ||
-      this.stateMachine.state === PurchaseState.CONFIRMED
+      currentState === PurchaseState.PAYMENT_GATE ||
+      currentState === PurchaseState.CONFIRMED ||
+      currentState === PurchaseState.HELD ||
+      currentState === PurchaseState.CONSENT_REQUIRED
+    ) {
+      this.logger.info(`State machine already in target state ${currentState}. Halting.`);
+      return {
+        success: true,
+        finalState: currentState,
+        requiresUserAction: true,
+      };
+    }
+
+    if (
+      currentState === PurchaseState.FAILED ||
+      currentState === PurchaseState.STOPPED
     ) {
       try {
         this.stateMachine.transition({ type: 'RESET_REQUESTED' });
@@ -64,6 +82,38 @@ export class ExecuteBookingJourneyUseCase {
     let lastError: unknown;
 
     while (retries <= this.MAX_RETRIES) {
+      if (retries > 0) {
+        const retryState = this.getState();
+        if (
+          retryState === PurchaseState.PAYMENT_GATE ||
+          retryState === PurchaseState.CONFIRMED ||
+          retryState === PurchaseState.HELD ||
+          retryState === PurchaseState.CONSENT_REQUIRED
+        ) {
+          this.logger.info(
+            `Target state ${retryState} reached during journey. Halting retries.`
+          );
+          return {
+            success: true,
+            finalState: retryState,
+            requiresUserAction: true,
+          };
+        }
+
+        try {
+          if (
+            retryState !== PurchaseState.STOPPED &&
+            retryState !== PurchaseState.FAILED
+          ) {
+            this.stateMachine.transition({ type: 'STOP_REQUESTED', reason: 'Journey retry reset' });
+          }
+          this.stateMachine.transition({ type: 'RESET_REQUESTED' });
+          this.stateMachine.transition({ type: 'ARM' });
+          this.stateMachine.transition({ type: 'MONITORING_STARTED' });
+        } catch {
+          // ignore
+        }
+      }
       try {
         return await this.runJourney(preferences, latencyTracker);
       } catch (err: unknown) {
@@ -102,6 +152,9 @@ export class ExecuteBookingJourneyUseCase {
             error: errMsg,
           };
         }
+
+        // Delay before retry to allow DOM / React state to settle
+        await new Promise((r) => setTimeout(r, 400 * retries));
 
         // Return to ticket discovery on stale element / DOM refresh
         if (
@@ -318,11 +371,22 @@ export class ExecuteBookingJourneyUseCase {
         const areas = await this.adapter.discoverAreas();
         if (areas.length > 0) {
           this.stateMachine.transition({ type: 'AREA_SELECTION_REQUIRED' });
-          const targetArea = areas.find((a) => a.selectable && a.availability === 'AVAILABLE');
+          const matchingArea = areas.find(
+            (a) =>
+              (a.name.toLowerCase() === chosenTicket.name.toLowerCase() ||
+                a.id === chosenTicket.id ||
+                a.name.toLowerCase().includes(chosenTicket.name.toLowerCase()) ||
+                chosenTicket.name.toLowerCase().includes(a.name.toLowerCase())) &&
+              a.selectable &&
+              a.availability === 'AVAILABLE'
+          );
+          const targetArea =
+            matchingArea || areas.find((a) => a.selectable && a.availability === 'AVAILABLE');
+
           if (!targetArea) {
             throw new BookingError({
               code: 'NO_AVAILABLE_SEATS',
-              message: 'No available seat areas found',
+              message: `No available seat areas found matching '${chosenTicket.name}'`,
               state: this.stateMachine.state,
               recoverable: false,
             });
@@ -348,8 +412,9 @@ export class ExecuteBookingJourneyUseCase {
       // B. Seat Discovery
       const tSeatDiscStart = Date.now();
       this.stateMachine.transition({ type: 'SEAT_MAP_DETECTED' });
+      const targetAreaOrName = currentSelection.areaId || currentSelection.areaName || chosenTicket.name;
       const availableSeats = this.adapter.discoverSeats
-        ? await this.adapter.discoverSeats(currentSelection.areaId ?? undefined)
+        ? await this.adapter.discoverSeats(targetAreaOrName)
         : [];
       latencyTracker?.recordSeatDiscovery(Date.now() - tSeatDiscStart);
 

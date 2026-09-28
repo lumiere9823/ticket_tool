@@ -158,13 +158,13 @@ Until verified runtime evidence is captured, reviewed, and approved during Phase
 
 ---
 
-### Record E-002 — Inventory Delivery Mechanism
+### Record E-002 — Inventory Delivery Mechanism (Seated Shows)
 
-- **Observation:** Live ticket availability signals during sale opening.
-- **Evidence:** `[TBD — Requires live DevTools network capture during active sale]`
-- **Interpretation:** Unknown whether inventory is pushed via WebSocket/SSE, fetched via REST polling, or embedded into initial HTML hydration payload.
-- **Confidence:** **TBD**
-- **Implementation Consequence:** `TicketboxPageAdapter.getInventoryState()` must remain in passive discovery mode until the authoritative transport is captured.
+- **Observation:** Live ticket availability signals and seat inventory delivery during booking.
+- **Evidence:** Authoritative REST endpoint observed and verified: `GET https://api-v2.ticketbox.vn/event/api/v1/events/showings/{showingId}/seatmap`. Captured from event 26578 showing `81077997936830` ("TỪ ĐÂY TỪ NAY: PHUCIUOI"), HTTP 200 OK. JSON schema provides complete section hierarchy, ticket tiers (`ticketType`), rows, and seat objects with `x`, `y` coordinates and discrete numeric status codes.
+- **Interpretation:** Ticketbox uses authoritative REST API polling/fetching for seated events rather than WebSocket/SSE. Inventory state for individual seats is explicitly reported per seat: `status: 1` = Available ("Đang trống", white circle in UI), `status: 4` = Unavailable/Occupied ("Không chọn được", red circle in UI). Tier-level status is confirmed via `ticketType.status` (`"book_now"` vs `"sold_out"`).
+- **Confidence:** **VERIFIED**
+- **Implementation Consequence:** `TicketboxJourneyAdapter.fetchSeatmapApi()` and `TicketboxSeatMapParser` parse ticket types, seat availability, and SVG coordinates directly from this payload with zero reliance on DOM screen scraping.
 
 ---
 
@@ -241,10 +241,10 @@ Until verified runtime evidence is captured, reviewed, and approved during Phase
 ### Record E-010 — Seated vs Standing Classification & Seat-Map Invariants
 
 - **Observation:** Events have standing zones (free standing) or seated zones with visual interactive seat maps.
-- **Evidence:** Presence of `[data-seat-map]`, `.seat-map`, `canvas`, `svg.seatmap`, seat coordinate grids, or seat selection buttons.
-- **Interpretation:** The presence of a seat map container does NOT indicate seat availability. If a seated zone has zero available seats, availability evaluates to `SOLD_OUT`. Automating seat clicks or coordinate selection remains **BLOCKED_BY_DISCOVERY**.
-- **Confidence:** **OBSERVED** (Layout) / **BLOCKED_BY_DISCOVERY** (Seat selection)
-- **Implementation Consequence:** `TicketboxPageAdapter.detectSeatMap()` detects presence; `selectSeats()` returns `false` with `BLOCKED_BY_DISCOVERY`.
+- **Evidence:** Presence of `[data-seat-map]`, `.seat-map`, `canvas`, `svg.seatmap`, seat coordinate grids, or seat selection buttons. Live API capture (`GET /event/api/v1/events/showings/{showingId}/seatmap`) provides precise SVG canvas dimensions, section bounding boxes, and seat coordinates `(x, y)`.
+- **Interpretation:** The presence of a seat map container does NOT indicate seat availability. Individual seat availability is determined by `seat.status === 1` ("Đang trống" / white dot in UI). `seat.status === 4` indicates booked/locked seats ("Không chọn được" / red dot in UI). Tier-level availability is reflected by `ticketType.status === "book_now"`. If a seated zone has zero available seats, availability evaluates to `SOLD_OUT`. Automating seat clicks or coordinate selection requires verified target coordinates from the API.
+- **Confidence:** **VERIFIED** (API schema, coordinates, & seat status) / **OBSERVED** (DOM SVG elements)
+- **Implementation Consequence:** `TicketboxSeatMapParser.parseSeatsFromSeatmapApi()` parses seats with exact `(x, y)` coordinates and availability status. `TicketboxJourneyAdapter.selectSpecificSeats()` selects target SVG elements matching seat coordinates.
 
 ---
 
@@ -258,12 +258,31 @@ Until verified runtime evidence is captured, reviewed, and approved during Phase
 
 ---
 
+### Record E-012 — Authoritative Seatmap REST API Contract
+
+- **Observation:** Live backend API delivering interactive SVG seat map data and real-time seat availability.
+- **Evidence:** `GET https://api-v2.ticketbox.vn/event/api/v1/events/showings/{showingId}/seatmap` returns HTTP 200 OK with schema:
+  - `data.result.sections`: Array of venue sections (e.g. stage, zones).
+  - `section.ticketType`: Tier information (`id`, `name`, `price`, `status`: `"book_now"` | `"sold_out"`, `minQtyPerOrder`, `maxQtyPerOrder`, `color`).
+  - `section.rows`: Row array (`id`, `name`).
+  - `row.seats`: Seat array (`id`, `name`, `status`: `1` (Available / Đang trống) | `4` (Unavailable / Không chọn được), `x`, `y` coordinates).
+- **Interpretation:**
+  1. `seat.status === 1`: Available ("Đang trống", white dot in UI).
+  2. `seat.status === 4`: Unavailable ("Không chọn được", red dot in UI).
+  3. `ticketType.status === "book_now"`: On sale / Available.
+  4. `ticketType.status === "sold_out"`: Sold out.
+  5. Coordinates `(seat.x, seat.y)` map directly to SVG seat element centers (`<circle cx="..." cy="...">`).
+- **Confidence:** **VERIFIED**
+- **Implementation Consequence:** `TicketboxSeatMapParser.parseTicketTypesFromSeatmapApi()`, `parseSeatsFromSeatmapApi()`, and `parseAreasFromSeatmapApi()` provide 100% authoritative parsing without guessing or fragile screen scraping.
+
+---
+
 ## 4. Active Evidence Summary Table
 
 | ID        | Flow Stage    | Endpoint / Selector                  | Confidence                            | Status in Code                                             |
 | :-------- | :------------ | :----------------------------------- | :------------------------------------ | :--------------------------------------------------------- |
 | **E-001** | Event Load    | `https://ticketbox.vn/event/*`       | OBSERVED                              | `getEventState` in DiscoveryAdapter                        |
-| **E-002** | Inventory     | TBD                                  | TBD                                   | BLOCKED_BY_DISCOVERY / No blind polling                    |
+| **E-002** | Inventory     | `GET .../showings/{id}/seatmap`      | VERIFIED                              | `fetchSeatmapApi()` in JourneyAdapter & Service Worker     |
 | **E-003** | Selection     | TBD                                  | TBD                                   | BLOCKED_BY_DISCOVERY / No blind clicking                   |
 | **E-004** | Reservation   | TBD                                  | TBD                                   | BLOCKED_BY_DISCOVERY in SafeStubAdapter & DiscoveryAdapter |
 | **E-005** | Checkout      | `/checkout/*`                        | OBSERVED                              | Passive URL check                                          |
@@ -271,5 +290,6 @@ Until verified runtime evidence is captured, reviewed, and approved during Phase
 | **E-007** | Showings      | `.showing-item`, `[data-showing-id]` | OBSERVED                              | `discoverShowings()` in TicketboxDiscoveryAdapter          |
 | **E-008** | Catalog/Price | `.ticket-item`, VND text             | OBSERVED                              | `discoverTicketCatalog()` in TicketboxDiscoveryAdapter     |
 | **E-009** | Availability  | Text badges, disabled state          | OBSERVED                              | `AvailabilityEvaluator` with UNKNOWN fail-safe             |
-| **E-010** | Seated/Map    | `canvas`, `svg.seatmap`, `.seat-map` | OBSERVED (layout) / BLOCKED (actions) | `detectSeatMap()` observed; `selectSeats()` BLOCKED        |
+| **E-010** | Seated/Map    | `canvas`, `svg.seatmap`, `.seat-map` | VERIFIED (API/status) / OBSERVED (DOM)| `parseSeatsFromSeatmapApi()`; `selectSpecificSeats()`      |
 | **E-011** | Quantity      | Steppers, `min`/`max` attrs          | OBSERVED (bounds) / BLOCKED (actions) | Evaluator bounds check; `selectQuantity()` BLOCKED         |
+| **E-012** | Seatmap API   | `.../showings/{id}/seatmap`          | VERIFIED                              | `TicketboxSeatMapParser` authoritative API methods         |

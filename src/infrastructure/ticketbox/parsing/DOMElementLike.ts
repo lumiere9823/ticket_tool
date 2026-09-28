@@ -30,7 +30,10 @@ export function wrapBrowserElement(el: Element | Document): DOMElementLike {
   return {
     tagName: element.tagName ? element.tagName.toLowerCase() : 'document',
     id: element.id || undefined,
-    className: element.className || undefined,
+    className:
+      typeof element.className === 'string'
+        ? element.className
+        : (element as SVGElement).className?.baseVal || element.getAttribute('class') || undefined,
     get textContent() {
       return element.textContent || '';
     },
@@ -50,21 +53,32 @@ export function wrapBrowserElement(el: Element | Document): DOMElementLike {
       element.setAttribute(name, value);
     },
     querySelector(selector: string): DOMElementLike | null {
-      const found = element.querySelector(selector);
-      return found ? wrapBrowserElement(found) : null;
+      try {
+        const found = element.querySelector(selector);
+        return found ? wrapBrowserElement(found) : null;
+      } catch {
+        return null;
+      }
     },
     querySelectorAll(selector: string): DOMElementLike[] {
-      const list = element.querySelectorAll(selector);
-      const result: DOMElementLike[] = [];
-      for (let i = 0; i < list.length; i++) {
-        const item = list[i];
-        if (item) result.push(wrapBrowserElement(item));
+      try {
+        const list = element.querySelectorAll(selector);
+        const result: DOMElementLike[] = [];
+        for (let i = 0; i < list.length; i++) {
+          const item = list[i];
+          if (item) result.push(wrapBrowserElement(item));
+        }
+        return result;
+      } catch {
+        return [];
       }
-      return result;
     },
     click(): void {
       if (typeof (element as HTMLElement).click === 'function') {
         (element as HTMLElement).click();
+      }
+      if (typeof window !== 'undefined' && typeof window.MouseEvent === 'function') {
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       }
     },
     get value(): string {

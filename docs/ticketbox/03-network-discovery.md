@@ -147,32 +147,29 @@ product
 
 Nhưng URL/name không phải evidence cuối cùng.
 
-### Questions
+### Questions & Verified Evidence
 
 ```text
 Inventory endpoint:
-[TBD]
+https://api-v2.ticketbox.vn/event/api/v1/events/showings/{showingId}/seatmap
 
 Method:
-[TBD]
+GET
+
+Status Code:
+200 OK
 
 Update mechanism:
-[TBD]
+Model A — REST Fetch / Polling per showing session
 
 Initial load:
-[TBD]
+REST GET on booking page transition (/events/{eventId}/bookings/{showingId}/select-ticket)
 
 Polling:
-[TBD]
+Available via periodic GET request when active monitoring is enabled
 
-Push:
-[TBD]
-
-WebSocket:
-[TBD]
-
-SSE:
-[TBD]
+Push / WebSocket / SSE:
+Not observed for seatmap layout; inventory status is delivered in full snapshot payload
 ```
 
 ---
@@ -181,40 +178,24 @@ SSE:
 
 Phân loại:
 
-### Model A — Polling
+### Model A — REST Snapshot & On-Demand Polling (VERIFIED)
 
 ```text
 Client
   ↓
-GET inventory
+GET /event/api/v1/events/showings/{showingId}/seatmap
   ↓
-wait
+Response: Full JSON (sections, rows, seats, status: 1=available, 4=occupied, ticketType)
   ↓
-GET inventory
-```
-
-### Model B — Push
-
-```text
-Server
-  ↓
-WebSocket/SSE
-  ↓
-Client
-```
-
-### Model C — Hybrid
-
-```text
-Initial REST
-+
-Realtime push
+Client renders SVG canvas with seat coordinates (x, y)
 ```
 
 ### Result
 
 ```text
-[TBD]
+Status: VERIFIED
+Confidence: VERIFIED
+Evidence: Live DevTools capture from event 26578, showing 81077997936830 ("TỪ ĐÂY TỪ NAY: PHUCIUOI").
 ```
 
 ---

@@ -72,7 +72,7 @@ export class TicketboxFormParser {
         type: fieldType,
         required: isRequired,
         value: el.getAttribute('value') || '',
-        selector: el.id ? `#${el.id}` : `[name="${el.getAttribute('name')}"]`,
+        selector: el.id ? `[id="${el.id}"]` : `[name="${el.getAttribute('name')}"]`,
       });
     }
 
@@ -125,7 +125,7 @@ export class TicketboxFormParser {
     // 1b. Enclosing <label> containing this input
     const allLabels = root.querySelectorAll('label');
     for (const lbl of allLabels) {
-      if ((id && lbl.querySelector(`#${id}`)) || (name && lbl.querySelector(`[name="${name}"]`))) {
+      if ((id && lbl.querySelector(`[id="${id}"]`)) || (name && lbl.querySelector(`[name="${name}"]`))) {
         if (lbl.textContent.trim()) {
           return lbl.textContent.trim();
         }

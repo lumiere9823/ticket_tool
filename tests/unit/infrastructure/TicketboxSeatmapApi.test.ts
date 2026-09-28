@@ -6,6 +6,13 @@ import {
 import { TicketboxCatalogParser } from '../../../src/infrastructure/ticketbox/parsing/TicketboxCatalogParser';
 import { TicketboxJourneyAdapter } from '../../../src/infrastructure/ticketbox/TicketboxJourneyAdapter';
 import { parseHtmlToDOMElementLike } from '../../../src/infrastructure/ticketbox/parsing/DOMElementLike';
+import { Seat } from '../../../src/domain/entities/BookingJourneyModels';
+import { AdjacentSeatStrategy } from '../../../src/domain/policies/AdjacentSeatStrategy';
+import { ExecuteBookingJourneyUseCase } from '../../../src/application/use-cases/ExecuteBookingJourneyUseCase';
+import { PurchaseStateMachine } from '../../../src/domain/state-machine/PurchaseStateMachine';
+import { PurchaseState } from '../../../src/domain/states/PurchaseState';
+import { ChromeMessageBus } from '../../../src/infrastructure/messaging/ChromeMessageBus';
+import { SanitizedLogger } from '../../../src/infrastructure/logging/SanitizedLogger';
 
 const MOCK_SEATMAP_API_RESPONSE: SeatmapApiResponse = {
   status: 1,
@@ -387,5 +394,142 @@ describe('Authoritative Ticketbox Seatmap API Integration', () => {
       expect(circleA2?.getAttribute('data-status')).toBe('selected');
       expect(circleA2?.className).toContain('selected');
     });
+
+    it('should select adjacent seats in theatrical odd-numbered seating (section 13308)', () => {
+      const oddSeats: Seat[] = [
+        {
+          id: '696600',
+          label: 'VIP_A21',
+          row: 'VIP_A',
+          number: 21,
+          position: 0,
+          x: 51.3,
+          y: 108.4,
+          area: '1st_ROW_L',
+          status: 'AVAILABLE',
+          selectable: true,
+        },
+        {
+          id: '696601',
+          label: 'VIP_A19',
+          row: 'VIP_A',
+          number: 19,
+          position: 1,
+          x: 72.5,
+          y: 108.4,
+          area: '1st_ROW_L',
+          status: 'AVAILABLE',
+          selectable: true,
+        },
+        {
+          id: '696602',
+          label: 'VIP_A17',
+          row: 'VIP_A',
+          number: 17,
+          position: 2,
+          x: 93.7,
+          y: 108.4,
+          area: '1st_ROW_L',
+          status: 'AVAILABLE',
+          selectable: true,
+        },
+        {
+          id: '696603',
+          label: 'VIP_A15',
+          row: 'VIP_A',
+          number: 15,
+          position: 3,
+          x: 114.8,
+          y: 108.4,
+          area: '1st_ROW_L',
+          status: 'AVAILABLE',
+          selectable: true,
+        },
+      ];
+
+      const decision = AdjacentSeatStrategy.selectSeats(oddSeats, 2, '1st_ROW_L');
+      expect(decision.status).toBe('SUCCESS');
+      expect(decision.isAdjacent).toBe(true);
+      expect(decision.selectedSeats).toHaveLength(2);
+      expect(['VIP_A21', 'VIP_A19', 'VIP_A17', 'VIP_A15']).toContain(decision.selectedSeats[0]?.label);
+      expect(['VIP_A21', 'VIP_A19', 'VIP_A17', 'VIP_A15']).toContain(decision.selectedSeats[1]?.label);
+    });
+
+    it('should execute end-to-end seated booking journey on seatmap page up to PAYMENT_GATE', async () => {
+      const dom = parseHtmlToDOMElementLike(`
+        <div id="booking-container">
+          <svg class="seatmap" width="800" height="600">
+            <circle cx="100.0" cy="108.4" r="5" fill="#f00"></circle>
+            <circle cx="110.0" cy="108.4" r="5" fill="#fff" id="circle-a2"></circle>
+            <circle cx="120.0" cy="108.4" r="5" fill="#fff" id="circle-a3"></circle>
+          </svg>
+          <div class="bottom-bar">
+            <button class="ant-btn-primary" id="btn-continue">Vui lòng chọn vé &gt;&gt;</button>
+          </div>
+        </div>
+      `);
+      const stateMachine = new PurchaseStateMachine(PurchaseState.READY);
+      const adapter = new TicketboxJourneyAdapter(undefined, dom);
+      adapter.setSeatmapData(MOCK_SEATMAP_API_RESPONSE);
+      const eventBus = new ChromeMessageBus();
+      const useCase = new ExecuteBookingJourneyUseCase(
+        stateMachine,
+        adapter,
+        eventBus,
+        new SanitizedLogger()
+      );
+
+      const result = await useCase.execute({
+        categoryPriority: ['1st Row (L&R)'],
+        quantity: 2,
+        allowFallback: false,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.finalState).toBe(PurchaseState.PAYMENT_GATE);
+      expect(result.selection?.seats).toEqual(['A2', 'A3']);
+    });
+
+    it('should reconcile already selected seats from DOM bottom bar', async () => {
+      const dom = parseHtmlToDOMElementLike(`
+        <div id="booking-container">
+          <svg class="seatmap" width="800" height="600">
+            <circle cx="100.0" cy="108.4" r="5" fill="#f00"></circle>
+            <circle cx="110.0" cy="108.4" r="5" fill="#4CAF50" class="selected"></circle>
+          </svg>
+          <div class="bottom-bar">
+            <span>Ghế: A2</span>
+            <button class="ant-btn-primary" id="btn-continue">Tiếp tục &gt;&gt;</button>
+          </div>
+        </div>
+      `);
+      const adapter = new TicketboxJourneyAdapter(undefined, dom);
+      adapter.setSeatmapData(MOCK_SEATMAP_API_RESPONSE);
+
+      const seats = await adapter.discoverSeats('1st_ROW_L');
+      const selected = seats.find((s) => s.label === 'A2');
+      expect(selected?.status).toBe('SELECTED');
+    });
+
+    it('should find and select seat by attribute fallback when coordinates vary', async () => {
+      const dom = parseHtmlToDOMElementLike(`
+        <div id="booking-container">
+          <svg class="seatmap" width="800" height="600">
+            <circle data-seat-id="696602" data-seat-label="A2" r="5" fill="#fff"></circle>
+          </svg>
+        </div>
+      `);
+      const adapter = new TicketboxJourneyAdapter(undefined, dom);
+      adapter.setSeatmapData(MOCK_SEATMAP_API_RESPONSE);
+
+      await adapter.discoverSeats('1st_ROW_L');
+      const ok = await adapter.selectSpecificSeats(['696602']);
+      expect(ok).toBe(true);
+
+      const target = dom.querySelector('[data-seat-id="696602"]');
+      expect(target?.getAttribute('data-status')).toBe('selected');
+      expect(target?.getAttribute('aria-pressed')).toBe('true');
+    });
   });
 });
+
