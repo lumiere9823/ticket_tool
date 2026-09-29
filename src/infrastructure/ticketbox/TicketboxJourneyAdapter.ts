@@ -28,7 +28,9 @@ import {
   SeatArea,
   UserProfileData,
 } from '../../domain/entities/BookingJourneyModels';
+import { assertInScope, ScopedPurchasePlan } from '../../domain/entities/ScopedPurchasePlan';
 import { DOMElementLike, wrapBrowserElement } from './parsing/DOMElementLike';
+
 import { TicketboxCatalogParser } from './parsing/TicketboxCatalogParser';
 import { SeatmapApiResponse, TicketboxSeatMapParser } from './parsing/TicketboxSeatMapParser';
 import { TicketboxSummaryParser } from './parsing/TicketboxSummaryParser';
@@ -108,13 +110,44 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   private customRoot?: DOMElementLike | undefined;
   private cachedSeatmapData?: SeatmapApiResponse | null = null;
   private cachedShowingId?: string | null = null;
+  private failedSeatmapShowingIds = new Map<string, number>();
   private cachedEventApiData: TicketboxEventApiResponse | null = null;
   private cachedEventApiId: string | null = null;
   private cachedQuestionFormData: TicketboxQuestionFormApiResponse | null = null;
   private cachedQuestionFormEventId: string | null = null;
   private cachedSeats: Seat[] = [];
   private selectedSeatIds = new Set<string>();
+  private blacklistedSeatKeys = new Set<string>();
   public navigationPending = false;
+  private allowedShowingIds?: Set<string> | null = null;
+  private scopedPlan?: ScopedPurchasePlan | null = null;
+
+  public blacklistSeat(seatIdOrLabel: string): void {
+    if (!seatIdOrLabel) return;
+    const raw = seatIdOrLabel.trim();
+    const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (norm) {
+      this.blacklistedSeatKeys.add(norm);
+      this.blacklistedSeatKeys.add(raw.toUpperCase());
+      this.selectedSeatIds.delete(raw);
+      this.selectedSeatIds.delete(norm);
+      this.logger?.info('Blacklisted unavailable seat from selection', {
+        seatIdOrLabel: raw,
+        normKey: norm,
+      });
+    }
+  }
+
+  public isSeatBlacklisted(seatIdOrLabel?: string | null): boolean {
+    if (!seatIdOrLabel) return false;
+    const raw = seatIdOrLabel.trim().toUpperCase();
+    const norm = raw.replace(/[^A-Z0-9]/g, '');
+    return this.blacklistedSeatKeys.has(norm) || this.blacklistedSeatKeys.has(raw);
+  }
+
+  public getBlacklistedSeats(): Set<string> {
+    return this.blacklistedSeatKeys;
+  }
 
   constructor(
     private readonly logger?: LoggerPort,
@@ -126,6 +159,17 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       } else if (typeof document !== 'undefined') {
         this.customRoot = wrapBrowserElement(root as Element | Document);
       }
+    }
+  }
+
+  public setAllowedShowingIds(ids: string[] | null): void {
+    this.allowedShowingIds = ids ? new Set(ids) : null;
+  }
+
+  public setScopedPlan(plan: ScopedPurchasePlan | null): void {
+    this.scopedPlan = plan;
+    if (plan && plan.targets && plan.targets.length > 0) {
+      this.allowedShowingIds = new Set(plan.targets.map((t) => t.showingId));
     }
   }
 
@@ -160,8 +204,23 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   }
 
   public async fetchSeatmapApi(showingId: string): Promise<SeatmapApiResponse | null> {
+    // BR-S01 & AC-10 Scope Guard: strictly forbid fetching seatmaps for showings outside the whitelist
+    if (this.allowedShowingIds && !this.allowedShowingIds.has(showingId)) {
+      this.logger?.info(
+        `Skipping seatmap fetch for showing '${showingId}' because it is outside the whitelist (BR-S01 / AC-10)`,
+        { showingId }
+      );
+      return null;
+    }
+
     if (this.cachedShowingId === showingId && this.cachedSeatmapData) {
       return this.cachedSeatmapData;
+    }
+
+    // Skip recently failed seatmap fetches (e.g. HTTP 500 / 404 on standing events without seatmaps) for 5 minutes
+    const lastFailedAt = this.failedSeatmapShowingIds.get(showingId);
+    if (lastFailedAt && Date.now() - lastFailedAt < 300_000) {
+      return null;
     }
 
     const url = `https://api-v2.ticketbox.vn/event/api/v1/events/showings/${showingId}/seatmap`;
@@ -181,6 +240,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             });
             return json;
           }
+        } else {
+          this.failedSeatmapShowingIds.set(showingId, Date.now());
         }
       } catch (err: unknown) {
         this.logger?.debug('Direct fetch failed, falling back to background message', {
@@ -222,12 +283,16 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             sectionsCount: response.data.result.sections.length,
           });
           return response;
+        } else {
+          this.failedSeatmapShowingIds.set(showingId, Date.now());
         }
       } catch (err: unknown) {
         this.logger?.warn('Background message fetch failed', { err: String(err) });
+        this.failedSeatmapShowingIds.set(showingId, Date.now());
       }
     }
 
+    this.failedSeatmapShowingIds.set(showingId, Date.now());
     return null;
   }
 
@@ -253,13 +318,16 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         }
       }
     } catch (err) {
-      this.logger?.warn('Event API fetch failed', { err: String(err) });
+      this.logger?.debug('Event API direct fetch failed, falling back to DOM', { err: String(err) });
     }
     return null;
   }
 
+
   /** Fetches question form schema from the authoritative API. Cached per eventId. */
-  public async fetchQuestionFormApi(eventId: string): Promise<TicketboxQuestionFormApiResponse | null> {
+  public async fetchQuestionFormApi(
+    eventId: string
+  ): Promise<TicketboxQuestionFormApiResponse | null> {
     if (this.cachedQuestionFormEventId === eventId && this.cachedQuestionFormData) {
       return this.cachedQuestionFormData;
     }
@@ -450,10 +518,17 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     return catalog.showings;
   }
 
-  public async discoverTicketCatalog(showingId?: string | null): Promise<EventCatalog> {
+  public async discoverTicketCatalog(
+    showingId?: string | null,
+    allowedShowingIds?: string[] | null
+  ): Promise<EventCatalog> {
+    if (allowedShowingIds && allowedShowingIds.length > 0) {
+      this.setAllowedShowingIds(allowedShowingIds);
+    }
     const root = this.getRoot();
     const url = typeof window !== 'undefined' ? window.location.href : '';
-    const targetShowingId = showingId || this.getShowingId();
+    const targetShowingId =
+      showingId && showingId !== 'default' ? showingId : this.getShowingId();
 
     // 0. On event landing page: fetch all showings from Event API for multi-showing events
     const isBookingPage =
@@ -463,12 +538,12 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const baseCatalogForEventId = root ? TicketboxCatalogParser.parseCatalog(root, url) : null;
     const discoveredEventId = baseCatalogForEventId?.eventId;
 
-    if (!isBookingPage && discoveredEventId && !targetShowingId) {
+    if (!isBookingPage && discoveredEventId) {
       try {
         const eventApiData = await this.fetchEventApi(discoveredEventId);
         if (eventApiData?.data?.result?.showings?.length) {
           const result = eventApiData.data.result;
-          const showingSnapshots: ShowingSnapshot[] = result.showings
+          let showingSnapshots: ShowingSnapshot[] = result.showings
             .filter((s) => s.isSalable)
             .map((s) => ({
               id: String(s.id),
@@ -479,13 +554,11 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
                 name: t.name,
                 price: { amount: t.price, currency: 'VND' as const },
                 mode: 'UNKNOWN' as TicketMode,
-                availability: (
-                  t.status === 'book_now'
-                    ? 'AVAILABLE'
-                    : t.status === 'sold_out'
-                      ? 'SOLD_OUT'
-                      : 'UNKNOWN'
-                ) as TicketAvailability,
+                availability: (t.status === 'book_now'
+                  ? 'AVAILABLE'
+                  : t.status === 'sold_out'
+                    ? 'SOLD_OUT'
+                    : 'UNKNOWN') as TicketAvailability,
                 minQuantity: t.minQtyPerOrder,
                 maxQuantity: t.maxQtyPerOrder,
                 selectedQuantity: 0,
@@ -494,10 +567,18 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               })),
             }));
 
+          if (targetShowingId && targetShowingId !== 'default') {
+            const filtered = showingSnapshots.filter((s) => s.id === targetShowingId);
+            if (filtered.length > 0) {
+              showingSnapshots = filtered;
+            }
+          }
+
           if (showingSnapshots.length > 0) {
             this.logger?.info('Discovered showings from Event API', {
               eventId: discoveredEventId,
               showingsCount: showingSnapshots.length,
+              targetShowingId: targetShowingId ?? 'all',
             });
             return {
               eventId: discoveredEventId,
@@ -613,7 +694,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
    * Discovers normalized ticket types from the visible page.
    * Conforms to Section 4.
    */
-  public async discoverJourneyTickets(targetShowingId?: string | null): Promise<JourneyTicketType[]> {
+  public async discoverJourneyTickets(
+    targetShowingId?: string | null
+  ): Promise<JourneyTicketType[]> {
     const root = this.getRoot();
     if (!root) return [];
 
@@ -621,7 +704,12 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const journeyTickets: JourneyTicketType[] = [];
 
     for (const showing of catalog.showings) {
-      if (targetShowingId && showing.id && showing.id !== targetShowingId) {
+      if (
+        targetShowingId &&
+        targetShowingId !== 'default' &&
+        showing.id &&
+        showing.id !== targetShowingId
+      ) {
         continue;
       }
       for (const t of showing.ticketTypes) {
@@ -658,7 +746,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
    * Looks up the showingTime (e.g. "19:30 - 21:45, 21 Tháng 10, 2026") to find the day number.
    * Returns true if a calendar date element was clicked.
    */
-  private async clickCalendarShowingDate(showingId: string | null): Promise<boolean> {
+  public async clickCalendarShowingDate(showingId: string | null): Promise<boolean> {
+    if (this.scopedPlan && showingId) {
+      assertInScope(this.scopedPlan, showingId);
+    }
     if (typeof document === 'undefined') return false;
 
     let targetDateText: string | null = null;
@@ -670,7 +761,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       );
       if (showing?.showingTime) {
         targetDateText = showing.showingTime;
-        const dayMatch = targetDateText.match(/\b(\d{1,2})\s*Tháng/i) || targetDateText.match(/\b(\d{1,2})\b/);
+        const dayMatch =
+          targetDateText.match(/\b(\d{1,2})\s*Tháng/i) || targetDateText.match(/\b(\d{1,2})\b/);
         if (dayMatch && dayMatch[1]) {
           dayNum = parseInt(dayMatch[1], 10);
         }
@@ -684,8 +776,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     });
 
     const calendarScope =
-      document.querySelector('#ticket-info, [class*="calendar"], [class*="schedule"], .ant-picker-calendar') ||
-      document;
+      document.querySelector(
+        '#ticket-info, [class*="calendar"], [class*="schedule"], .ant-picker-calendar'
+      ) || document;
 
     const candidates = Array.from(
       calendarScope.querySelectorAll(
@@ -704,7 +797,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         cls.includes('active') ||
         cls.includes('event');
       const hasIndicatorChild =
-        el.querySelector('[class*="underline"], [class*="indicator"], [class*="dot"], svg, span[style*="background"], div[style*="background"]') !== null;
+        el.querySelector(
+          '[class*="underline"], [class*="indicator"], [class*="dot"], svg, span[style*="background"], div[style*="background"]'
+        ) !== null;
       return hasGreen || hasIndicatorChild;
     });
 
@@ -716,7 +811,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       for (const el of pool) {
         const txt = el.textContent?.trim() || '';
         if (txt === dayStr || txt === dayPadded || new RegExp(`\\b0?${dayNum}\\b`).test(txt)) {
-          this.logger?.info('Found calendar cell matching day number, clicking', { dayNum, txt: txt.slice(0, 30) });
+          this.logger?.info('Found calendar cell matching day number, clicking', {
+            dayNum,
+            txt: txt.slice(0, 30),
+          });
           this.clickElement(wrapBrowserElement(el));
           return true;
         }
@@ -742,8 +840,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     for (let attempt = 0; attempt < 5; attempt++) {
       const drawerScope =
-        document.querySelector('.ant-drawer, .ant-drawer-open, [class*="drawer"], [class*="panel"], [class*="slide"], [role="dialog"]') ||
-        document;
+        document.querySelector(
+          '.ant-drawer, .ant-drawer-open, [class*="drawer"], [class*="panel"], [class*="slide"], [role="dialog"]'
+        ) || document;
 
       const buttons = Array.from(
         drawerScope.querySelectorAll('button, a, [role="button"], div[class*="btn"]')
@@ -759,6 +858,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           const href = btn.getAttribute('href') || '';
           if (href === '#ticket-info' || href.startsWith('#')) {
             continue;
+          }
+          const hrefShowingMatch = href.match(/\/bookings\/([^/]+)/);
+          if (this.scopedPlan && hrefShowingMatch && hrefShowingMatch[1]) {
+            assertInScope(this.scopedPlan, hrefShowingMatch[1]);
           }
           this.logger?.info('Found "Mua vé ngay" button in side panel/drawer, clicking', {
             text: text.slice(0, 40),
@@ -783,10 +886,69 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     quantity: number,
     showingId?: string | null
   ): Promise<boolean> {
+    this.logger?.info('Executing Section 7 Ticket Selection', { candidateId, quantity, showingId });
+
+    // Resolve effective showing ID
+    let effectiveShowingId =
+      showingId && showingId !== 'default' ? showingId : this.getShowingId();
+    if (
+      (!effectiveShowingId || effectiveShowingId === 'default') &&
+      this.cachedEventApiData?.data?.result?.showings
+    ) {
+      for (const s of this.cachedEventApiData.data.result.showings) {
+        if (
+          s.ticketTypes.some(
+            (t) =>
+              String(t.id) === candidateId || t.name.toLowerCase() === candidateId.toLowerCase()
+          )
+        ) {
+          effectiveShowingId = String(s.id);
+          break;
+        }
+      }
+      if (
+        (!effectiveShowingId || effectiveShowingId === 'default') &&
+        this.cachedEventApiData.data.result.showings.length === 1 &&
+        this.cachedEventApiData.data.result.showings[0]?.id
+      ) {
+        effectiveShowingId = String(this.cachedEventApiData.data.result.showings[0].id);
+      }
+    }
+
+    const candidateLower = candidateId.toLowerCase().trim();
+
+    // Resolve candidate name from Event API cache if candidateId is numeric, or vice-versa
+    let candidateName: string | undefined;
+    if (this.cachedEventApiData?.data?.result?.showings) {
+      for (const s of this.cachedEventApiData.data.result.showings) {
+        const found = s.ticketTypes.find(
+          (t) => String(t.id) === candidateId || t.name.toLowerCase().trim() === candidateLower
+        );
+        if (found) {
+          candidateName = found.name;
+          if (!effectiveShowingId || effectiveShowingId === 'default') {
+            effectiveShowingId = String(s.id);
+          }
+          break;
+        }
+      }
+    }
+
+    // MANDATORY SINGLE CHOKEPOINT: Assert in scope before any selection, navigation, or DOM interaction
+    if (this.scopedPlan) {
+      try {
+        assertInScope(this.scopedPlan, effectiveShowingId, candidateId);
+      } catch (err) {
+        if (candidateName) {
+          assertInScope(this.scopedPlan, effectiveShowingId, candidateName);
+        } else {
+          throw err;
+        }
+      }
+    }
+
     const root = this.getRoot();
     if (!root) return false;
-
-    this.logger?.info('Executing Section 7 Ticket Selection', { candidateId, quantity, showingId });
 
     // 0. If already on booking / seat map page, ticket tier selection is already fulfilled
     const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
@@ -802,23 +964,6 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       return true;
     }
 
-    // Resolve effective showing ID
-    let effectiveShowingId = showingId || this.getShowingId();
-    if (!effectiveShowingId && this.cachedEventApiData?.data?.result?.showings) {
-      for (const s of this.cachedEventApiData.data.result.showings) {
-        if (
-          s.ticketTypes.some(
-            (t) => String(t.id) === candidateId || t.name.toLowerCase() === candidateId.toLowerCase()
-          )
-        ) {
-          effectiveShowingId = String(s.id);
-          break;
-        }
-      }
-    }
-
-    const candidateLower = candidateId.toLowerCase().trim();
-
     // 0.5. Calendar / Multi-Showing Flow on Event Landing Page:
     // If there are NO ticket rows in the DOM (like Eifman Ballet calendar page),
     // click the calendar date to open the side panel, then click "Mua vé ngay",
@@ -829,16 +974,25 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       ) !== null;
 
     if (!hasTicketRows && effectiveShowingId) {
-      this.logger?.info('Calendar/showing event page detected (no ticket rows). Initiating calendar date flow', {
-        candidateId,
-        effectiveShowingId,
-      });
+      this.logger?.info(
+        'Calendar/showing event page detected (no ticket rows). Initiating calendar date flow',
+        {
+          candidateId,
+          effectiveShowingId,
+        }
+      );
 
       // Step A: Click the calendar date
+      if (this.scopedPlan) {
+        assertInScope(this.scopedPlan, effectiveShowingId);
+      }
       const clickedDate = await this.clickCalendarShowingDate(effectiveShowingId);
       if (clickedDate) {
         await new Promise((r) => setTimeout(r, 600));
         // Step B: Click "Mua vé ngay" in drawer
+        if (this.scopedPlan) {
+          assertInScope(this.scopedPlan, effectiveShowingId);
+        }
         const clickedMuaVe = await this.findAndClickMuaVeNgay();
         if (clickedMuaVe) {
           await new Promise((r) => setTimeout(r, 500));
@@ -864,6 +1018,17 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       // Step C: Guaranteed direct navigation fallback for showing booking URL
       if (typeof window !== 'undefined') {
         const directBookingUrl = `https://ticketbox.vn/bookings/${effectiveShowingId}/select-ticket`;
+        if (this.scopedPlan) {
+          try {
+            assertInScope(this.scopedPlan, effectiveShowingId, candidateId);
+          } catch (err) {
+            if (candidateName) {
+              assertInScope(this.scopedPlan, effectiveShowingId, candidateName);
+            } else {
+              throw err;
+            }
+          }
+        }
         this.logger?.info('Triggering direct navigation to showing booking URL', {
           directBookingUrl,
           effectiveShowingId,
@@ -899,19 +1064,25 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           '.ant-input-number, .qty-input, input[type="number"], .ant-drawer-open'
         ) !== null;
       if (!hasQtyControls) {
+        const btnHref = showingBtn.getAttribute('href') || '';
+        const hrefShowingMatch = btnHref.match(/\/bookings\/([^/]+)/);
+        if (this.scopedPlan && hrefShowingMatch && hrefShowingMatch[1]) {
+          assertInScope(this.scopedPlan, hrefShowingMatch[1]);
+        }
         this.logger?.info('Clicking showing/booking button to open ticket purchase view', {
           candidateId,
         });
         (showingBtn as MutableDOMElement).click!();
+
         await new Promise((r) => setTimeout(r, 600));
 
         const updatedUrl = typeof window !== 'undefined' ? window.location.href : '';
-        const btnHref = showingBtn.getAttribute('href') || '';
+        const currentBtnHref = showingBtn.getAttribute('href') || btnHref;
         const isBookingTarget =
           updatedUrl.includes('/select-ticket') ||
           updatedUrl.includes('/booking') ||
-          btnHref.includes('/bookings/') ||
-          btnHref.includes('/select-ticket') ||
+          currentBtnHref.includes('/bookings/') ||
+          currentBtnHref.includes('/select-ticket') ||
           root.querySelector('svg.seatmap, [class*="seatmap"], .seat-map') !== null;
 
         if (isBookingTarget) {
@@ -997,7 +1168,11 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   }
 
   /**
-   * Standing Flow: Sets quantity following Section 9 rules.
+   * Standing & Area-based Flow: Sets quantity following Section 9 rules.
+   * Interacts with:
+   * 1. Area Selection Modal stepper (Ant Design / Ticketbox modal popup after zone click on /select-ticket)
+   * 2. Direct quantity stepper / input in ticket rows (Standing events)
+   * 3. Bottom bar or drawer quantity controls
    */
   public async selectQuantity(ticket: TicketType, quantity: number): Promise<boolean> {
     const root = this.getRoot();
@@ -1008,128 +1183,291 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       quantity,
     });
 
-    // If on seat map page, quantity is fulfilled by seat selection
     const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
     const isAlreadyOnBookingPage =
       currentUrl.includes('/select-ticket') ||
       currentUrl.includes('/booking') ||
       root.querySelector('svg.seatmap, [class*="seatmap"], .seat-map') !== null;
+
+    // Polling loop for modal stepper or quantity controls (modal may take 100-400ms to open after area click)
+    const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 15 : 1;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const doc = typeof document !== 'undefined' ? document : null;
+
+      // 1. Check for Area Selection Modal (e.g. "Khu CAT_3R", "Khu STARDOM_L")
+      const modalRaw =
+        doc?.querySelector(
+          '.ant-modal-content, .ant-modal, [role="dialog"], [class*="modal-content"], [class*="modal-body"], [class*="modal"]'
+        ) ||
+        (root.querySelector(
+          '.ant-modal-content, .ant-modal, [role="dialog"], [class*="modal-content"], [class*="modal-body"], [class*="modal"]'
+        )?.rawElement as HTMLElement | undefined);
+
+      if (modalRaw) {
+        const modalText = (modalRaw.textContent || '').toLowerCase();
+        const isAreaModal =
+          modalText.includes('khu') ||
+          modalText.includes('chọn vé') ||
+          modalText.includes('chỉ có thể chọn vé') ||
+          modalText.includes(ticket.name.toLowerCase().trim());
+
+        if (isAreaModal) {
+          this.logger?.info('Area selection modal detected in DOM', {
+            attempt,
+            ticketName: ticket.name,
+          });
+
+          let modalPlusBtn: HTMLElement | null = null;
+          let modalInput: HTMLInputElement | null = null;
+          let currentModalQty = 0;
+
+          // Check for input inside modal
+          modalInput = modalRaw.querySelector(
+            'input[type="number"], .qty-input, input.quantity, .ant-input-number-input, input'
+          ) as HTMLInputElement | null;
+          if (modalInput) {
+            const rawVal = modalInput.value || modalInput.getAttribute('value') || '0';
+            currentModalQty = parseInt(rawVal, 10) || 0;
+          }
+
+          // Check for explicit plus selector inside modal
+          modalPlusBtn = modalRaw.querySelector(
+            '.ant-input-number-handler-up, button[aria-label*="plus"], button[aria-label*="add"], button[aria-label*="tăng"], [class*="handler-up"], [class*="btn-plus"], [class*="plus"], [class*="increment"]'
+          ) as HTMLElement | null;
+
+          // If no explicit plus button, inspect all buttons in modal
+          if (!modalPlusBtn) {
+            const allModalBtns = Array.from(
+              modalRaw.querySelectorAll('button, [role="button"]')
+            ) as HTMLElement[];
+            const stepperBtns = allModalBtns.filter((b) => {
+              const bText = (b.textContent || '').trim().toLowerCase();
+              const bAria = (b.getAttribute('aria-label') || '').toLowerCase();
+              const bClass = (b.className || '').toString().toLowerCase();
+
+              // Exclude close button, footer continue button, other area link
+              if (
+                bAria.includes('close') ||
+                bClass.includes('close') ||
+                bText === '✕' ||
+                bText === '×' ||
+                bText === 'x' ||
+                bText.includes('vui lòng') ||
+                bText.includes('tiếp tục') ||
+                bText.includes('khu vực khác')
+              ) {
+                return false;
+              }
+              return true;
+            });
+
+            for (const b of stepperBtns) {
+              const bText = (b.textContent || '').trim();
+              const bAria = (b.getAttribute('aria-label') || '').toLowerCase();
+              if (bText === '+' || bAria.includes('plus') || bAria.includes('add')) {
+                modalPlusBtn = b;
+                break;
+              }
+            }
+
+            if (!modalPlusBtn && stepperBtns.length >= 2) {
+              // The last button in the stepper row is the plus button
+              modalPlusBtn = stepperBtns[stepperBtns.length - 1]!;
+            }
+          }
+
+          // If current quantity is not from input, inspect span/div text in modal
+          if (!modalInput) {
+            const numbers = Array.from(modalRaw.querySelectorAll('span, div, p, strong'))
+              .map((el) => ({ el, text: (el.textContent || '').trim() }))
+              .filter((item) => /^\d+$/.test(item.text) && item.el.children.length === 0);
+            if (numbers.length > 0) {
+              currentModalQty = parseInt(numbers[0]!.text, 10) || 0;
+            }
+          }
+
+          if (modalPlusBtn) {
+            const clicksNeeded = Math.max(0, quantity - currentModalQty);
+            this.logger?.info('Interacting with Area Modal stepper', {
+              currentModalQty,
+              targetQuantity: quantity,
+              clicksNeeded,
+            });
+
+            for (let i = 0; i < clicksNeeded; i++) {
+              this.clickElement(wrapBrowserElement(modalPlusBtn));
+              await new Promise((r) => setTimeout(r, 150));
+            }
+
+            if (modalInput) {
+              const proto =
+                typeof window !== 'undefined' ? window.HTMLInputElement?.prototype : null;
+              const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+              if (descriptor && descriptor.set) {
+                descriptor.set.call(modalInput, String(quantity));
+              } else {
+                modalInput.value = String(quantity);
+              }
+              const EventCtor = (
+                globalThis as unknown as {
+                  Event?: new (type: string, init?: Record<string, unknown>) => unknown;
+                }
+              ).Event;
+              if (typeof EventCtor === 'function') {
+                modalInput.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
+                modalInput.dispatchEvent(new EventCtor('change', { bubbles: true }) as never);
+              }
+            }
+
+            await new Promise((r) => setTimeout(r, 200));
+            this.logger?.info('Area modal quantity set successfully', { quantity });
+            return true;
+          }
+        }
+      }
+
+      // 2. Standard ticket rows / landing page / drawer controls
+      let ticketContainer = ticket.id ? root.querySelector(`[data-ticket-id="${ticket.id}"]`) : null;
+
+      if (!ticketContainer) {
+        const ticketLower = ticket.name.toLowerCase().trim();
+        const ticketLowerClean = ticketLower.replace(/[\s_-]+/g, '');
+        const allRows = root.querySelectorAll(
+          '.content-row, [class*="content-row"], .ticket-item, .ticket-row, .legend-item, [class*="legend-item"], [class*="tier-item"], [class*="section-item"], .ticket-legend > div, [class*="sidebar"] li, [class*="sidebar"] div'
+        );
+        for (const row of allRows) {
+          const titleEl = row.querySelector(
+            '.title-tickettype, [class*="title-tickettype"], .ticket-name, .name, h3, h4, h5, strong, span'
+          );
+          if (titleEl) {
+            const tText = titleEl.textContent.trim().toLowerCase();
+            const tClean = tText.replace(/[\s_-]+/g, '');
+            if (
+              tText.includes(ticketLower) ||
+              (ticketLowerClean.length > 3 && tClean.includes(ticketLowerClean))
+            ) {
+              ticketContainer = row;
+              break;
+            }
+          }
+        }
+      }
+      ticketContainer = ticketContainer || root;
+
+      let input = ticketContainer.querySelector(
+        'input[type="number"], .qty-input, input.quantity, .ant-input-number-input'
+      );
+
+      let plusBtn = ticketContainer.querySelector(
+        '.ant-input-number-handler-up, button[aria-label="plus"], .btn-plus, .plus, [class*="handler-up"], [aria-label*="plus"], [aria-label*="tăng"]'
+      );
+
+      if (typeof document !== 'undefined') {
+        if (!input) {
+          const liveInput = document.querySelector(
+            '.bottom-bar input[type="number"], [class*="bottom"] input[type="number"], .ant-drawer input[type="number"], .ant-input-number-input'
+          );
+          if (liveInput) input = wrapBrowserElement(liveInput);
+        }
+        if (!plusBtn) {
+          const livePlus = document.querySelector(
+            '.bottom-bar .ant-input-number-handler-up, .bottom-bar button[aria-label="plus"], [class*="bottom"] [class*="handler-up"], .ant-drawer [class*="handler-up"], .ant-drawer button[aria-label="plus"], [class*="sidebar"] .ant-input-number-handler-up'
+          );
+          if (livePlus) plusBtn = wrapBrowserElement(livePlus);
+        }
+      }
+
+      if (input) {
+        const rawCurrentVal =
+          input.getAttribute('value') ||
+          ('value' in input ? String((input as MutableDOMElement).value) : '') ||
+          '0';
+        const cur = parseInt(rawCurrentVal, 10) || 0;
+
+        const minAttr = input.getAttribute('min');
+        const maxAttr = input.getAttribute('max');
+        const min = minAttr ? parseInt(minAttr, 10) : 1;
+        const max = maxAttr ? parseInt(maxAttr, 10) : null;
+
+        if (quantity < min) {
+          this.logger?.warn(`Requested quantity ${quantity} is below minimum allowed ${min}`);
+          return false;
+        }
+
+        if (max !== null && quantity > max) {
+          this.logger?.warn(
+            `Requested quantity ${quantity} exceeds maximum allowed quantity ${max}.`
+          );
+          return false;
+        }
+
+        const clicks = Math.max(0, quantity - cur);
+        if (plusBtn && typeof (plusBtn as MutableDOMElement).click === 'function' && clicks > 0) {
+          this.logger?.info('Clicking plus button to set quantity in AntDesign', {
+            clicks,
+            targetQuantity: quantity,
+          });
+          for (let i = 0; i < clicks; i++) {
+            (plusBtn as MutableDOMElement).click!();
+            await new Promise((r) => setTimeout(r, 120));
+          }
+        }
+
+        if (input.rawElement && 'value' in input.rawElement) {
+          const nativeEl = input.rawElement as HTMLInputElement;
+          const proto =
+            typeof window !== 'undefined' ? window.HTMLInputElement?.prototype : null;
+          const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+          if (descriptor && descriptor.set) {
+            descriptor.set.call(nativeEl, String(quantity));
+          } else {
+            nativeEl.value = String(quantity);
+          }
+          const EventCtor = (
+            globalThis as unknown as {
+              Event?: new (type: string, init?: Record<string, unknown>) => unknown;
+            }
+          ).Event;
+          if (typeof EventCtor === 'function') {
+            nativeEl.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
+            nativeEl.dispatchEvent(new EventCtor('change', { bubbles: true }) as never);
+          }
+        }
+
+        if ('value' in (input as MutableDOMElement)) {
+          (input as MutableDOMElement).value = String(quantity);
+        }
+        (input as MutableDOMElement).attributes = (input as MutableDOMElement).attributes || {};
+        (input as MutableDOMElement).attributes['value'] = String(quantity);
+
+        this.logger?.info('Quantity selection verified', { quantity });
+        return true;
+      }
+
+      if (plusBtn && typeof (plusBtn as MutableDOMElement).click === 'function') {
+        this.logger?.info('Incrementing quantity via plus button', { targetQuantity: quantity });
+        for (let i = 0; i < quantity; i++) {
+          (plusBtn as MutableDOMElement).click!();
+          await new Promise((r) => setTimeout(r, 120));
+        }
+        return true;
+      }
+
+      // Wait before next attempt if polling
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+
+    // If on seat map page with no explicit quantity control or modal after polling, quantity is handled by seat selection
     if (isAlreadyOnBookingPage) {
-      this.logger?.info('Already on seat map page; quantity handled via seat selection', {
+      this.logger?.info('Already on seat map page; quantity handled via seat/area selection', {
         ticketName: ticket.name,
       });
       return true;
     }
 
-    // Locate quantity input or container
-    let ticketContainer = ticket.id ? root.querySelector(`[data-ticket-id="${ticket.id}"]`) : null;
-
-    if (!ticketContainer) {
-      const ticketLower = ticket.name.toLowerCase().trim();
-      const allRows = root.querySelectorAll(
-        '.content-row, [class*="content-row"], .ticket-item, .ticket-row'
-      );
-      for (const row of allRows) {
-        const titleEl = row.querySelector(
-          '.title-tickettype, [class*="title-tickettype"], .ticket-name, .name, h3, h4, h5, strong'
-        );
-        if (titleEl && titleEl.textContent.trim().toLowerCase().includes(ticketLower)) {
-          ticketContainer = row;
-          break;
-        }
-      }
-    }
-    ticketContainer = ticketContainer || root;
-
-    const input = ticketContainer.querySelector(
-      'input[type="number"], .qty-input, input.quantity, .ant-input-number-input'
-    );
-
-    const plusBtn = ticketContainer.querySelector(
-      '.ant-input-number-handler-up, button[aria-label="plus"], .btn-plus, .plus, [class*="handler-up"]'
-    );
-
-    if (input) {
-      // 1. Read current quantity BEFORE any modification
-      const rawCurrentVal =
-        input.getAttribute('value') ||
-        ('value' in input ? String((input as MutableDOMElement).value) : '') ||
-        '0';
-      const cur = parseInt(rawCurrentVal, 10) || 0;
-
-      // 2. Inspect allowed quantity
-      const minAttr = input.getAttribute('min');
-      const maxAttr = input.getAttribute('max');
-      const min = minAttr ? parseInt(minAttr, 10) : 1;
-      const max = maxAttr ? parseInt(maxAttr, 10) : null;
-
-      if (quantity < min) {
-        this.logger?.warn(`Requested quantity ${quantity} is below minimum allowed ${min}`);
-        return false;
-      }
-
-      if (max !== null && quantity > max) {
-        this.logger?.warn(
-          `Requested quantity ${quantity} exceeds maximum allowed quantity ${max}.`
-        );
-        return false;
-      }
-
-      // 3. If plus button is present, click it to sync React/AntDesign state
-      const clicks = Math.max(0, quantity - cur);
-      if (plusBtn && typeof (plusBtn as MutableDOMElement).click === 'function' && clicks > 0) {
-        this.logger?.info('Clicking plus button to set quantity in AntDesign', {
-          clicks,
-          targetQuantity: quantity,
-        });
-        for (let i = 0; i < clicks; i++) {
-          (plusBtn as MutableDOMElement).click!();
-          await new Promise((r) => setTimeout(r, 120));
-        }
-      }
-
-      // 4. Update native input value with prototype descriptor setter to notify React
-      if (input.rawElement && 'value' in input.rawElement) {
-        const nativeEl = input.rawElement as HTMLInputElement;
-        const proto = typeof window !== 'undefined' ? window.HTMLInputElement?.prototype : null;
-        const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
-        if (descriptor && descriptor.set) {
-          descriptor.set.call(nativeEl, String(quantity));
-        } else {
-          nativeEl.value = String(quantity);
-        }
-        const EventCtor = (
-          globalThis as unknown as {
-            Event?: new (type: string, init?: Record<string, unknown>) => unknown;
-          }
-        ).Event;
-        if (typeof EventCtor === 'function') {
-          nativeEl.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
-          nativeEl.dispatchEvent(new EventCtor('change', { bubbles: true }) as never);
-        }
-      }
-
-      if ('value' in (input as MutableDOMElement)) {
-        (input as MutableDOMElement).value = String(quantity);
-      }
-      (input as MutableDOMElement).attributes = (input as MutableDOMElement).attributes || {};
-      (input as MutableDOMElement).attributes['value'] = String(quantity);
-
-      this.logger?.info('Quantity selection verified', { quantity });
-      return true;
-    }
-
-    // Try + increment button if no direct input
-    if (plusBtn && typeof (plusBtn as MutableDOMElement).click === 'function') {
-      this.logger?.info('Incrementing quantity via plus button', { targetQuantity: quantity });
-      for (let i = 0; i < quantity; i++) {
-        (plusBtn as MutableDOMElement).click!();
-        await new Promise((r) => setTimeout(r, 120));
-      }
-      return true;
-    }
-
-    // Default 1 quantity success if tier was selected
     if (quantity === 1) {
       this.logger?.info('Quantity defaulted to 1 on ticket tier selection', {
         ticketName: ticket.name,
@@ -1236,113 +1574,240 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
   /**
    * Clicks the primary proceed/continue/checkout button on Ticketbox to advance the flow.
-   * Employs polling retries (up to 10 attempts x 250ms) to allow React state / cart calculation
+   * Employs polling retries (up to 15 attempts x 250ms) to allow React state / cart calculation
    * to remove disabled state and render the active continue button.
+   *
+   * Strictly filters out breadcrumbs, step titles, navigation tabs, and instructional text
+   * (e.g., "1. Chọn vé", "Bấm vào khu vực để chọn vé") to prevent false positive clicks.
    */
   public async proceedToNextStep(): Promise<boolean> {
     const root = this.getRoot();
     if (!root) return false;
 
+    // Forward navigation action verbs ONLY. "chọn vé" MUST NEVER be here.
     const targetKeywords = [
       'tiếp tục',
-      'mua vé',
-      'đặt vé',
       'thanh toán',
+      'đặt vé',
+      'mua vé',
+      'mua ngay',
+      'đặt ngay',
       'continue',
       'checkout',
       'xác nhận',
       'proceed',
-      'chọn vé',
+      'pay',
     ];
 
-    const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 10 : 1;
+    // Phrases that indicate instructions, prompts, step names, or backwards navigation
+    const negativeKeywords = [
+      'vui lòng',
+      'chọn vé',
+      'chọn khu vực',
+      'chọn ghế',
+      'chọn chỗ',
+      'trở về',
+      'quay lại',
+      'back',
+      'hủy',
+      'cancel',
+      'đăng nhập',
+      'login',
+      'sign in',
+    ];
+
+    const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 15 : 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const candidates: DOMElementLike[] = [];
       const seenRaw = new Set<unknown>();
 
-      const addCandidate = (el: DOMElementLike | null | undefined) => {
-        if (!el) return;
-        const raw = el.rawElement || el;
-        if (seenRaw.has(raw)) return;
-        seenRaw.add(raw);
-        candidates.push(el);
-      };
+      const isCandidateValid = (el: DOMElementLike): boolean => {
+        const raw = (el.rawElement || el) as HTMLElement;
+        if (!raw) return false;
 
-      // 1. Standard action/button selectors
-      const selector =
-        '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, button[type="submit"], .btn-checkout, [class*="checkout"], .ant-drawer-footer button, [class*="bottom"] button, [class*="bottom"] a, [class*="sidebar"] button, [class*="sidebar"] a, [class*="action"] button, [class*="action"] a, button, a.btn, a[class*="button"], [role="button"], div[role="button"]';
-
-      for (const el of root.querySelectorAll(selector)) {
-        addCandidate(el);
-      }
-
-      // 2. Direct browser scan: Find any element in document containing target action keywords
-      if (typeof document !== 'undefined') {
-        const liveElements = Array.from(
-          document.querySelectorAll(
-            'button, [role="button"], a, div[class*="btn"], div[class*="button"], div[class*="continue"], div[class*="bottom"] div, div[class*="footer"] div, [class*="action"] div, div.cursor-pointer'
-          )
-        );
-        for (const liveEl of liveElements) {
-          addCandidate(wrapBrowserElement(liveEl));
+        // Skip non-interactive tags
+        const tag = (el.tagName || '').toUpperCase();
+        if (['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER', 'NAV', 'UL', 'OL', 'LI'].includes(tag)) {
+          return false;
         }
 
-        // Also search elements across document for action keywords
-        const allPotentialEls = Array.from(
-          document.querySelectorAll('div, span, p, a, button, [role="button"]')
-        );
-        for (const el of allPotentialEls) {
-          const txt = (el.textContent || '').trim().toLowerCase();
-          if (txt.length > 0 && txt.length < 80) {
-            if (targetKeywords.some((k) => txt.includes(k))) {
-              const clickable =
-                el.closest(
-                  'button, a, [role="button"], div[class*="btn"], div[class*="button"], div[class*="cursor-pointer"], [onclick]'
-                ) || el;
-              addCandidate(wrapBrowserElement(clickable));
+        // Check if element or ancestor is a breadcrumb, step indicator, tab, or nav
+        if (typeof raw.closest === 'function') {
+          const inNav = raw.closest(
+            '[class*="breadcrumb"], [class*="step-"], [class*="steps"], [class*="ant-steps"], [class*="navbar"], [class*="nav-"], [role="tab"], [role="tablist"], [role="navigation"], header, nav'
+          );
+          if (inNav) return false;
+        } else {
+          let cur: DOMElementLike | null | undefined = el.parentElement;
+          while (cur) {
+            const curTag = (cur.tagName || '').toUpperCase();
+            if (curTag === 'HEADER' || curTag === 'NAV') return false;
+            const curCls = (cur.className || '').toLowerCase();
+            if (
+              curCls.includes('breadcrumb') ||
+              curCls.includes('step') ||
+              curCls.includes('navbar') ||
+              curCls.includes('nav-')
+            ) {
+              return false;
             }
+            cur = cur.parentElement;
+          }
+        }
+
+        const text = (el.textContent || '').toLowerCase().trim();
+        if (!text || text.length > 80) return false;
+
+        // Reject any element containing negative phrases
+        if (negativeKeywords.some((nk) => text.includes(nk))) {
+          return false;
+        }
+
+        // Must contain at least one forward target action keyword
+        if (!targetKeywords.some((kw) => text.includes(kw))) {
+          return false;
+        }
+
+        return true;
+      };
+
+      // TIER 1: Primary action button selectors (Highest confidence)
+      const tier1Candidates: DOMElementLike[] = [];
+      const tier1Selector =
+        '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, .ant-modal button, .ant-modal-footer button, [role="dialog"] button, [class*="modal"] button, .ant-drawer-footer button, .sidebar-footer button, [class*="sidebar"] footer button, .bottom-bar button, [class*="bottom"] button, [class*="footer"] button, [class*="checkout"] button, button[type="submit"]';
+
+      for (const el of root.querySelectorAll(tier1Selector)) {
+        const raw = el.rawElement || el;
+        if (!seenRaw.has(raw)) {
+          seenRaw.add(raw);
+          tier1Candidates.push(el);
+        }
+      }
+
+      if (typeof document !== 'undefined') {
+        for (const el of Array.from(document.querySelectorAll(tier1Selector))) {
+          if (!seenRaw.has(el)) {
+            seenRaw.add(el);
+            tier1Candidates.push(wrapBrowserElement(el));
           }
         }
       }
 
-      const candidateDebugInfo: Array<{ tag: string; text: string; disabled: boolean }> = [];
+      // TIER 2: Other standard button & input elements
+      const tier2Candidates: DOMElementLike[] = [];
+      const tier2Selector = 'button, input[type="submit"], a.btn, a[class*="button"], a[role="button"]';
 
-      for (const btn of candidates) {
-        const text = (btn.textContent || '').toLowerCase().trim();
-        const disabled = this.isElementDisabled(btn);
-
-        candidateDebugInfo.push({
-          tag: btn.tagName,
-          text: text.slice(0, 40),
-          disabled,
-        });
-
-        if (disabled) {
-          continue;
+      for (const el of root.querySelectorAll(tier2Selector)) {
+        const raw = el.rawElement || el;
+        if (!seenRaw.has(raw)) {
+          seenRaw.add(raw);
+          tier2Candidates.push(el);
         }
+      }
 
-        // Avoid clicking a disabled prompt button like "vui lòng chọn vé" or "vui lòng trả lời"
-        if (text.includes('vui lòng')) {
-          continue;
+      if (typeof document !== 'undefined') {
+        for (const el of Array.from(document.querySelectorAll(tier2Selector))) {
+          if (!seenRaw.has(el)) {
+            seenRaw.add(el);
+            tier2Candidates.push(wrapBrowserElement(el));
+          }
         }
+      }
 
-        if (targetKeywords.some((kw) => text.includes(kw))) {
+      // TIER 3: Generic clickable containers (only if no Tier 1 or Tier 2 match)
+      const tier3Candidates: DOMElementLike[] = [];
+      const tier3Selector =
+        '[role="button"], div[class*="btn"], div[class*="button"], div[class*="continue"], div.cursor-pointer';
+
+      for (const el of root.querySelectorAll(tier3Selector)) {
+        const raw = el.rawElement || el;
+        if (!seenRaw.has(raw)) {
+          seenRaw.add(raw);
+          tier3Candidates.push(el);
+        }
+      }
+
+      if (typeof document !== 'undefined') {
+        for (const el of Array.from(document.querySelectorAll(tier3Selector))) {
+          if (!seenRaw.has(el)) {
+            seenRaw.add(el);
+            tier3Candidates.push(wrapBrowserElement(el));
+          }
+        }
+      }
+
+      // Evaluate candidate tiers in priority order
+      const candidateDebugInfo: Array<{ tag: string; text: string; disabled: boolean; tier: number }> = [];
+
+      for (const tierList of [
+        { tier: 1, list: tier1Candidates },
+        { tier: 2, list: tier2Candidates },
+        { tier: 3, list: tier3Candidates },
+      ]) {
+        for (const btn of tierList.list) {
+          const text = (btn.textContent || '').toLowerCase().trim();
+          const disabled = this.isElementDisabled(btn);
+
+          if (!isCandidateValid(btn)) {
+            continue;
+          }
+
+          candidateDebugInfo.push({
+            tag: btn.tagName,
+            text: text.slice(0, 40),
+            disabled,
+            tier: tierList.tier,
+          });
+
+          if (disabled) {
+            continue;
+          }
+
           this.logger?.info('Clicking next step / continue button', {
             buttonText: text,
             tagName: btn.tagName,
+            tier: tierList.tier,
             attempt,
           });
 
           this.clickElement(btn);
           this.navigationPending = true;
+
+          // If the clicked button was inside a modal dialog, also trigger the bottom bar continue button if present
+          const rawBtn = (btn.rawElement || btn) as HTMLElement;
+          const isInsideModal =
+            rawBtn &&
+            typeof rawBtn.closest === 'function' &&
+            rawBtn.closest('.ant-modal, [role="dialog"], [class*="modal"]') !== null;
+
+          if (isInsideModal) {
+            await new Promise((r) => setTimeout(r, 350));
+            const doc = typeof document !== 'undefined' ? document : null;
+            const bottomBtn = doc?.querySelector(
+              '.bottom-bar button, [class*="bottom"] button, #btn-continue'
+            ) as HTMLElement | null;
+            if (bottomBtn) {
+              const bText = (bottomBtn.textContent || '').toLowerCase().trim();
+              if (
+                targetKeywords.some((kw) => bText.includes(kw)) &&
+                !negativeKeywords.some((nk) => bText.includes(nk)) &&
+                !this.isElementDisabled(wrapBrowserElement(bottomBtn))
+              ) {
+                this.logger?.info('Also clicked bottom bar continue button after modal confirmation', {
+                  buttonText: bText,
+                });
+                this.clickElement(wrapBrowserElement(bottomBtn));
+              }
+            }
+          }
+
           await new Promise((r) => setTimeout(r, 600));
           return true;
         }
       }
 
       this.logger?.debug(
-        `Attempt ${attempt}/${maxAttempts}: evaluated ${candidates.length} continue candidates`,
+        `Attempt ${attempt}/${maxAttempts}: evaluated continue candidates`,
         {
           candidates: candidateDebugInfo.filter((c) => c.text.length > 0).slice(0, 10),
         }
@@ -1359,6 +1824,108 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   }
 
   /**
+   * Detects Ticketbox error modals (e.g. -1242: "Ghế bạn chọn VIP_A-21 đã được đặt trước").
+   * Extracts the unavailable seat, blacklists it, and clicks the action button ("Chọn ghế khác")
+   * to automatically recover and return to seat selection.
+   */
+  public async detectAndHandleErrorModal(): Promise<{
+    hasError: boolean;
+    isSeatUnavailable: boolean;
+    seatLabel?: string | undefined;
+  }> {
+    const root = this.getRoot();
+    const doc = typeof document !== 'undefined' ? document : null;
+
+    const modalCandidates: DOMElementLike[] = [];
+    if (root) {
+      const inRoot = root.querySelectorAll(
+        '.ant-modal-content, [role="dialog"], .ant-modal, [class*="modal-content"], [class*="modal-body"], [class*="modal"], [class*="popup"], [class*="alert"]'
+      );
+      modalCandidates.push(...inRoot);
+    }
+    if (doc) {
+      const inDoc = Array.from(
+        doc.querySelectorAll(
+          '.ant-modal-content, [role="dialog"], .ant-modal, [class*="modal-content"], [class*="modal-body"], [class*="modal"], [class*="popup"], [class*="alert"]'
+        )
+      ).map((el) => wrapBrowserElement(el));
+      modalCandidates.push(...inDoc);
+    }
+
+    for (const modal of modalCandidates) {
+      const text = (modal.textContent || '').toLowerCase();
+      if (!text) continue;
+
+      const isUnavailable =
+        text.includes('-1242') ||
+        text.includes('đã được đặt trước') ||
+        text.includes('đã có người đặt') ||
+        text.includes('đã có người chọn') ||
+        text.includes('không còn trống') ||
+        (text.includes('xin lỗi') && text.includes('ghế'));
+
+      if (isUnavailable) {
+        let seatLabel: string | undefined;
+        const match = modal.textContent.match(
+          /(?:ghế|seat)\s*(?:bạn chọn)?\s*([A-Za-z0-9_-]+)\s*(?:đã được đặt trước|đã có người|không còn|đã)/i
+        );
+        if (match && match[1]) {
+          seatLabel = match[1].trim();
+        } else {
+          const lastSeat = Array.from(this.selectedSeatIds).pop();
+          if (lastSeat) seatLabel = lastSeat;
+        }
+
+        if (seatLabel) {
+          this.blacklistSeat(seatLabel);
+        }
+
+        this.logger?.warn('Seat unavailable error modal detected (-1242)', {
+          seatLabel,
+          modalText: text.slice(0, 100),
+        });
+
+        // Find "Chọn ghế khác" or primary action button
+        const actionBtn =
+          modal.querySelector(
+            'button.ant-btn-primary, button.ant-btn, [class*="btn-primary"], button'
+          ) ||
+          (doc
+            ? wrapBrowserElement(
+                doc.querySelector('.ant-modal button, [role="dialog"] button') as Element
+              )
+            : null);
+
+        if (actionBtn && typeof (actionBtn as MutableDOMElement).click === 'function') {
+          this.logger?.info('Clicking "Chọn ghế khác" button in error modal to recover');
+          this.clickElement(actionBtn);
+          await new Promise((r) => setTimeout(r, 600));
+        }
+
+        return { hasError: true, isSeatUnavailable: true, seatLabel };
+      }
+
+      const isGenericError =
+        text.includes('uiii, xin lỗi') ||
+        text.includes('thông báo lỗi') ||
+        text.includes('vé đã hết') ||
+        text.includes('số lượng vé không đủ');
+
+      if (isGenericError) {
+        this.logger?.warn('Generic error modal detected', { text: text.slice(0, 100) });
+        const actionBtn = modal.querySelector('button');
+        if (actionBtn && typeof (actionBtn as MutableDOMElement).click === 'function') {
+          this.clickElement(actionBtn);
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        return { hasError: true, isSeatUnavailable: false };
+      }
+    }
+
+    return { hasError: false, isSeatUnavailable: false };
+  }
+
+  /**
    * Seated Flow: Discovers zones/areas.
    */
   public async discoverAreas(): Promise<SeatArea[]> {
@@ -1372,41 +1939,115 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   }
 
   /**
-   * Seated Flow: Selects an area by ID.
+   * Seated / Area Flow: Selects an area/zone by ID, name, ticketTypeId, or coordinates.
    */
-  public async selectArea(areaId: string): Promise<boolean> {
+  public async selectArea(
+    areaId: string,
+    areaName?: string | undefined,
+    ticketTypeId?: string | undefined,
+    coords?: { x?: number | undefined; y?: number | undefined; width?: number | undefined; height?: number | undefined } | undefined
+  ): Promise<boolean> {
     const root = this.getRoot();
     if (!root) return false;
 
-    this.logger?.info('Selecting Area', { areaId });
+    this.logger?.info('Selecting Area', { areaId, areaName, ticketTypeId, coords });
 
     const safeAreaId = areaId.replace(/"/g, '\\"');
-    const areaEl =
+    const safeAreaName = areaName ? areaName.replace(/"/g, '\\"') : '';
+    const safeAreaNameUnderscore = areaName ? areaName.replace(/[\s-]+/g, '_').replace(/"/g, '\\"') : '';
+    const safeTicketTypeId = ticketTypeId ? ticketTypeId.replace(/"/g, '\\"') : '';
+
+    // 1. Attribute matching on DOM elements
+    let areaEl: DOMElementLike | null =
       root.querySelector(`[data-zone-id="${safeAreaId}"]`) ||
       root.querySelector(`[data-area-id="${safeAreaId}"]`) ||
       root.querySelector(`[data-area="${safeAreaId}"]`) ||
       root.querySelector(`[data-section-id="${safeAreaId}"]`) ||
       root.querySelector(`[id="${safeAreaId}"]`);
 
+    if (!areaEl && safeTicketTypeId) {
+      areaEl =
+        root.querySelector(`[data-ticket-id="${safeTicketTypeId}"]`) ||
+        root.querySelector(`[data-ticket-type-id="${safeTicketTypeId}"]`);
+    }
+
+    if (!areaEl && safeAreaName) {
+      areaEl =
+        root.querySelector(`[data-area-name="${safeAreaName}"]`) ||
+        root.querySelector(`[data-zone-name="${safeAreaName}"]`) ||
+        root.querySelector(`[id="${safeAreaName}"]`) ||
+        root.querySelector(`[id="${safeAreaNameUnderscore}"]`);
+    }
+
+    // 2. SVG element matching (g, path, polygon, rect)
     if (!areaEl) {
-      const svgArea = root.querySelector(
-        `svg g[id*="${safeAreaId}"], svg path[id*="${safeAreaId}"], [class*="${safeAreaId}"]`
-      );
+      const svgArea =
+        root.querySelector(
+          `svg g[id*="${safeAreaId}"], svg path[id*="${safeAreaId}"], [class*="${safeAreaId}"]`
+        ) ||
+        (safeAreaNameUnderscore
+          ? root.querySelector(
+              `svg g[id*="${safeAreaNameUnderscore}"], svg path[id*="${safeAreaNameUnderscore}"], svg g[name*="${safeAreaNameUnderscore}"]`
+            )
+          : null) ||
+        (safeTicketTypeId
+          ? root.querySelector(`svg [data-ticket-id="${safeTicketTypeId}"], svg [data-ticket-type-id="${safeTicketTypeId}"]`)
+          : null);
+
       if (svgArea && typeof (svgArea as MutableDOMElement).click === 'function') {
+        this.logger?.info('Clicked SVG area element', { areaId, areaName });
         (svgArea as MutableDOMElement).click!();
         return true;
       }
 
-      // Ticketbox Seated Mode: Canvas / Konva interaction via Page-World Bridge
+      // Check SVG text nodes matching area name
+      if (typeof document !== 'undefined' && safeAreaName) {
+        const svgTexts = Array.from(document.querySelectorAll('svg text'));
+        const normName = safeAreaName.toLowerCase();
+        for (const t of svgTexts) {
+          const content = (t.textContent || '').trim().toLowerCase();
+          if (content && (content === normName || normName.includes(content) || content.includes(normName))) {
+            const clickable = (t.closest('g') || t) as HTMLElement;
+            this.logger?.info('Found matching SVG text element, clicking', { text: content });
+            this.clickElement(wrapBrowserElement(clickable));
+            return true;
+          }
+        }
+      }
+
+      // 3. Right Sidebar / Legend / Ticket Tier list item matching
+      if (typeof document !== 'undefined') {
+        const tierCandidates = Array.from(
+          document.querySelectorAll(
+            '.legend-item, [class*="legend-item"], [class*="tier-item"], [class*="ticket-item"], [class*="section-item"], .ticket-legend > div, aside div[role="button"], .sidebar div[role="button"], button'
+          )
+        );
+        for (const tc of tierCandidates) {
+          const txt = (tc.textContent || '').toLowerCase();
+          const matchesName = safeAreaName && txt.includes(safeAreaName.toLowerCase());
+          const matchesId = safeTicketTypeId && txt.includes(safeTicketTypeId);
+          if (matchesName || matchesId) {
+            this.logger?.info('Found matching tier item in right sidebar/legend, clicking', {
+              text: txt.slice(0, 40),
+            });
+            this.clickElement(wrapBrowserElement(tc as HTMLElement));
+            await new Promise((r) => setTimeout(r, 400));
+            return true;
+          }
+        }
+      }
+
+      // 4. Ticketbox Canvas / Konva interaction via Page-World Bridge
       if (typeof window !== 'undefined') {
         const bridgeRes = await this.sendPageBridgeRequest<{ transitioned: boolean }>(
           'SELECT_AREA',
-          { areaId }
+          { areaId, areaName, ticketTypeId, coords }
         );
 
         if (bridgeRes.success) {
           this.logger?.info('Area selected successfully via Page Bridge (Konva)', {
             areaId,
+            areaName,
             transitioned: bridgeRes.data?.transitioned,
           });
           await new Promise((r) => setTimeout(r, 400));
@@ -1421,10 +2062,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           return true;
         }
 
-        // Fallback: If Konva canvas exists, simulate click on canvas container
+        // Fallback: If Konva canvas exists, simulate click on canvas container at coordinates
         const konvaContent = document.querySelector('.konvajs-content') as HTMLElement | null;
         if (konvaContent) {
-          this.logger?.info('Dispatching simulated click to Konva canvas container', { areaId });
+          this.logger?.info('Dispatching simulated click to Konva canvas container', { areaId, coords });
           this.clickElement(wrapBrowserElement(konvaContent));
           await new Promise((r) => setTimeout(r, 500));
           return true;
@@ -1433,7 +2074,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
       this.logger?.info(
         'Area element not explicitly clickable in DOM; proceeding with coordinate seat discovery',
-        { areaId }
+        { areaId, areaName }
       );
       return true;
     }
@@ -1577,15 +2218,19 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           this.reconcileSelectedSeatsFromDOM(apiSeats, root);
         }
         for (const s of apiSeats) {
-          if (this.selectedSeatIds.has(s.id) || this.selectedSeatIds.has(s.label)) {
+          if (this.isSeatBlacklisted(s.id) || this.isSeatBlacklisted(s.label)) {
+            s.status = 'UNAVAILABLE';
+            s.selectable = false;
+          } else if (this.selectedSeatIds.has(s.id) || this.selectedSeatIds.has(s.label)) {
             s.status = 'SELECTED';
           }
         }
         this.cachedSeats = apiSeats;
         this.logger?.info('Discovered seats from authoritative Seatmap API', {
           totalSeats: apiSeats.length,
-          availableCount: apiSeats.filter((s) => s.selectable).length,
+          availableCount: apiSeats.filter((s) => s.selectable && s.status === 'AVAILABLE').length,
           selectedCount: apiSeats.filter((s) => s.status === 'SELECTED').length,
+          blacklistedCount: apiSeats.filter((s) => this.isSeatBlacklisted(s.id) || this.isSeatBlacklisted(s.label)).length,
           areaId,
         });
         return apiSeats;
@@ -1606,6 +2251,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     if (seatMatches) {
       for (const rawLabel of seatMatches) {
         const seatLabel = rawLabel.toUpperCase();
+        if (this.isSeatBlacklisted(seatLabel)) {
+          continue;
+        }
         const existing = allSeats.find(
           (s) => s.label.toUpperCase() === seatLabel || s.id.toUpperCase() === seatLabel
         );
@@ -1623,6 +2271,13 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             selectable: true,
           });
         }
+      }
+    }
+
+    for (const s of allSeats) {
+      if (this.isSeatBlacklisted(s.id) || this.isSeatBlacklisted(s.label)) {
+        s.status = 'UNAVAILABLE';
+        s.selectable = false;
       }
     }
 
@@ -1673,7 +2328,12 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               typeof s.y === 'number' &&
               Math.hypot(s.x - cx, s.y - cy) < 15)
           ) {
-            s.status = 'SELECTED';
+            if (this.isSeatBlacklisted(s.id) || this.isSeatBlacklisted(s.label)) {
+              s.status = 'UNAVAILABLE';
+              s.selectable = false;
+            } else {
+              s.status = 'SELECTED';
+            }
           }
         }
       }
@@ -1686,7 +2346,12 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         const barText = bar.textContent.toUpperCase();
         for (const s of seats) {
           if (s.label && s.label.length >= 2 && barText.includes(s.label.toUpperCase())) {
-            s.status = 'SELECTED';
+            if (this.isSeatBlacklisted(s.id) || this.isSeatBlacklisted(s.label)) {
+              s.status = 'UNAVAILABLE';
+              s.selectable = false;
+            } else {
+              s.status = 'SELECTED';
+            }
           }
         }
       }
@@ -2280,7 +2945,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
                 nativeEl.dispatchEvent(new EventCtor('focus', { bubbles: true }) as never);
                 if (typeof InputEvent !== 'undefined') {
                   try {
-                    nativeEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: item.targetValue }));
+                    nativeEl.dispatchEvent(
+                      new InputEvent('input', { bubbles: true, data: item.targetValue })
+                    );
                   } catch {
                     nativeEl.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
                   }

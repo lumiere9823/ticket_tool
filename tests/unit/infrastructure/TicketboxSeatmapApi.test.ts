@@ -539,4 +539,131 @@ describe('Authoritative Ticketbox Seatmap API Integration', () => {
       expect(target?.getAttribute('aria-pressed')).toBe('true');
     });
   });
+
+  describe('Area-based / Non-reserving Seatmap Handling (Concert Zones)', () => {
+    const MOCK_AREA_BASED_SEATMAP_RESPONSE: SeatmapApiResponse = {
+      status: 1,
+      message: 'Success',
+      data: {
+        result: {
+          id: 869,
+          name: 'SAO CONCERT-VAN PHUC CITY.svg',
+          status: 0,
+          sections: [
+            {
+              id: 12724,
+              seatMapId: 869,
+              name: 'stage',
+              isStage: true,
+              isReservingSeat: false,
+              status: 1,
+            },
+            {
+              id: 12768,
+              seatMapId: 869,
+              name: 'ULTRA_VIP_L2',
+              isReservingSeat: false,
+              isStage: false,
+              ticketTypeId: 1086256,
+              status: 1,
+              ticketType: {
+                id: 1086256,
+                name: 'ULTRA VIP - L2',
+                price: 1550000,
+                status: 'book_now',
+                minQtyPerOrder: 1,
+                maxQtyPerOrder: 6,
+              },
+              attribute: {
+                x: 956.2,
+                y: 1502.8,
+                width: 211.8,
+                height: 135.1,
+              },
+            },
+            {
+              id: 12725,
+              seatMapId: 869,
+              name: 'STARDOM_L',
+              isReservingSeat: false,
+              isStage: false,
+              ticketTypeId: 1086309,
+              status: 1,
+              ticketType: {
+                id: 1086309,
+                name: 'STARDOM - L',
+                price: 688000,
+                status: 'book_now',
+                minQtyPerOrder: 1,
+                maxQtyPerOrder: 4,
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    it('should parse area-based sections with ticketTypeId and non-reserving seat attributes', () => {
+      const areas = TicketboxSeatMapParser.parseAreasFromSeatmapApi(MOCK_AREA_BASED_SEATMAP_RESPONSE);
+      expect(areas).toHaveLength(2); // stage skipped, 2 salable zones kept
+
+      const ultraVip = areas.find((a) => a.id === '12768');
+      expect(ultraVip).toBeDefined();
+      expect(ultraVip?.name).toBe('ULTRA_VIP_L2');
+      expect(ultraVip?.ticketTypeId).toBe('1086256');
+      expect(ultraVip?.ticketTypeName).toBe('ULTRA VIP - L2');
+      expect(ultraVip?.isReservingSeat).toBe(false);
+      expect(ultraVip?.mode).toBe('AREA_BASED');
+      expect(ultraVip?.availability).toBe('AVAILABLE');
+      expect(ultraVip?.x).toBe(956.2);
+    });
+
+    it('should successfully complete journey on area-based seat map without individual seats', async () => {
+      const origWindow = globalThis.window;
+      globalThis.window = {
+        location: {
+          href: 'https://ticketbox.vn/events/26418/bookings/79214083095652/select-ticket',
+        },
+      } as unknown as Window & typeof globalThis;
+
+      try {
+        const dom = parseHtmlToDOMElementLike(`
+          <div id="booking-container">
+            <svg class="seatmap" width="1000" height="800">
+              <g id="ULTRA_VIP_L2" data-section-id="12768">
+                <text>ULTRA VIP - L2</text>
+              </g>
+            </svg>
+            <div class="sidebar">
+              <button class="ant-btn-primary" id="btn-continue">Tiếp tục &gt;&gt;</button>
+            </div>
+          </div>
+        `);
+
+        const stateMachine = new PurchaseStateMachine(PurchaseState.READY, 'attempt-area-test');
+        stateMachine.transition({ type: 'ARM' });
+        stateMachine.transition({ type: 'MONITORING_STARTED' });
+
+        const adapter = new TicketboxJourneyAdapter(new SanitizedLogger(), dom);
+        adapter.setSeatmapData(MOCK_AREA_BASED_SEATMAP_RESPONSE);
+
+        const eventBus = new ChromeMessageBus();
+        const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, new SanitizedLogger());
+
+        const result = await useCase.execute({
+          categoryPriority: ['ULTRA VIP - L2', '1086256'],
+          quantity: 1,
+          allowFallback: false,
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.finalState).toBe(PurchaseState.SEATS_SELECTED);
+        expect(result.selection?.seats).toContain('ULTRA_VIP_L2');
+        expect(stateMachine.state).toBe(PurchaseState.SEATS_SELECTED);
+      } finally {
+        globalThis.window = origWindow;
+      }
+    });
+  });
 });
+

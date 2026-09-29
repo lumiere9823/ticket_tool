@@ -49,7 +49,9 @@ export class TicketboxFormParser {
           native.style?.display === 'none' ||
           native.style?.visibility === 'hidden' ||
           native.getAttribute('aria-hidden') === 'true' ||
-          native.closest?.('[style*="display: none"], [style*="display:none"], [aria-hidden="true"], header, nav')
+          native.closest?.(
+            '[style*="display: none"], [style*="display:none"], [aria-hidden="true"], header, nav'
+          )
         ) {
           return false;
         }

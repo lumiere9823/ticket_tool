@@ -41,10 +41,20 @@ export interface SeatmapApiSection {
   name: string;
   isReservingSeat: boolean;
   isStage?: boolean;
+  ticketTypeId?: number;
   status: number;
   ticketType?: SeatmapApiTicketType;
   rows?: SeatmapApiRow[];
   elements?: unknown[];
+  attribute?: {
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    scaleX?: number;
+    scaleY?: number;
+    rotate?: number;
+  };
 }
 
 export interface SeatmapApiResponse {
@@ -479,16 +489,28 @@ export class TicketboxSeatMapParser {
 
     const areas: SeatArea[] = [];
     for (const sec of sections) {
-      if (!sec.isReservingSeat || sec.isStage) continue;
+      if (sec.isStage) continue;
       const isAvailable = sec.ticketType ? sec.ticketType.status === 'book_now' : sec.status === 1;
+      const isReservingSeat = Boolean(sec.isReservingSeat && sec.rows && sec.rows.length > 0);
       areas.push({
         id: String(sec.id),
         name: sec.name,
         price: sec.ticketType?.price ?? 0,
         currency: 'VND',
-        mode: 'SEATED',
+        mode: isReservingSeat ? 'SEATED' : 'AREA_BASED',
         availability: isAvailable ? 'AVAILABLE' : 'SOLD_OUT',
         selectable: isAvailable,
+        ticketTypeId: sec.ticketTypeId
+          ? String(sec.ticketTypeId)
+          : sec.ticketType?.id
+            ? String(sec.ticketType.id)
+            : undefined,
+        ticketTypeName: sec.ticketType?.name,
+        isReservingSeat,
+        x: sec.attribute?.x,
+        y: sec.attribute?.y,
+        width: sec.attribute?.width,
+        height: sec.attribute?.height,
       });
     }
     return areas;

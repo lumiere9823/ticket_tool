@@ -7,6 +7,8 @@ import { PurchaseStateMachine } from '../../../src/domain/state-machine/Purchase
 import { PurchaseState } from '../../../src/domain/states/PurchaseState';
 import { ExecuteBookingJourneyUseCase } from '../../../src/application/use-cases/ExecuteBookingJourneyUseCase';
 import { ChromeMessageBus } from '../../../src/infrastructure/messaging/ChromeMessageBus';
+import { AdjacentSeatStrategy } from '../../../src/domain/policies/AdjacentSeatStrategy';
+import { Seat } from '../../../src/domain/entities/BookingJourneyModels';
 
 const MOCK_SEATMAP: SeatmapApiResponse = {
   status: 1,
@@ -308,6 +310,65 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       expect(success).toBe(true);
       expect(clicked).toBe(true);
     });
+
+    it('should never click breadcrumbs, step headings or elements with "chọn vé" and should click enabled continue button', async () => {
+      const html = `
+        <div id="root">
+          <header class="header">
+            <div class="step-nav">
+              <div role="button" class="step-item active">1. Chọn vé</div>
+              <div role="button" class="step-item">2. Thanh toán</div>
+            </div>
+            <h1>Chọn khu vực</h1>
+            <p>Bấm vào khu vực để chọn vé</p>
+          </header>
+          <div class="seatmap-container">
+            <div class="legend"><div>Chọn vé</div></div>
+          </div>
+          <div class="bottom-bar">
+            <button id="btn-continue" class="btn ant-btn-primary">Tiếp tục thanh toán &gt;&gt;</button>
+          </div>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const adapter = new TicketboxJourneyAdapter(logger, root);
+
+      let clickedBtn = false;
+      let clickedStepNav = false;
+
+      const continueBtn = root.querySelector('#btn-continue');
+      if (continueBtn) {
+        (continueBtn as unknown as { click: () => void }).click = () => {
+          clickedBtn = true;
+        };
+      }
+      const stepItem = root.querySelector('.step-item');
+      if (stepItem) {
+        (stepItem as unknown as { click: () => void }).click = () => {
+          clickedStepNav = true;
+        };
+      }
+
+      const success = await adapter.proceedToNextStep();
+      expect(success).toBe(true);
+      expect(clickedBtn).toBe(true);
+      expect(clickedStepNav).toBe(false);
+    });
+
+    it('should return false when only non-action elements or disabled buttons exist', async () => {
+      const html = `
+        <div id="root">
+          <div class="breadcrumb"><span>Trang chủ / Chọn vé</span></div>
+          <h2>Bấm vào khu vực để chọn vé</h2>
+          <button disabled class="btn ant-btn-primary">Tiếp tục</button>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const adapter = new TicketboxJourneyAdapter(logger, root);
+
+      const success = await adapter.proceedToNextStep();
+      expect(success).toBe(false);
+    });
   });
 
   describe('Complete Journey Execution on Seated /select-ticket', () => {
@@ -390,6 +451,180 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       expect(result.selection?.seats).toContain('L28');
 
       globalThis.window = origWindow;
+    });
+
+    it('should handle Area Selection Modal stepper and proceed button for area-based seating', async () => {
+      let plusClickCount = 0;
+      let modalContinueClicked = false;
+      let bottomBarContinueClicked = false;
+
+      const html = `
+        <div id="booking-container">
+          <div class="konvajs-content"><canvas></canvas></div>
+          <!-- Ant Design Modal Dialog for Area Selection (e.g. CAT 3 - R) -->
+          <div class="ant-modal-content" role="dialog">
+            <button aria-label="Close" class="ant-modal-close"><span class="ant-modal-close-x">✕</span></button>
+            <div class="ant-modal-header">
+              <div class="ant-modal-title">Khu CAT_3R</div>
+            </div>
+            <div class="ant-modal-body">
+              <p>Lưu ý: Bạn chỉ có thể chọn vé trong 1 khu vực</p>
+              <div class="ticket-stepper-row">
+                <span>CAT 3 - R</span>
+                <div class="stepper-controls">
+                  <button class="btn-minus" disabled>-</button>
+                  <span class="qty-display">0</span>
+                  <button class="btn-plus" aria-label="plus">+</button>
+                </div>
+              </div>
+              <div class="info-note">Numbered Seating</div>
+              <a href="#" class="link-change-area">Chọn khu vực khác</a>
+              <button class="btn-modal-continue" disabled>Vui lòng chọn vé &gt;&gt;</button>
+            </div>
+          </div>
+          <div class="bottom-bar">
+            <button id="btn-continue" class="btn ant-btn-primary" disabled>Vui lòng chọn vé &gt;&gt;</button>
+          </div>
+        </div>
+      `;
+
+      const root = parseHtmlToDOMElementLike(html);
+
+      // Attach mock click handlers
+      const plusBtn = root.querySelector('.btn-plus') as unknown as { click: () => void };
+      const modalContinueBtn = root.querySelector('.btn-modal-continue') as unknown as {
+        click: () => void;
+        textContent: string;
+        removeAttribute: (attr: string) => void;
+      };
+      const bottomBarBtn = root.querySelector('#btn-continue') as unknown as {
+        click: () => void;
+        textContent: string;
+        removeAttribute: (attr: string) => void;
+      };
+      const qtyDisplay = root.querySelector('.qty-display') as unknown as { textContent: string };
+
+      plusBtn.click = () => {
+        plusClickCount++;
+        qtyDisplay.textContent = String(plusClickCount);
+        modalContinueBtn.textContent = `Tiếp tục - ${plusClickCount * 820000} đ >>`;
+        modalContinueBtn.removeAttribute('disabled');
+        bottomBarBtn.textContent = `Tiếp tục - ${plusClickCount * 820000} đ >>`;
+        bottomBarBtn.removeAttribute('disabled');
+      };
+
+      modalContinueBtn.click = () => {
+        modalContinueClicked = true;
+      };
+
+      bottomBarBtn.click = () => {
+        bottomBarContinueClicked = true;
+      };
+
+      const adapter = new TicketboxJourneyAdapter(logger, root);
+
+      const qtySuccess = await adapter.selectQuantity(
+        {
+          id: '1086284',
+          name: 'CAT 3 - R',
+          price: { amount: 820000, currency: 'VND' },
+          mode: 'SEATED',
+          availability: 'AVAILABLE',
+          minQuantity: 1,
+          maxQuantity: 4,
+          selectedQuantity: 0,
+          selectable: true,
+          source: { page: 'BOOKING', evidence: [] },
+        },
+        2
+      );
+
+      expect(qtySuccess).toBe(true);
+      expect(plusClickCount).toBe(2);
+      expect(qtyDisplay.textContent).toBe('2');
+
+      const proceedSuccess = await adapter.proceedToNextStep();
+      expect(proceedSuccess).toBe(true);
+      expect(modalContinueClicked || bottomBarContinueClicked).toBe(true);
+    });
+
+    it('should detect -1242 seat unavailable error modal, blacklist seat, and click Chọn ghế khác', async () => {
+      let changeSeatClicked = false;
+      const html = `
+        <div id="booking-container">
+          <div class="ant-modal-content" role="dialog">
+            <div class="ant-modal-header">
+              <div class="ant-modal-title">Uiii, Xin lỗi!</div>
+            </div>
+            <div class="ant-modal-body">
+              <p>(-1242) Ghế bạn chọn VIP_A-21 đã được đặt trước</p>
+            </div>
+            <div class="ant-modal-footer">
+              <button class="ant-btn ant-btn-primary"><span>Chọn ghế khác</span></button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      const root = parseHtmlToDOMElementLike(html);
+      const actionBtn = root.querySelector('.ant-btn-primary') as unknown as {
+        click: () => void;
+      };
+      actionBtn.click = () => {
+        changeSeatClicked = true;
+      };
+
+      const adapter = new TicketboxJourneyAdapter(logger, root);
+      const errorResult = await adapter.detectAndHandleErrorModal();
+
+      expect(errorResult.hasError).toBe(true);
+      expect(errorResult.isSeatUnavailable).toBe(true);
+      expect(errorResult.seatLabel).toBe('VIP_A-21');
+      expect(changeSeatClicked).toBe(true);
+      expect(adapter.isSeatBlacklisted('VIP_A-21')).toBe(true);
+      expect(adapter.isSeatBlacklisted('VIP_A21')).toBe(true);
+    });
+
+    it('should ensure AdjacentSeatStrategy ignores blacklisted seats and selects alternate available seat', () => {
+      const seats: Seat[] = [
+        {
+          id: 'seat-1',
+          label: 'VIP_A-21',
+          row: 'A',
+          number: 21,
+          status: 'AVAILABLE',
+          selectable: true,
+          price: 2400000,
+          area: 'area-vip',
+          areaId: 'area-vip',
+        },
+        {
+          id: 'seat-2',
+          label: 'VIP_A-22',
+          row: 'A',
+          number: 22,
+          status: 'AVAILABLE',
+          selectable: true,
+          price: 2400000,
+          area: 'area-vip',
+          areaId: 'area-vip',
+        },
+      ];
+
+      const blacklisted = new Set<string>(['VIPA21']);
+      const decision = AdjacentSeatStrategy.selectSeats(
+        seats,
+        1,
+        'area-vip',
+        'ANY_AVAILABLE',
+        'SELECT_NON_ADJACENT',
+        blacklisted
+      );
+
+      expect(decision.status).toBe('SUCCESS');
+      expect(decision.selectedSeats.length).toBe(1);
+      expect(decision.selectedSeats[0]!.id).toBe('seat-2');
+      expect(decision.selectedSeats[0]!.label).toBe('VIP_A-22');
     });
   });
 });

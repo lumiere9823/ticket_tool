@@ -66,14 +66,19 @@ export interface TicketboxPageAdapter {
   selectSeats(selection: { zoneId?: string; seatIds: string[] }): Promise<boolean>;
 
   // Complete Booking Journey Port Methods
-  discoverJourneyTickets?(showingId?: string | null): Promise<
-    import('../../domain/entities/BookingJourneyModels').JourneyTicketType[]
-  >;
+  discoverJourneyTickets?(
+    showingId?: string | null
+  ): Promise<import('../../domain/entities/BookingJourneyModels').JourneyTicketType[]>;
   discoverAreas?(): Promise<import('../../domain/entities/BookingJourneyModels').SeatArea[]>;
   discoverSeats?(
     areaId?: string
   ): Promise<import('../../domain/entities/BookingJourneyModels').Seat[]>;
-  selectArea?(areaId: string): Promise<boolean>;
+  selectArea?(
+    areaId: string,
+    areaName?: string | undefined,
+    ticketTypeId?: string | undefined,
+    coords?: { x?: number | undefined; y?: number | undefined; width?: number | undefined; height?: number | undefined } | undefined
+  ): Promise<boolean>;
   selectSpecificSeats?(seatIds: string[]): Promise<boolean>;
   getBookingSummary?(): Promise<
     import('../../domain/entities/BookingJourneyModels').BookingSummary | null
@@ -88,4 +93,15 @@ export interface TicketboxPageAdapter {
   }>;
   proceedToNextStep?(): Promise<boolean>;
   isNavigationPending?(): boolean;
+  setScopedPlan?(
+    plan: import('../../domain/entities/ScopedPurchasePlan').ScopedPurchasePlan | null
+  ): void;
+  detectAndHandleErrorModal?(): Promise<{
+    hasError: boolean;
+    isSeatUnavailable: boolean;
+    seatLabel?: string | undefined;
+  }>;
+  blacklistSeat?(seatIdOrLabel: string): void;
+  isSeatBlacklisted?(seatIdOrLabel?: string | null): boolean;
+  getBlacklistedSeats?(): Set<string>;
 }

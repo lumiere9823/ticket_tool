@@ -22,6 +22,10 @@ const VALID_MESSAGE_TYPES = new Set<string>([
   'REQUEST_DISCOVERY_SCAN',
   'FETCH_SEATMAP_REQUEST',
   'FETCH_SEATMAP_RESPONSE',
+  'RESET_CONFIG_REQUESTED',
+  'RESET_CONFIG_DONE',
+  'SCHEDULED_ARM_CONFIRMED',
+  'CANCEL_SCHEDULED_ARM',
 ]);
 
 export class ChromeMessageBus implements EventBus {
@@ -53,23 +57,41 @@ export class ChromeMessageBus implements EventBus {
     // 2. Broadcast across Chrome runtime and active tabs if available
     if (this.isChromeRuntimeAvailable()) {
       try {
+        // Broadcast across Chrome runtime (service worker, popup)
         chrome.runtime.sendMessage(message, () => {
-          // Ignore errors from missing listeners (e.g. popup closed)
           if (chrome.runtime.lastError) {
             // expected when no popup or external listener is currently open
           }
         });
 
-        // Also broadcast to active tabs where content script might be listening
+        // Broadcast to Ticketbox tabs as well as active tab
         if (chrome.tabs && chrome.tabs.query) {
-          chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            for (const tab of tabs) {
-              if (tab.id) {
-                chrome.tabs.sendMessage(tab.id, message, () => {
-                  if (chrome.runtime.lastError) {
-                    // expected if tab has no content script
-                  }
-                });
+          const sentTabIds = new Set<number>();
+          const sendToTab = (tab: chrome.tabs.Tab) => {
+            if (tab.id && !sentTabIds.has(tab.id)) {
+              sentTabIds.add(tab.id);
+              chrome.tabs.sendMessage(tab.id, message, () => {
+                if (chrome.runtime.lastError) {
+                  // expected if tab has no content script or is not ready
+                }
+              });
+            }
+          };
+
+          // Query all Ticketbox tabs
+          chrome.tabs.query({ url: '*://*.ticketbox.vn/*' }, (ticketboxTabs) => {
+            if (ticketboxTabs) {
+              for (const tab of ticketboxTabs) {
+                sendToTab(tab);
+              }
+            }
+          });
+
+          // Also query current active tab (for dev/mock environments)
+          chrome.tabs.query({ active: true, currentWindow: true }, (activeTabs) => {
+            if (activeTabs) {
+              for (const tab of activeTabs) {
+                sendToTab(tab);
               }
             }
           });
@@ -96,7 +118,10 @@ export class ChromeMessageBus implements EventBus {
             }
           }
         } else {
-          this.logger?.warn('Ignored invalid message received via chrome.runtime', { message });
+          const msgType = (message as Record<string, unknown>)?.type;
+          if (typeof msgType === 'string' && VALID_MESSAGE_TYPES.has(msgType)) {
+            this.logger?.warn('Ignored invalid message received via chrome.runtime', { type: msgType, message });
+          }
         }
       });
     }
@@ -133,7 +158,10 @@ export class ChromeMessageBus implements EventBus {
           typeof msg['quantity'] === 'number'
         );
       case 'START_MONITORING':
-        return typeof msg['eventUrl'] === 'string' && typeof msg['attemptId'] === 'string';
+        return (
+          typeof msg['eventUrl'] === 'string' ||
+          typeof msg['targetEventUrl'] === 'string'
+        );
       case 'AVAILABILITY_DETECTED':
         return (
           Array.isArray(msg['candidates']) &&
@@ -179,9 +207,19 @@ export class ChromeMessageBus implements EventBus {
       case 'REQUEST_DISCOVERY_SCAN':
       case 'STOP_REQUESTED':
       case 'SYNC_STATE_REQUEST':
+      case 'RESET_CONFIG_REQUESTED':
+      case 'RESET_CONFIG_DONE':
+      case 'CANCEL_SCHEDULED_ARM':
         return true;
+      case 'SCHEDULED_ARM_CONFIRMED':
+        return typeof msg['scheduledAt'] === 'string';
+      case 'FETCH_SEATMAP_REQUEST':
+        return typeof msg['showingId'] === 'string';
+      case 'FETCH_SEATMAP_RESPONSE':
+        return typeof msg['showingId'] === 'string' && typeof msg['success'] === 'boolean';
       default:
         return false;
     }
   }
 }
+

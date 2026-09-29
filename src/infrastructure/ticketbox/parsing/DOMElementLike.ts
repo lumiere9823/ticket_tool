@@ -14,6 +14,7 @@ export interface DOMElementLike {
   getAttribute(name: string): string | null;
   hasAttribute(name: string): boolean;
   setAttribute?(name: string, value: string): void;
+  removeAttribute?(name: string): void;
   querySelector(selector: string): DOMElementLike | null;
   querySelectorAll(selector: string): DOMElementLike[];
   click?(): void;
@@ -55,6 +56,9 @@ export function wrapBrowserElement(el: Element | Document): DOMElementLike {
     },
     setAttribute(name: string, value: string): void {
       element.setAttribute(name, value);
+    },
+    removeAttribute(name: string): void {
+      element.removeAttribute(name);
     },
     querySelector(selector: string): DOMElementLike | null {
       try {
@@ -126,6 +130,11 @@ class SimpleDOMNode implements DOMElementLike {
     );
   }
 
+  public set textContent(val: string) {
+    this.rawText = val;
+    this.children = [];
+  }
+
   public getAttribute(name: string): string | null {
     const val = this.attributes[name.toLowerCase()];
     return val !== undefined ? val : null;
@@ -137,6 +146,10 @@ class SimpleDOMNode implements DOMElementLike {
 
   public setAttribute(name: string, value: string): void {
     this.attributes[name.toLowerCase()] = value;
+  }
+
+  public removeAttribute(name: string): void {
+    delete this.attributes[name.toLowerCase()];
   }
 
   public click(): void {

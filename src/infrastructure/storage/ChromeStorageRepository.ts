@@ -1,7 +1,9 @@
 import {
   StorageRepository,
   AssistantConfiguration,
+  PersistentExecutionState,
 } from '../../application/ports/StorageRepository';
+
 import { StateContext } from '../../domain/states/PurchaseState';
 import { AccountProfile } from '../../domain/entities/AccountProfile';
 import { ProfileId } from '../../domain/value-objects/ProfileId';
@@ -9,6 +11,7 @@ import { ProfileId } from '../../domain/value-objects/ProfileId';
 const STORAGE_KEYS = {
   CONFIG: 'ticketbox_assistant_config',
   STATE: 'ticketbox_assistant_last_state',
+  PERSISTENT_STATE: 'ticketbox_assistant_persistent_state',
   PROFILES: 'ticketbox_assistant_profiles',
   INTERVENTIONS: 'ticketbox_assistant_interventions',
 };
@@ -112,6 +115,69 @@ export class ChromeStorageRepository implements StorageRepository {
       });
     }
     this.inMemoryMap.set(STORAGE_KEYS.STATE, safeState);
+  }
+
+  public async getPersistentState(): Promise<PersistentExecutionState | null> {
+    if (this.isChromeStorageAvailable()) {
+      return new Promise((resolve) => {
+        chrome.storage.local.get(STORAGE_KEYS.PERSISTENT_STATE, (res) => {
+          resolve((res[STORAGE_KEYS.PERSISTENT_STATE] as PersistentExecutionState) ?? null);
+        });
+      });
+    }
+    return (
+      (this.inMemoryMap.get(STORAGE_KEYS.PERSISTENT_STATE) as PersistentExecutionState) ?? null
+    );
+  }
+
+  public async savePersistentState(state: Partial<PersistentExecutionState>): Promise<void> {
+    const current = await this.getPersistentState();
+    const merged: PersistentExecutionState = {
+      startedAt: state.startedAt !== undefined ? state.startedAt : (current?.startedAt ?? Date.now()),
+      attemptsCount: state.attemptsCount !== undefined ? state.attemptsCount : (current?.attemptsCount ?? 0),
+      lastTarget: 'lastTarget' in state ? state.lastTarget : current?.lastTarget,
+      currentPhase: state.currentPhase !== undefined ? state.currentPhase : (current?.currentPhase ?? 'INIT'),
+      stopReason: 'stopReason' in state ? state.stopReason : current?.stopReason,
+      tabHiddenWarning: state.tabHiddenWarning !== undefined ? state.tabHiddenWarning : (current?.tabHiddenWarning ?? false),
+    };
+    const safeState = this.sanitizeData(merged);
+    if (this.isChromeStorageAvailable()) {
+      return new Promise((resolve) => {
+        chrome.storage.local.set({ [STORAGE_KEYS.PERSISTENT_STATE]: safeState }, () => {
+          resolve();
+        });
+      });
+    }
+    this.inMemoryMap.set(STORAGE_KEYS.PERSISTENT_STATE, safeState);
+  }
+
+  public async clearPersistentState(): Promise<void> {
+    if (this.isChromeStorageAvailable()) {
+      return new Promise((resolve) => {
+        chrome.storage.local.remove(STORAGE_KEYS.PERSISTENT_STATE, () => {
+          resolve();
+        });
+      });
+    }
+    this.inMemoryMap.delete(STORAGE_KEYS.PERSISTENT_STATE);
+  }
+
+  /**
+   * Clears all session config (event URL, purchase plan, execution state).
+   * Profiles are intentionally preserved.
+   */
+  public async clearConfiguration(): Promise<void> {
+    const keysToRemove = [
+      STORAGE_KEYS.CONFIG,
+      STORAGE_KEYS.STATE,
+      STORAGE_KEYS.PERSISTENT_STATE,
+    ];
+    if (this.isChromeStorageAvailable()) {
+      return new Promise((resolve) => {
+        chrome.storage.local.remove(keysToRemove, () => resolve());
+      });
+    }
+    keysToRemove.forEach((k) => this.inMemoryMap.delete(k));
   }
 
   public async getProfiles(): Promise<AccountProfile[]> {
