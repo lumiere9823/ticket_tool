@@ -12,6 +12,14 @@ import {
   createEmptyTicketCatalogSnapshot,
 } from '../../domain/entities/PurchasePlan';
 import { PurchasePlanValidator } from '../../domain/policies/PurchasePlanValidator';
+import {
+  ScopedPurchasePlan,
+  PriorityStrategy,
+  DEFAULT_PERSISTENCE_POLICY,
+  createDefaultScopedPurchasePlan,
+} from '../../domain/entities/ScopedPurchasePlan';
+import { ScopedPurchasePlanValidator } from '../../domain/policies/ScopedPurchasePlanValidator';
+import { PersistentExecutionState } from '../../application/ports/StorageRepository';
 
 // ─── Infrastructure ──────────────────────────────────────────────────────────
 
@@ -25,6 +33,9 @@ let currentCatalog: TicketCatalogSnapshot = createEmptyTicketCatalogSnapshot();
 
 /** Current purchase plan being edited. Persisted on every change. */
 let currentPlan: PurchasePlan = createDefaultPurchasePlan();
+
+/** Current scoped purchase plan being edited (showing x tier matrix). */
+let currentScopedPlan: ScopedPurchasePlan = createDefaultScopedPurchasePlan();
 
 // ─── DOM References ───────────────────────────────────────────────────────────
 
@@ -49,6 +60,41 @@ const showingSelect = document.getElementById('showing-select') as HTMLSelectEle
 const ticketRulesContainer = document.getElementById('ticket-rules-container') as HTMLElement;
 const btnAddTicketRow = document.getElementById('btn-add-ticket-row') as HTMLButtonElement;
 
+// Scoped Matrix DOM references
+const matrixEmpty = document.getElementById('matrix-empty') as HTMLElement;
+const matrixTableWrapper = document.getElementById('matrix-table-wrapper') as HTMLElement;
+const scopedMatrixTbody = document.getElementById('scoped-matrix-tbody') as HTMLElement;
+const scopedQuantityInput = document.getElementById('scoped-quantity') as HTMLInputElement;
+const scopedStrategySelect = document.getElementById('scoped-strategy') as HTMLSelectElement;
+const paramDurationInput = document.getElementById('param-duration') as HTMLInputElement;
+const paramAttemptsInput = document.getElementById('param-attempts') as HTMLInputElement;
+const paramPollIntervalInput = document.getElementById('param-poll-interval') as HTMLInputElement;
+const paramJitterInput = document.getElementById('param-jitter') as HTMLInputElement;
+const paramAllowPartialCheckbox = document.getElementById(
+  'param-allow-partial'
+) as HTMLInputElement;
+const persistentTargetDisplay = document.getElementById('persistent-target-display') as HTMLElement;
+const persistentAttemptsDisplay = document.getElementById(
+  'persistent-attempts-display'
+) as HTMLElement;
+const persistentElapsedDisplay = document.getElementById(
+  'persistent-elapsed-display'
+) as HTMLElement;
+const persistentStopReasonRow = document.getElementById(
+  'persistent-stop-reason-row'
+) as HTMLElement;
+const persistentStopReasonDisplay = document.getElementById(
+  'persistent-stop-reason-display'
+) as HTMLElement;
+const tabHiddenBanner = document.getElementById('tab-hidden-banner') as HTMLElement;
+const scopedSummaryBox = document.getElementById('scoped-summary-box') as HTMLElement;
+const summaryAllowed = document.getElementById('summary-allowed') as HTMLElement;
+const summaryDisallowed = document.getElementById('summary-disallowed') as HTMLElement;
+const summaryConfirmCheckbox = document.getElementById(
+  'summary-confirm-checkbox'
+) as HTMLInputElement;
+const scopedValidationError = document.getElementById('scoped-validation-error') as HTMLElement;
+
 const allowFallbackCheckbox = document.getElementById('allow-fallback') as HTMLInputElement;
 const fallbackPolicySelect = document.getElementById('fallback-policy-select') as HTMLSelectElement;
 const fallbackPolicyGroup = document.getElementById('fallback-policy-group') as HTMLElement;
@@ -66,6 +112,38 @@ const profileAgreeTermsCheckbox = document.getElementById(
 
 const btnArm = document.getElementById('btn-arm') as HTMLButtonElement;
 const btnStop = document.getElementById('btn-stop') as HTMLButtonElement;
+const btnResetConfig = document.getElementById('btn-reset-config') as HTMLButtonElement;
+
+// Scheduled ARM DOM references
+const scheduledArmTimeInput = document.getElementById('scheduled-arm-time') as HTMLInputElement;
+const scheduledArmStatus = document.getElementById('scheduled-arm-status') as HTMLElement;
+const scheduledArmTimeDisplay = document.getElementById('scheduled-arm-time-display') as HTMLElement;
+const btnCancelScheduledArm = document.getElementById('btn-cancel-scheduled-arm') as HTMLButtonElement;
+
+// Mode Switcher DOM references
+const tabModeBasic = document.getElementById('tab-mode-basic') as HTMLButtonElement | null;
+const tabModeHardcore = document.getElementById('tab-mode-hardcore') as HTMLButtonElement | null;
+const panelBasic = document.getElementById('panel-basic') as HTMLElement | null;
+const panelHardcore = document.getElementById('panel-hardcore') as HTMLElement | null;
+
+// Basic Mode DOM references
+const basicShowingGroup = document.getElementById('basic-showing-group') as HTMLElement | null;
+const basicShowingSelect = document.getElementById('basic-showing-select') as HTMLSelectElement | null;
+const basicTicketChecklist = document.getElementById('basic-ticket-checklist') as HTMLElement | null;
+const basicQuantityInput = document.getElementById('basic-quantity') as HTMLInputElement | null;
+const basicScheduledArmTime = document.getElementById('basic-scheduled-arm-time') as HTMLInputElement | null;
+const basicScheduledStatus = document.getElementById('basic-scheduled-status') as HTMLElement | null;
+const basicScheduledTimeDisplay = document.getElementById('basic-scheduled-time-display') as HTMLElement | null;
+const btnCancelBasicScheduled = document.getElementById('btn-cancel-basic-scheduled') as HTMLButtonElement | null;
+const basicProfileName = document.getElementById('basic-profile-name') as HTMLInputElement | null;
+const basicProfilePhone = document.getElementById('basic-profile-phone') as HTMLInputElement | null;
+const basicProfileEmail = document.getElementById('basic-profile-email') as HTMLInputElement | null;
+const basicProfileIdCard = document.getElementById('basic-profile-id-card') as HTMLInputElement | null;
+const btnBasicArm = document.getElementById('btn-basic-arm') as HTMLButtonElement | null;
+const btnBasicStop = document.getElementById('btn-basic-stop') as HTMLButtonElement | null;
+const btnBasicReset = document.getElementById('btn-basic-reset') as HTMLButtonElement | null;
+const btnBasicSelectAll = document.getElementById('btn-basic-select-all') as HTMLButtonElement | null;
+const btnBasicDeselectAll = document.getElementById('btn-basic-deselect-all') as HTMLButtonElement | null;
 
 const ticketsTbody = document.getElementById('tickets-tbody') as HTMLElement;
 
@@ -88,12 +166,23 @@ const metricT5 = document.getElementById('metric-t5') as HTMLElement;
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
-function addLog(text: string): void {
+const MAX_LOG_LINES = 50;
+
+function addLog(text: string, save = true): void {
   const line = document.createElement('div');
   const time = new Date().toLocaleTimeString();
   line.textContent = `[${time}] ${text}`;
   logBox.appendChild(line);
   logBox.scrollTop = logBox.scrollHeight;
+
+  if (save && typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get('ticketbox_recent_logs', (res) => {
+      const logs: string[] = Array.isArray(res?.ticketbox_recent_logs) ? res.ticketbox_recent_logs : [];
+      logs.push(`[${time}] ${text}`);
+      if (logs.length > MAX_LOG_LINES) logs.splice(0, logs.length - MAX_LOG_LINES);
+      chrome.storage.local.set({ ticketbox_recent_logs: logs });
+    });
+  }
 }
 
 function updateTelemetry(t1?: number, t2?: number, t3?: number, t5?: number): void {
@@ -164,8 +253,10 @@ function updateShowingDropdown(snapshot: TicketCatalogSnapshot): void {
   if (validShowings.length <= 1) {
     showingGroup.style.display = 'none';
     // Auto-select the single showing so ticket filtering still works
-    if (validShowings.length === 1 && !currentPlan.showingId) {
-      currentPlan.showingId = validShowings[0]!.id ?? null;
+    if (validShowings.length === 1 && validShowings[0]?.id) {
+      currentPlan.showingId = validShowings[0].id;
+      showingSelect.innerHTML = `<option value="${validShowings[0].id}">${validShowings[0].name || validShowings[0].date || 'Suất diễn'}</option>`;
+      showingSelect.value = validShowings[0].id;
     }
     return;
   }
@@ -174,7 +265,8 @@ function updateShowingDropdown(snapshot: TicketCatalogSnapshot): void {
   if (!currentPlan.showingId && validShowings.length > 0) {
     const firstAvail =
       validShowings.find((s) => {
-        const tickets = 'tickets' in s && Array.isArray(s.tickets) ? (s.tickets as TicketOption[]) : [];
+        const tickets =
+          'tickets' in s && Array.isArray(s.tickets) ? (s.tickets as TicketOption[]) : [];
         return tickets.some((t) => t.availability === 'AVAILABLE');
       }) || validShowings[0];
     if (firstAvail?.id) {
@@ -188,11 +280,15 @@ function updateShowingDropdown(snapshot: TicketCatalogSnapshot): void {
   for (const s of validShowings) {
     const opt = document.createElement('option');
     opt.value = s.id ?? '';
-    const showingTickets = 'tickets' in s && Array.isArray(s.tickets) ? s.tickets as TicketOption[] : [];
+    const showingTickets =
+      'tickets' in s && Array.isArray(s.tickets) ? (s.tickets as TicketOption[]) : [];
     const availCount = showingTickets.filter((t) => t.availability === 'AVAILABLE').length;
-    const availLabel = showingTickets.length > 0
-      ? (availCount > 0 ? ` (${availCount} loại còn vé)` : ' (hết vé)')
-      : '';
+    const availLabel =
+      showingTickets.length > 0
+        ? availCount > 0
+          ? ` (${availCount} loại còn vé)`
+          : ' (hết vé)'
+        : '';
     const baseLabel = s.date || s.name || `Buổi diễn ${s.id ?? '?'}`;
     opt.textContent = baseLabel + availLabel;
     if (currentPlan.showingId === s.id) opt.selected = true;
@@ -224,7 +320,12 @@ function getTicketsForCurrentShowing(): TicketOption[] {
   const sid = currentPlan.showingId;
   if (sid) {
     const showing = (currentCatalog.showings || []).find((s) => s.id === sid);
-    if (showing && 'tickets' in showing && Array.isArray(showing.tickets) && showing.tickets.length > 0) {
+    if (
+      showing &&
+      'tickets' in showing &&
+      Array.isArray(showing.tickets) &&
+      showing.tickets.length > 0
+    ) {
       return showing.tickets as TicketOption[];
     }
   }
@@ -638,19 +739,573 @@ function renderCatalogTable(tickets: TicketOption[]): void {
   }
 }
 
+// ─── Scoped Matrix UI Functions ───────────────────────────────────────────────
+
+function renderScopedMatrix(snapshot: TicketCatalogSnapshot): void {
+  if (!snapshot.showings || snapshot.showings.length === 0) {
+    if (snapshot.tickets && snapshot.tickets.length > 0) {
+      const singleShowing = {
+        id: 'default',
+        name: snapshot.eventTitle || 'Suất diễn mặc định',
+        date: null,
+        venue: null,
+        tickets: snapshot.tickets,
+      };
+      renderMatrixWithShowings([singleShowing], snapshot);
+      return;
+    }
+    if (matrixEmpty) matrixEmpty.style.display = 'block';
+    if (matrixTableWrapper) matrixTableWrapper.style.display = 'none';
+    return;
+  }
+
+  renderMatrixWithShowings(snapshot.showings, snapshot);
+}
+
+function renderMatrixWithShowings(
+  showings: Array<{
+    id: string | null;
+    name: string | null;
+    date: string | null;
+    tickets?: TicketOption[];
+  }>,
+  snapshot: TicketCatalogSnapshot
+): void {
+  if (matrixEmpty) matrixEmpty.style.display = 'none';
+  if (matrixTableWrapper) matrixTableWrapper.style.display = 'block';
+  if (!scopedMatrixTbody) return;
+  scopedMatrixTbody.innerHTML = '';
+
+  showings.forEach((s, idx) => {
+    const showingId = s.id ?? `showing-${idx}`;
+    const showingName = s.name ?? s.date ?? `Suất ${idx + 1}`;
+
+    const existingTarget = currentScopedPlan.targets.find((t) => t.showingId === showingId);
+    const rank = existingTarget?.rank ?? idx + 1;
+    const selectedTicketIds = new Set(existingTarget?.ticketTypeIds ?? []);
+
+    const tr = document.createElement('tr');
+    tr.dataset.showingId = showingId;
+
+    // 1. Rank Cell
+    const tdRank = document.createElement('td');
+    const rankInput = document.createElement('input');
+    rankInput.type = 'number';
+    rankInput.min = '1';
+    rankInput.max = '20';
+    rankInput.value = String(rank);
+    rankInput.className = 'rank-input';
+    rankInput.addEventListener('change', () => {
+      rebuildScopedPlanFromMatrix();
+      updateScopedSummaryAndValidation();
+      savePlan();
+    });
+    tdRank.appendChild(rankInput);
+
+    // 2. Showing Cell
+    const tdShowing = document.createElement('td');
+    const showingTitle = document.createElement('strong');
+    showingTitle.textContent = showingName;
+    tdShowing.appendChild(showingTitle);
+    if (s.date && s.date !== s.name) {
+      const dateSub = document.createElement('div');
+      dateSub.style.fontSize = '10px';
+      dateSub.style.color = 'var(--text-muted)';
+      dateSub.textContent = s.date;
+      tdShowing.appendChild(dateSub);
+    }
+
+    // 3. Ticket Tiers Checkboxes Cell
+    const tdTickets = document.createElement('td');
+    tdTickets.className = 'tier-checkboxes-cell';
+
+    const tickets = s.tickets && s.tickets.length > 0 ? s.tickets : snapshot.tickets;
+    if (!tickets || tickets.length === 0) {
+      tdTickets.textContent = 'Chưa có loại vé';
+    } else {
+      tickets.forEach((t) => {
+        const ticketId = t.id ?? t.name;
+        const label = document.createElement('label');
+        label.className = 'tier-checkbox-item';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = ticketId;
+        cb.dataset.ticketName = t.name;
+        cb.checked = selectedTicketIds.has(ticketId) || selectedTicketIds.has(t.name);
+        cb.addEventListener('change', () => {
+          rebuildScopedPlanFromMatrix();
+          updateScopedSummaryAndValidation();
+          savePlan();
+        });
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = t.name;
+
+        const priceSpan = document.createElement('span');
+        priceSpan.className = 'tier-price-tag';
+        priceSpan.textContent = `(${formatPrice(t.price)})`;
+
+        label.appendChild(cb);
+        label.appendChild(nameSpan);
+        label.appendChild(priceSpan);
+
+        if (t.availability === 'SOLD_OUT') {
+          const soldBadge = document.createElement('span');
+          soldBadge.className = 'badge-mini';
+          soldBadge.style.color = '#f87171';
+          soldBadge.textContent = 'Hết vé';
+          label.appendChild(soldBadge);
+        }
+
+        tdTickets.appendChild(label);
+      });
+    }
+
+    tr.appendChild(tdRank);
+    tr.appendChild(tdShowing);
+    tr.appendChild(tdTickets);
+    scopedMatrixTbody.appendChild(tr);
+  });
+}
+
+function rebuildScopedPlanFromMatrix(): ScopedPurchasePlan {
+  if (!scopedMatrixTbody) return currentScopedPlan;
+  const rows = scopedMatrixTbody.querySelectorAll('tr');
+  const targets: ScopedPurchasePlan['targets'] = [];
+
+  rows.forEach((tr) => {
+    const showingId = tr.dataset.showingId;
+    if (!showingId) return;
+
+    const rankInput = tr.querySelector('.rank-input') as HTMLInputElement | null;
+    const rank = rankInput ? parseInt(rankInput.value, 10) || 1 : 1;
+
+    const checkedBoxes = Array.from(
+      tr.querySelectorAll<HTMLInputElement>('.tier-checkboxes-cell input[type="checkbox"]:checked')
+    );
+    const ticketTypeIds = checkedBoxes.map((cb) => cb.value);
+
+    if (ticketTypeIds.length > 0) {
+      targets.push({
+        showingId,
+        ticketTypeIds,
+        rank,
+      });
+    }
+  });
+
+  const quantity = scopedQuantityInput ? parseInt(scopedQuantityInput.value, 10) || 1 : 1;
+  const strategy = scopedStrategySelect
+    ? (scopedStrategySelect.value as PriorityStrategy) || 'BY_TARGET_ORDER'
+    : 'BY_TARGET_ORDER';
+
+  const persistence = {
+    maxDurationMinutes:
+      paramDurationInput && paramDurationInput.value.trim() !== ''
+        ? Math.max(0, parseInt(paramDurationInput.value, 10))
+        : DEFAULT_PERSISTENCE_POLICY.maxDurationMinutes,
+    maxAttempts:
+      paramAttemptsInput && paramAttemptsInput.value.trim() !== ''
+        ? Math.max(0, parseInt(paramAttemptsInput.value, 10))
+        : DEFAULT_PERSISTENCE_POLICY.maxAttempts,
+    pollIntervalMs: paramPollIntervalInput
+      ? Math.max(
+          1500,
+          parseInt(paramPollIntervalInput.value, 10) || DEFAULT_PERSISTENCE_POLICY.pollIntervalMs
+        )
+      : DEFAULT_PERSISTENCE_POLICY.pollIntervalMs,
+    jitterRatio: paramJitterInput
+      ? parseFloat(paramJitterInput.value) || DEFAULT_PERSISTENCE_POLICY.jitterRatio
+      : DEFAULT_PERSISTENCE_POLICY.jitterRatio,
+  };
+
+  const allowPartialQuantity = paramAllowPartialCheckbox
+    ? paramAllowPartialCheckbox.checked
+    : false;
+
+  currentScopedPlan = {
+    eventId: currentCatalog.eventId ?? '',
+    targets,
+    quantity,
+    strategy,
+    persistence,
+    allowPartialQuantity,
+  };
+
+  return currentScopedPlan;
+}
+
+function updateScopedSummaryAndValidation(): void {
+  const plan = currentScopedPlan;
+  const totalTickets = plan.targets.reduce((acc, t) => acc + t.ticketTypeIds.length, 0);
+
+  if (totalTickets === 0) {
+    if (scopedSummaryBox) scopedSummaryBox.style.display = 'none';
+    if (scopedValidationError) {
+      scopedValidationError.style.display = 'block';
+      scopedValidationError.textContent =
+        '⚠️ Danh sách mục tiêu (whitelist) đang rỗng. Bạn phải tick chọn ít nhất một hạng vé trong ma trận.';
+    }
+    return;
+  }
+
+  const allowedSummaries = plan.targets.map((t) => {
+    return `• Suất [${t.showingId}] (Ưu tiên Rank ${t.rank}): ${t.ticketTypeIds.join(', ')}`;
+  });
+  if (summaryAllowed) {
+    summaryAllowed.innerHTML = `<strong>Sẽ chỉ mua (Số lượng: ${plan.quantity} vé):</strong><br>${allowedSummaries.join('<br>')}`;
+  }
+  if (summaryDisallowed) {
+    summaryDisallowed.innerHTML =
+      '<strong>Sẽ KHÔNG mua:</strong> Bất kỳ suất diễn hay hạng vé nào khác ngoài danh sách trên.';
+  }
+  if (scopedSummaryBox) {
+    scopedSummaryBox.style.display = 'flex';
+  }
+
+  const validation = ScopedPurchasePlanValidator.validate(plan, currentCatalog);
+  if (!validation.valid) {
+    if (scopedValidationError) {
+      scopedValidationError.style.display = 'block';
+      scopedValidationError.textContent = `❌ Lỗi cấu hình:\n• ${validation.errors.join('\n• ')}`;
+    }
+  } else {
+    if (scopedValidationError) {
+      scopedValidationError.style.display = 'none';
+    }
+  }
+}
+
+// ─── Mode Switcher & Basic Panel Logic ───────────────────────────────────────
+
+function switchUiMode(mode: 'basic' | 'hardcore'): void {
+  if (tabModeBasic && tabModeHardcore && panelBasic && panelHardcore) {
+    if (mode === 'basic') {
+      tabModeBasic.classList.add('active');
+      tabModeHardcore.classList.remove('active');
+      panelBasic.style.display = 'flex';
+      panelHardcore.style.display = 'none';
+      syncProfileFields('basic');
+    } else {
+      tabModeHardcore.classList.add('active');
+      tabModeBasic.classList.remove('active');
+      panelHardcore.style.display = 'block';
+      panelBasic.style.display = 'none';
+      syncProfileFields('hardcore');
+    }
+  }
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.set({ ui_mode: mode });
+  }
+}
+
+function syncProfileFields(toMode: 'basic' | 'hardcore'): void {
+  if (toMode === 'basic') {
+    if (basicProfileName && profileNameInput && profileNameInput.value) {
+      basicProfileName.value = profileNameInput.value;
+    }
+    if (basicProfilePhone && profilePhoneInput && profilePhoneInput.value) {
+      basicProfilePhone.value = profilePhoneInput.value;
+    }
+    if (basicProfileEmail && profileEmailInput && profileEmailInput.value) {
+      basicProfileEmail.value = profileEmailInput.value;
+    }
+    if (basicProfileIdCard && profileIdCardInput && profileIdCardInput.value) {
+      basicProfileIdCard.value = profileIdCardInput.value;
+    }
+  } else {
+    if (basicProfileName && profileNameInput && basicProfileName.value) {
+      profileNameInput.value = basicProfileName.value;
+    }
+    if (basicProfilePhone && profilePhoneInput && basicProfilePhone.value) {
+      profilePhoneInput.value = basicProfilePhone.value;
+    }
+    if (basicProfileEmail && profileEmailInput && basicProfileEmail.value) {
+      profileEmailInput.value = basicProfileEmail.value;
+    }
+    if (basicProfileIdCard && profileIdCardInput && basicProfileIdCard.value) {
+      profileIdCardInput.value = basicProfileIdCard.value;
+    }
+  }
+}
+
+function renderBasicTicketChecklist(snapshot?: TicketCatalogSnapshot): void {
+  if (!basicTicketChecklist) return;
+  const current = snapshot || currentCatalog;
+  const tickets = current.tickets;
+
+  if (!tickets || tickets.length === 0) {
+    basicTicketChecklist.innerHTML = `
+      <div class="empty-cell" style="padding: 12px; text-align: center; color: var(--text-muted);">
+        Chưa phát hiện vé. Vui lòng mở trang sự kiện trên trình duyệt rồi bấm nút ↺ ở trên.
+      </div>
+    `;
+    return;
+  }
+
+  // Update showings in basic mode
+  if (current.showings && current.showings.length > 0 && basicShowingSelect) {
+    basicShowingSelect.innerHTML = current.showings
+      .map((s) => `<option value="${s.id}">${s.name || s.id}</option>`)
+      .join('');
+    if (showingSelect.value) {
+      basicShowingSelect.value = showingSelect.value;
+    } else if (current.showings[0]?.id) {
+      basicShowingSelect.value = current.showings[0].id;
+    }
+
+    if (current.showings.length > 1) {
+      if (basicShowingGroup) basicShowingGroup.style.display = 'block';
+    } else if (basicShowingGroup) {
+      basicShowingGroup.style.display = 'none';
+    }
+  } else if (basicShowingGroup) {
+    basicShowingGroup.style.display = 'none';
+  }
+
+  basicTicketChecklist.innerHTML = '';
+
+  // Check if user previously had saved selections
+  const savedTicketIds = new Set<string>();
+  if (currentScopedPlan?.targets) {
+    for (const target of currentScopedPlan.targets) {
+      for (const id of target.ticketTypeIds) {
+        savedTicketIds.add(id);
+      }
+    }
+  }
+  const hasSavedSelection = savedTicketIds.size > 0;
+
+  tickets.forEach((ticket, idx) => {
+    const item = document.createElement('div');
+    const ticketId = ticket.id ?? ticket.name;
+    const isAvail = ticket.availability !== 'SOLD_OUT';
+
+    // Default: If user already saved a plan, respect it. Otherwise, only select the FIRST available ticket!
+    const isChecked = hasSavedSelection
+      ? (savedTicketIds.has(ticketId) || savedTicketIds.has(ticket.name)) && isAvail
+      : idx === 0 && isAvail;
+
+    item.className = `basic-ticket-item ${isChecked ? 'selected' : ''}`;
+    item.dataset.ticketId = ticketId;
+    item.dataset.ticketName = ticket.name;
+
+    let badgeClass = 'badge-avail';
+    let badgeText = 'Còn vé';
+    if (ticket.availability === 'SOLD_OUT') {
+      badgeClass = 'badge-sold';
+      badgeText = 'Hết vé';
+    } else if (ticket.availability === 'NOT_STARTED') {
+      badgeClass = 'badge-pending';
+      badgeText = 'Sắp mở';
+    }
+
+    const priceFormatted = ticket.price ? `${formatPrice(ticket.price)}` : 'Chưa có giá';
+
+    item.innerHTML = `
+      <div class="basic-ticket-left">
+        <input type="checkbox" class="basic-ticket-cb" ${isChecked ? 'checked' : ''} />
+        <span class="basic-ticket-name" title="${ticket.name}">${ticket.name}</span>
+      </div>
+      <div class="basic-ticket-right">
+        <span class="basic-ticket-price">${priceFormatted}</span>
+        <span class="basic-ticket-badge ${badgeClass}">${badgeText}</span>
+      </div>
+    `;
+
+    const cb = item.querySelector('.basic-ticket-cb') as HTMLInputElement;
+    cb.addEventListener('change', (e) => {
+      e.stopPropagation();
+      if (cb.checked) {
+        item.classList.add('selected');
+      } else {
+        item.classList.remove('selected');
+      }
+      syncBasicChecklistToScopedPlan();
+      savePlan();
+    });
+
+    item.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).tagName !== 'INPUT') {
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change'));
+      }
+    });
+
+    basicTicketChecklist.appendChild(item);
+  });
+}
+
+function syncBasicChecklistToScopedPlan(): void {
+  const checkedItems = basicTicketChecklist?.querySelectorAll('.basic-ticket-item') ?? [];
+  const selectedTicketIds: string[] = [];
+  checkedItems.forEach((item) => {
+    const cb = item.querySelector('.basic-ticket-cb') as HTMLInputElement | null;
+    if (cb && cb.checked) {
+      const name = (item as HTMLElement).dataset.ticketName;
+      const id = (item as HTMLElement).dataset.ticketId;
+      if (id && !selectedTicketIds.includes(id)) selectedTicketIds.push(id);
+      if (name && !selectedTicketIds.includes(name)) selectedTicketIds.push(name);
+    }
+  });
+
+  const quantity = Math.max(1, parseInt(basicQuantityInput?.value || '1', 10) || 1);
+  const showingId =
+    basicShowingSelect?.value ||
+    showingSelect?.value ||
+    currentPlan.showingId ||
+    currentCatalog.showings?.[0]?.id ||
+    'default';
+
+  const scheduledVal = basicScheduledArmTime?.value;
+  let startAt: string | undefined = undefined;
+  if (scheduledVal) {
+    const startMs = new Date(scheduledVal).getTime();
+    if (startMs > Date.now()) {
+      startAt = new Date(startMs).toISOString();
+    }
+  }
+
+  currentScopedPlan = {
+    ...currentScopedPlan,
+    eventId: currentCatalog.eventId || currentScopedPlan?.eventId || 'event',
+    targets: [
+      {
+        showingId,
+        ticketTypeIds: selectedTicketIds,
+        rank: 1,
+      },
+    ],
+    quantity,
+    strategy: 'BY_TARGET_ORDER',
+    allowPartialQuantity: false,
+    persistence: {
+      ...currentScopedPlan?.persistence,
+      maxDurationMinutes: currentScopedPlan?.persistence?.maxDurationMinutes ?? 120,
+      maxAttempts: currentScopedPlan?.persistence?.maxAttempts ?? 1000,
+      pollIntervalMs: currentScopedPlan?.persistence?.pollIntervalMs ?? 1800,
+      jitterRatio: 0.2,
+      startAt,
+    },
+  };
+}
+
+async function handleBasicArm(): Promise<void> {
+  if (btnBasicArm?.classList.contains('running-active')) {
+    btnStop.click();
+    return;
+  }
+  const url = eventUrlInput.value.trim();
+  if (!url) {
+    alert('Vui lòng nhập hoặc mở URL sự kiện Ticketbox!');
+    return;
+  }
+
+  // Get checked tickets from basicTicketChecklist
+  const checkedItems = basicTicketChecklist?.querySelectorAll('.basic-ticket-item') ?? [];
+  const selectedTicketIds: string[] = [];
+  checkedItems.forEach((item) => {
+    const cb = item.querySelector('.basic-ticket-cb') as HTMLInputElement | null;
+    if (cb && cb.checked) {
+      const name = (item as HTMLElement).dataset.ticketName;
+      const id = (item as HTMLElement).dataset.ticketId;
+      if (id && !selectedTicketIds.includes(id)) selectedTicketIds.push(id);
+      if (name && !selectedTicketIds.includes(name)) selectedTicketIds.push(name);
+    }
+  });
+
+  if (selectedTicketIds.length === 0) {
+    alert('ARM bị chặn: Bạn chưa tick chọn hạng vé nào!\n\nVui lòng tick chọn ít nhất một hạng vé muốn mua trong danh sách.');
+    return;
+  }
+
+  const quantity = Math.max(1, parseInt(basicQuantityInput?.value || '1', 10) || 1);
+  const showingId =
+    basicShowingSelect?.value ||
+    showingSelect?.value ||
+    currentPlan.showingId ||
+    currentCatalog.showings?.[0]?.id ||
+    'default';
+
+  // Construct standard ScopedPurchasePlan
+  const plan: ScopedPurchasePlan = {
+    eventId: currentCatalog.eventId || 'event',
+    targets: [
+      {
+        showingId,
+        ticketTypeIds: selectedTicketIds,
+        rank: 1,
+      },
+    ],
+    quantity,
+    strategy: 'BY_TARGET_ORDER',
+    allowPartialQuantity: false,
+    persistence: {
+      maxDurationMinutes: 120,
+      maxAttempts: 1000,
+      pollIntervalMs: 1800,
+      jitterRatio: 0.2,
+    },
+  };
+
+  // Check scheduled time
+  const scheduledVal = basicScheduledArmTime?.value;
+  let isScheduled = false;
+  if (scheduledVal) {
+    const startMs = new Date(scheduledVal).getTime();
+    if (startMs > Date.now()) {
+      isScheduled = true;
+      const startAtIso = new Date(startMs).toISOString();
+      plan.persistence.startAt = startAtIso;
+      if (basicScheduledStatus && basicScheduledTimeDisplay) {
+        basicScheduledStatus.style.display = 'flex';
+        basicScheduledTimeDisplay.textContent = new Date(startMs).toLocaleString('vi-VN');
+      }
+    } else {
+      alert('Thời gian hẹn giờ mở bán phải ở thời điểm tương lai!');
+      return;
+    }
+  }
+
+  currentScopedPlan = plan;
+  // Sync profile
+  syncProfileFields('hardcore');
+  await savePlan();
+
+  const userProfile = {
+    fullName: basicProfileName?.value.trim() || profileNameInput.value.trim(),
+    phone: basicProfilePhone?.value.trim() || profilePhoneInput.value.trim(),
+    email: basicProfileEmail?.value.trim() || profileEmailInput.value.trim(),
+    idCard: basicProfileIdCard?.value.trim() || profileIdCardInput?.value.trim() || undefined,
+    agreeToTerms: true,
+  };
+
+  if (isScheduled) {
+    addLog(`⏰ [CƠ BẢN] Đã hẹn giờ ARM vào: ${new Date(plan.persistence.startAt!).toLocaleString('vi-VN')}. Đến giờ sẽ tự động mở tab săn vé!`);
+    alert(`Đã đặt lịch hẹn ARM thành công!\n\n• Thời gian: ${new Date(plan.persistence.startAt!).toLocaleString('vi-VN')}\n• Hạng vé: ${selectedTicketIds.join(', ')}\n• Số lượng: ${quantity} vé.\n\nĐến giờ mở bán, trợ lý sẽ tự động đưa tab Ticketbox lên và săn vé!`);
+  } else {
+    updateStateBadge(PurchaseState.ARMED);
+    addLog(`🚀 [CƠ BẢN] Đã ARM săn vé: ${selectedTicketIds.join(', ')} (${quantity} vé)...`);
+  }
+
+  await messageBus.publish({
+    type: 'ARM_REQUESTED',
+    timestamp: new Date().toISOString(),
+    eventUrl: url,
+    categoryPriority: selectedTicketIds,
+    quantity,
+    allowFallback: false,
+    scopedPurchasePlan: plan,
+    userProfile,
+  });
+}
+
 // ─── Catalog Update Handler ───────────────────────────────────────────────────
 
 let lastLoggedCatalogSignature = '';
 let lastLoggedDiscoveryKey = '';
 
-/**
- * Processes a new TicketCatalogSnapshot:
- * 1. Updates catalog status UI
- * 2. Refreshes the catalog table
- * 3. Updates the showing dropdown
- * 4. Rebuilds rule cards (preserving existing selections)
- * 5. Validates and highlights any invalid/unavailable rules
- */
 function applyNewCatalog(snapshot: TicketCatalogSnapshot): void {
   const prevTicketCount = currentCatalog.tickets.length;
   currentCatalog = snapshot;
@@ -659,12 +1314,18 @@ function applyNewCatalog(snapshot: TicketCatalogSnapshot): void {
   updateShowingDropdown(snapshot);
   renderCatalogTable(snapshot.tickets);
 
+  // Render Basic Checklist
+  renderBasicTicketChecklist(snapshot);
+
+  // Render Scoped Matrix
+  renderScopedMatrix(snapshot);
+  updateScopedSummaryAndValidation();
+
   // Only refresh rule cards if tickets actually changed to avoid losing focus
   const newCount = snapshot.tickets.length;
   if (newCount !== prevTicketCount || prevTicketCount === 0) {
     refreshAllRuleCards();
   } else {
-    // Just revalidate each card
     validateAllRuleCards();
   }
 
@@ -759,6 +1420,23 @@ function updateStateBadge(state: PurchaseState, blockingReason?: string): void {
     case PurchaseState.CONFIRMED:
       stateBadge.classList.add('held');
       break;
+    case PurchaseState.STOPPED:
+    case PurchaseState.STOPPED_LIMIT_REACHED:
+    case PurchaseState.STOPPED_NO_TARGET:
+    case PurchaseState.FAILED:
+    case PurchaseState.RATE_LIMITED:
+    case PurchaseState.SOLD_OUT:
+    case PurchaseState.INVALID_SELECTION:
+      stateBadge.classList.add('failed');
+      break;
+    case PurchaseState.WAITING:
+    case PurchaseState.WAITING_FOR_STOCK:
+      stateBadge.classList.add('monitoring');
+      break;
+    case PurchaseState.RETRYING_TARGET:
+      stateBadge.classList.add('armed');
+      break;
+    case PurchaseState.HUMAN_INTERVENTION_REQUIRED:
     case PurchaseState.CONSENT_REQUIRED:
     case PurchaseState.PAYMENT_GATE:
     case PurchaseState.CAPTCHA_REQUIRED:
@@ -767,18 +1445,118 @@ function updateStateBadge(state: PurchaseState, blockingReason?: string): void {
     case PurchaseState.SESSION_REAUTH_REQUIRED:
       stateBadge.classList.add('intervention');
       break;
-    case PurchaseState.STOPPED:
-    case PurchaseState.FAILED:
-    case PurchaseState.RATE_LIMITED:
-    case PurchaseState.SOLD_OUT:
-    case PurchaseState.INVALID_SELECTION:
-      stateBadge.classList.add('failed');
-      break;
-    case PurchaseState.WAITING:
-      stateBadge.classList.add('monitoring');
-      break;
     default:
       break;
+  }
+
+  const isRunning = [
+    PurchaseState.ARMED,
+    PurchaseState.MONITORING,
+    PurchaseState.EVENT_DETECTED,
+    PurchaseState.SHOWING_DETECTED,
+    PurchaseState.TICKETS_DETECTED,
+    PurchaseState.EVALUATING_TICKETS,
+    PurchaseState.AVAILABLE_DETECTED,
+    PurchaseState.SELECTING,
+    PurchaseState.TICKET_SELECTED,
+    PurchaseState.BOOKING_MODE_DETECTED,
+    PurchaseState.SELECTING_QUANTITY,
+    PurchaseState.AREA_SELECTION_REQUIRED,
+    PurchaseState.SELECTING_AREA,
+    PurchaseState.SEAT_MAP_DETECTED,
+    PurchaseState.SELECTING_SEATS,
+    PurchaseState.SEATS_SELECTED,
+    PurchaseState.BOOKING_SUMMARY_DETECTED,
+    PurchaseState.QUESTION_FORM_DETECTED,
+    PurchaseState.FILLING_ATTENDEE_FORM,
+    PurchaseState.FORM_VALIDATED,
+    PurchaseState.RESERVING,
+    PurchaseState.RETRYING_TARGET,
+    PurchaseState.WAITING,
+    PurchaseState.WAITING_FOR_STOCK,
+  ].includes(state);
+
+  if (isRunning) {
+    if (btnBasicArm) {
+      btnBasicArm.textContent = '🛑 DỪNG SĂN VÉ (ĐANG CHẠY...)';
+      btnBasicArm.classList.add('running-active');
+      btnBasicArm.style.background = '#dc2626';
+      btnBasicArm.style.color = '#ffffff';
+    }
+    if (btnArm) {
+      btnArm.textContent = '🛑 DỪNG SĂN VÉ (ĐANG CHẠY...)';
+      btnArm.classList.add('running-active');
+      btnArm.style.background = '#dc2626';
+      btnArm.style.color = '#ffffff';
+    }
+  } else {
+    if (btnBasicArm) {
+      btnBasicArm.textContent = '🚀 BẮT ĐẦU SĂN VÉ (ARM)';
+      btnBasicArm.classList.remove('running-active');
+      btnBasicArm.style.background = '';
+      btnBasicArm.style.color = '';
+    }
+    if (btnArm) {
+      btnArm.textContent = '🚀 BẮT ĐẦU SĂN VÉ (ARM)';
+      btnArm.classList.remove('running-active');
+      btnArm.style.background = '';
+      btnArm.style.color = '';
+    }
+  }
+}
+
+async function updatePersistentMonitoringDisplay(
+  pStateParam?: PersistentExecutionState | null
+): Promise<void> {
+  let pState = pStateParam;
+  if (pState === undefined) {
+    pState = await storage.getPersistentState();
+  }
+
+  const maxAttempts = currentScopedPlan.persistence?.maxAttempts ?? 200;
+  const maxDuration = currentScopedPlan.persistence?.maxDurationMinutes ?? 30;
+
+  if (persistentTargetDisplay) {
+    if (typeof pState?.lastTarget === 'object' && pState.lastTarget) {
+      persistentTargetDisplay.textContent = `[${pState.lastTarget.showingId}] ${pState.lastTarget.ticketName ?? pState.lastTarget.ticketTypeId}`;
+    } else if (typeof pState?.lastTarget === 'string') {
+      persistentTargetDisplay.textContent = pState.lastTarget;
+    } else {
+      persistentTargetDisplay.textContent = '-';
+    }
+  }
+
+  const attemptsCapStr = maxAttempts > 0 ? `${maxAttempts}` : '∞';
+  if (persistentAttemptsDisplay) {
+    persistentAttemptsDisplay.textContent = `${pState?.attemptsCount ?? 0} / ${attemptsCapStr}`;
+  }
+
+  const durationCapStr = maxDuration > 0 ? `${maxDuration}m` : '∞';
+  if (persistentElapsedDisplay) {
+    if (pState?.startedAt) {
+      const startedAtMs =
+        typeof pState.startedAt === 'number'
+          ? pState.startedAt
+          : new Date(pState.startedAt).getTime();
+      const elapsedMin = Math.floor((Date.now() - startedAtMs) / 60000);
+      persistentElapsedDisplay.textContent = `${elapsedMin}m / ${durationCapStr}`;
+    } else {
+      persistentElapsedDisplay.textContent = `0m / ${durationCapStr}`;
+    }
+  }
+
+
+  if (persistentStopReasonRow && persistentStopReasonDisplay) {
+    if (pState?.stopReason) {
+      persistentStopReasonRow.style.display = 'flex';
+      persistentStopReasonDisplay.textContent = pState.stopReason;
+    } else {
+      persistentStopReasonRow.style.display = 'none';
+    }
+  }
+
+  if (tabHiddenBanner) {
+    tabHiddenBanner.style.display = pState?.tabHiddenWarning ? 'block' : 'none';
   }
 }
 
@@ -787,10 +1565,17 @@ function updateStateBadge(state: PurchaseState, blockingReason?: string): void {
 async function savePlan(): Promise<void> {
   rebuildPlanFromCards();
   const config = await storage.getConfiguration();
+  const targetUrl = eventUrlInput.value.trim() || config?.targetEventUrl || '';
+  const scheduledArmAt = currentScopedPlan?.persistence?.startAt || config?.scheduledArmAt;
+  const ticketCatalogSnapshot = currentCatalog.tickets.length > 0 ? currentCatalog : config?.ticketCatalogSnapshot;
+
   await storage.saveConfiguration({
-    targetEventUrl: config?.targetEventUrl ?? eventUrlInput.value.trim(),
+    targetEventUrl: targetUrl,
     discoveryMode: false,
     purchasePlan: currentPlan,
+    scopedPurchasePlan: currentScopedPlan,
+    ...(scheduledArmAt ? { scheduledArmAt } : {}),
+    ...(ticketCatalogSnapshot ? { ticketCatalogSnapshot } : {}),
     userProfile: {
       fullName: profileNameInput.value.trim(),
       phone: profilePhoneInput.value.trim(),
@@ -943,9 +1728,108 @@ async function requestDiscoveryFromTab(manual = false): Promise<void> {
   );
 }
 
+// ─── Scheduled ARM Helpers ────────────────────────────────────────────────────
+
+/**
+ * Converts an ISO timestamp string into a datetime-local input value (local time).
+ */
+function toDatetimeLocalValue(isoString: string): string {
+  const d = new Date(isoString);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
+
+function showScheduledArmStatus(isoString: string): void {
+  if (scheduledArmStatus) scheduledArmStatus.style.display = 'flex';
+  if (scheduledArmTimeDisplay) {
+    scheduledArmTimeDisplay.textContent = new Date(isoString).toLocaleString('vi-VN');
+  }
+  // Open the details panel so user sees the status
+  const details = document.getElementById('scheduled-arm-details') as HTMLDetailsElement | null;
+  if (details) details.open = true;
+}
+
+function hideScheduledArmStatus(): void {
+  if (scheduledArmStatus) scheduledArmStatus.style.display = 'none';
+  if (scheduledArmTimeInput) scheduledArmTimeInput.value = '';
+}
+
+// ─── Reset Popup to Blank ─────────────────────────────────────────────────────
+
+/**
+ * Resets all popup inputs to blank after a config reset.
+ * State badge and log are left untouched (log retains history).
+ */
+function resetPopupToBlank(): void {
+  // URL
+  if (eventUrlInput) eventUrlInput.value = '';
+
+  // Profile fields (Hardcore & Basic)
+  if (profileNameInput) profileNameInput.value = '';
+  if (profilePhoneInput) profilePhoneInput.value = '';
+  if (profileEmailInput) profileEmailInput.value = '';
+  if (profileIdCardInput) profileIdCardInput.value = '';
+  if (profileBirthYearInput) profileBirthYearInput.value = '';
+  if (profileGenderSelect) profileGenderSelect.value = '';
+  if (profileAddressInput) profileAddressInput.value = '';
+  if (profileAgreeTermsCheckbox) profileAgreeTermsCheckbox.checked = false;
+
+  if (basicProfileName) basicProfileName.value = '';
+  if (basicProfilePhone) basicProfilePhone.value = '';
+  if (basicProfileEmail) basicProfileEmail.value = '';
+  if (basicProfileIdCard) basicProfileIdCard.value = '';
+
+  // Scoped plan & Basic quantity
+  if (scopedQuantityInput) scopedQuantityInput.value = '1';
+  if (basicQuantityInput) basicQuantityInput.value = '1';
+  if (scopedStrategySelect) scopedStrategySelect.value = 'BY_TARGET_ORDER';
+  if (paramDurationInput) paramDurationInput.value = '120';
+  if (paramAttemptsInput) paramAttemptsInput.value = '1000';
+  if (paramPollIntervalInput) paramPollIntervalInput.value = '2000';
+  if (paramJitterInput) paramJitterInput.value = '0.2';
+  if (paramAllowPartialCheckbox) paramAllowPartialCheckbox.checked = false;
+  if (summaryConfirmCheckbox) summaryConfirmCheckbox.checked = false;
+
+  // Scheduled ARM (both modes)
+  hideScheduledArmStatus();
+  if (basicScheduledStatus) basicScheduledStatus.style.display = 'none';
+  if (basicScheduledArmTime) basicScheduledArmTime.value = '';
+
+  // Clear log storage
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.remove('ticketbox_recent_logs');
+  }
+  if (logBox) logBox.innerHTML = '';
+
+  // Catalog, basic checklist & matrix
+  currentCatalog = { eventId: null, eventTitle: null, showings: [], tickets: [], loadState: 'IDLE', loadMessage: 'Config đã được xóa. Vui lòng mở tab Ticketbox và quét lại.', discoveredAt: null };
+  renderCatalogTable([]);
+  renderBasicTicketChecklist();
+  if (matrixEmpty) matrixEmpty.style.display = 'block';
+  if (matrixTableWrapper) matrixTableWrapper.style.display = 'none';
+  if (scopedMatrixTbody) scopedMatrixTbody.innerHTML = '';
+  if (scopedSummaryBox) scopedSummaryBox.style.display = 'none';
+  if (scopedValidationError) scopedValidationError.style.display = 'none';
+  if (eventInfoBar) eventInfoBar.style.display = 'none';
+
+  // State badge reset
+  updateStateBadge(PurchaseState.IDLE);
+}
+
 // ─── Initial Data Load ────────────────────────────────────────────────────────
 
 async function loadInitialData(): Promise<void> {
+  // Load saved UI mode
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get('ui_mode', (res) => {
+      const mode = (res?.ui_mode as 'basic' | 'hardcore') || 'basic';
+      switchUiMode(mode);
+    });
+  }
+
   const config = await storage.getConfiguration();
 
   if (config) {
@@ -961,6 +1845,12 @@ async function loadInitialData(): Promise<void> {
       if (profileGenderSelect) profileGenderSelect.value = config.userProfile.gender ?? '';
       if (profileAddressInput) profileAddressInput.value = config.userProfile.address ?? '';
       profileAgreeTermsCheckbox.checked = config.userProfile.agreeToTerms ?? false;
+
+      // Sync to basic profile
+      if (basicProfileName) basicProfileName.value = config.userProfile.fullName ?? '';
+      if (basicProfilePhone) basicProfilePhone.value = config.userProfile.phone ?? '';
+      if (basicProfileEmail) basicProfileEmail.value = config.userProfile.email ?? '';
+      if (basicProfileIdCard) basicProfileIdCard.value = config.userProfile.idCard ?? '';
     }
 
     // Restore purchase plan
@@ -984,23 +1874,106 @@ async function loadInitialData(): Promise<void> {
       allowFallbackCheckbox.checked = currentPlan.allowFallback;
     }
 
+    // Restore scoped purchase plan
+    if (config.scopedPurchasePlan) {
+      currentScopedPlan = config.scopedPurchasePlan;
+      const qtyStr = String(currentScopedPlan.quantity || 1);
+      if (scopedQuantityInput) scopedQuantityInput.value = qtyStr;
+      if (basicQuantityInput) basicQuantityInput.value = qtyStr;
+      if (scopedStrategySelect)
+        scopedStrategySelect.value = currentScopedPlan.strategy || 'BY_TARGET_ORDER';
+      if (paramAllowPartialCheckbox && currentScopedPlan.allowPartialQuantity !== undefined) {
+        paramAllowPartialCheckbox.checked = currentScopedPlan.allowPartialQuantity;
+      }
+      if (currentScopedPlan.persistence) {
+        if (paramDurationInput)
+          paramDurationInput.value = String(
+            currentScopedPlan.persistence.maxDurationMinutes !== undefined
+              ? currentScopedPlan.persistence.maxDurationMinutes
+              : 120
+          );
+        if (paramAttemptsInput)
+          paramAttemptsInput.value = String(
+            currentScopedPlan.persistence.maxAttempts !== undefined
+              ? currentScopedPlan.persistence.maxAttempts
+              : 1000
+          );
+        if (paramPollIntervalInput)
+          paramPollIntervalInput.value = String(
+            currentScopedPlan.persistence.pollIntervalMs || 2000
+          );
+
+        if (paramJitterInput)
+          paramJitterInput.value = String(currentScopedPlan.persistence.jitterRatio ?? 0.2);
+
+        // Restore scheduled ARM input and status if a future startAt is saved
+        const startAt = currentScopedPlan.persistence.startAt || config.scheduledArmAt;
+        if (startAt) {
+          const startAtMs = new Date(startAt).getTime();
+          if (startAtMs > Date.now()) {
+            const formattedVal = toDatetimeLocalValue(startAt);
+            if (scheduledArmTimeInput) scheduledArmTimeInput.value = formattedVal;
+            if (basicScheduledArmTime) basicScheduledArmTime.value = formattedVal;
+            showScheduledArmStatus(startAt);
+            if (basicScheduledStatus && basicScheduledTimeDisplay) {
+              basicScheduledStatus.style.display = 'flex';
+              basicScheduledTimeDisplay.textContent = new Date(startAt).toLocaleString('vi-VN');
+            }
+          }
+        }
+      }
+    }
+
     // Restore cached catalog snapshot for instant display
     if (config.ticketCatalogSnapshot) {
       applyNewCatalog(config.ticketCatalogSnapshot);
     }
   }
 
+
   // Render rule cards (if no catalog yet, renders with empty dropdowns)
   refreshAllRuleCards();
 
-  // Load last state
+  // Restore recent logs from storage
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get('ticketbox_recent_logs', (res) => {
+      if (Array.isArray(res?.ticketbox_recent_logs) && res.ticketbox_recent_logs.length > 0) {
+        logBox.innerHTML = '';
+        for (const logLine of res.ticketbox_recent_logs) {
+          const div = document.createElement('div');
+          div.textContent = logLine;
+          logBox.appendChild(div);
+        }
+        logBox.scrollTop = logBox.scrollHeight;
+      }
+    });
+  }
+
+  // Load last state and persistent phase
   const lastState = await storage.getLastState();
+  const persistentState = await storage.getPersistentState();
+
   if (lastState?.currentState) {
     updateStateBadge(lastState.currentState, lastState.failureMessage);
     if (lastState.attemptId) {
       attemptIdDisplay.textContent = lastState.attemptId;
     }
   }
+
+  if (persistentState?.currentPhase === 'SCHEDULED' && config?.scheduledArmAt) {
+    showScheduledArmStatus(config.scheduledArmAt);
+    if (basicScheduledStatus && basicScheduledTimeDisplay) {
+      basicScheduledStatus.style.display = 'flex';
+      basicScheduledTimeDisplay.textContent = new Date(config.scheduledArmAt).toLocaleString('vi-VN');
+    }
+  } else if (
+    (persistentState?.currentPhase === 'ARMED' || persistentState?.currentPhase === 'MONITORING') &&
+    (!lastState?.currentState || lastState.currentState === PurchaseState.IDLE || lastState.currentState === PurchaseState.READY)
+  ) {
+    updateStateBadge(PurchaseState.ARMED);
+  }
+
+  await updatePersistentMonitoringDisplay(persistentState);
 
   // Read cached latest journey scan for immediate catalog display
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
@@ -1069,6 +2042,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
       if (message.context.attemptId) {
         attemptIdDisplay.textContent = message.context.attemptId;
       }
+      updatePersistentMonitoringDisplay().catch(() => {});
       addLog(`State → ${message.context.currentState}`);
       break;
     }
@@ -1079,6 +2053,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
         attemptIdDisplay.textContent = message.context.attemptId;
       }
       updateTelemetry();
+      updatePersistentMonitoringDisplay().catch(() => {});
 
       // Apply full catalog snapshot if available
       if (message.catalogSnapshot) {
@@ -1183,6 +2158,18 @@ messageBus.subscribe((message: ExtensionMessage) => {
       break;
     }
 
+    case 'RESET_CONFIG_DONE': {
+      resetPopupToBlank();
+      addLog('✅ Config đã được xóa. Cấu hình lại từ đầu.');
+      break;
+    }
+
+    case 'SCHEDULED_ARM_CONFIRMED': {
+      showScheduledArmStatus(message.scheduledAt);
+      addLog(`⏰ Hẹn ARM vào: ${new Date(message.scheduledAt).toLocaleString('vi-VN')}`);
+      break;
+    }
+
     default:
       break;
   }
@@ -1191,30 +2178,116 @@ messageBus.subscribe((message: ExtensionMessage) => {
 // ─── Button Handlers ──────────────────────────────────────────────────────────
 
 btnArm.addEventListener('click', async () => {
+  if (btnArm?.classList.contains('running-active')) {
+    btnStop.click();
+    return;
+  }
   const url = eventUrlInput.value.trim();
   if (!url) {
     alert('Please enter a target Ticketbox event URL');
     return;
   }
 
+  // 1. Rebuild plans
   rebuildPlanFromCards();
+  let scopedPlan = rebuildScopedPlanFromMatrix();
 
-  if (currentPlan.ticketRules.length === 0) {
-    alert('Please select at least one ticket type before arming.');
+  // 2. Validate Scoped Purchase Plan (BR-S01, BR-S02, BR-S03, BR-S07, AC-09, AC-11)
+  const validation = ScopedPurchasePlanValidator.validate(
+    scopedPlan,
+    currentCatalog,
+    profileNameInput.value.trim() ? 1 : undefined
+  );
+
+  // BR-S02 & AC-09: Whitelist rỗng thì chặn ARM kèm thông báo
+  if (
+    !scopedPlan.targets ||
+    scopedPlan.targets.length === 0 ||
+    scopedPlan.targets.every((t) => t.ticketTypeIds.length === 0)
+  ) {
+    const isScheduled = Boolean(scheduledArmTimeInput?.value);
+    const hasCatalog = currentCatalog.tickets.length > 0 ||
+      (currentCatalog.showings ?? []).some((s) =>
+        'tickets' in s && Array.isArray((s as { tickets?: unknown[] }).tickets) && ((s as { tickets?: unknown[] }).tickets?.length ?? 0) > 0
+      );
+
+    let errorMsg: string;
+    if (!hasCatalog) {
+      // Matrix trống vì chưa quét trang
+      errorMsg = isScheduled
+        ? 'ARM bị chặn: Chưa quét được danh mục vé!\n\n' +
+          'Để hẹn giờ ARM, bạn cần làm trước:\n' +
+          '1. Mở tab Ticketbox event trên trình duyệt\n' +
+          '2. Nhấn nút ↺ (Refresh catalog) trong popup\n' +
+          '3. Tick ✅ hạng vé muốn mua trong ma trận\n' +
+          '4. Chọn giờ hẹn → nhấn ARM'
+        : 'ARM bị chặn: Chưa quét được danh mục vé!\n\n' +
+          '1. Mở tab Ticketbox event trên trình duyệt\n' +
+          '2. Nhấn nút ↺ (Refresh catalog) trong popup\n' +
+          '3. Tick ✅ hạng vé muốn mua → ARM';
+    } else {
+      // Catalog có nhưng chưa tick
+      errorMsg = 'ARM bị chặn: Whitelist rỗng!\n\nDanh mục vé đã được quét nhưng bạn chưa tick ✅ hạng vé nào trong bảng "SĂN VÉ CÓ PHẠM VI (SCOPED MATRIX)".\n\nVui lòng tick ít nhất một hạng vé trước khi ARM.';
+    }
+
+    if (scopedValidationError) {
+      scopedValidationError.style.display = 'block';
+      scopedValidationError.textContent = errorMsg.replace(/\n/g, '\n');
+    }
+    alert(errorMsg);
     return;
   }
 
-  // Validate plan against current showing tickets (warn but don't block)
-  const currentShowingTickets = getTicketsForCurrentShowing();
-  const validationTickets = currentShowingTickets.length > 0 ? currentShowingTickets : currentCatalog.tickets;
-  const validation = PurchasePlanValidator.validate(currentPlan, validationTickets);
-  if (!validation.hasActionableRule && validationTickets.length > 0) {
-    addLog('Cảnh báo: Loại vé đã chọn hiện chưa khả dụng hoặc hết vé. Trợ lý vẫn sẽ ARM và tự động theo dõi để đặt ngay khi có vé.');
+  if (!validation.valid) {
+    if (scopedValidationError) {
+      scopedValidationError.style.display = 'block';
+      scopedValidationError.textContent = `❌ Không thể ARM do vi phạm quy tắc:\n• ${validation.errors.join('\n• ')}`;
+    }
+    alert(`ARM bị chặn do lỗi cấu hình:\n• ${validation.errors.join('\n• ')}`);
+    return;
+  }
+
+  // 3. Summary confirmation check
+  if (!summaryConfirmCheckbox.checked) {
+    if (scopedSummaryBox) {
+      scopedSummaryBox.style.display = 'flex';
+      scopedSummaryBox.scrollIntoView({ behavior: 'smooth' });
+    }
+    alert(
+      'Vui lòng đọc bản tóm tắt "Sẽ chỉ mua / Sẽ KHÔNG mua" và tick chọn xác nhận trước khi ARM.'
+    );
+    return;
+  }
+
+  // Inject startAt from the datetime picker into scopedPlan persistence if set in the future
+  const scheduledArmValue = scheduledArmTimeInput?.value;
+  let isScheduled = false;
+  if (scheduledArmValue) {
+    const startAtIso = new Date(scheduledArmValue).toISOString();
+    const startAtMs = new Date(startAtIso).getTime();
+    if (startAtMs > Date.now()) {
+      isScheduled = true;
+      scopedPlan = {
+        ...scopedPlan,
+        persistence: {
+          ...scopedPlan.persistence,
+          startAt: startAtIso,
+        },
+      };
+      showScheduledArmStatus(startAtIso);
+    }
   }
 
   await savePlan();
-  updateStateBadge(PurchaseState.ARMED);
-  addLog('Đã kích hoạt trợ lý (ARMED)... Đang chuẩn bị đặt vé.');
+
+  if (isScheduled) {
+    addLog(
+      `⏰ Đã hẹn giờ ARM vào: ${new Date(scopedPlan.persistence.startAt!).toLocaleString('vi-VN')}. Trợ lý sẽ tự động chạy khi đến giờ!`
+    );
+  } else {
+    updateStateBadge(PurchaseState.ARMED);
+    addLog('Đã kích hoạt trợ lý với Scope Guard cứng (ARMED)... Đang chuẩn bị săn vé theo phạm vi.');
+  }
 
   const userProfile = {
     fullName: profileNameInput.value.trim(),
@@ -1228,24 +2301,26 @@ btnArm.addEventListener('click', async () => {
   };
 
   if (!userProfile.fullName || !userProfile.phone) {
-    addLog('Lưu ý: Chưa điền Họ tên hoặc SĐT trong "User Profile". Nếu sự kiện có bảng câu hỏi, hệ thống sẽ dừng chờ bạn điền.');
+    addLog(
+      'Lưu ý: Chưa điền Họ tên hoặc SĐT trong "User Profile". Nếu sự kiện có bảng câu hỏi, hệ thống sẽ dừng chờ bạn điền.'
+    );
   }
 
-  // Derive legacy categoryPriority from ticketRules for backward compat
-  const categoryPriority = currentPlan.ticketRules
-    .map((r) => r.ticketName || r.ticketId)
-    .filter(Boolean);
+  // Priority categories from scoped targets
+  const categoryPriority = scopedPlan.targets.flatMap((t) => t.ticketTypeIds);
 
   await messageBus.publish({
     type: 'ARM_REQUESTED',
     timestamp: new Date().toISOString(),
     eventUrl: url,
     categoryPriority,
-    quantity: currentPlan.ticketRules[0]?.quantity ?? 1,
-    allowFallback: currentPlan.allowFallback,
+    quantity: scopedPlan.quantity,
+    allowFallback: false, // In scoped persistent mode, fallback outside scope is forbidden
+    scopedPurchasePlan: scopedPlan,
     userProfile,
   });
 });
+
 
 btnStop.addEventListener('click', async () => {
   addLog('Đã dừng trợ lý theo yêu cầu.');
@@ -1256,6 +2331,32 @@ btnStop.addEventListener('click', async () => {
     reason: 'Manual user stop via Popup UI',
   });
 });
+
+if (btnResetConfig) {
+  btnResetConfig.addEventListener('click', async () => {
+    const confirmed = confirm(
+      'Xóa toàn bộ cấu hình đã lưu?\n\n• URL sự kiện\n• Preference vé, scoped matrix\n• User profile\n• Execution state\n\nProfiles tài khoản sẽ được GIỮ LẠI.'
+    );
+    if (!confirmed) return;
+    addLog('🗑 Đang xóa config...');
+    await messageBus.publish({
+      type: 'RESET_CONFIG_REQUESTED',
+      timestamp: new Date().toISOString(),
+    });
+  });
+}
+
+if (btnCancelScheduledArm) {
+  btnCancelScheduledArm.addEventListener('click', async () => {
+    addLog('Đang hủy lịch ARM...');
+    await messageBus.publish({
+      type: 'CANCEL_SCHEDULED_ARM',
+      timestamp: new Date().toISOString(),
+    });
+    hideScheduledArmStatus();
+    addLog('✅ Đã hủy hẹn giờ ARM.');
+  });
+}
 
 btnAddTicketRow.addEventListener('click', () => {
   addTicketRuleRow();
@@ -1270,6 +2371,31 @@ btnRefreshCatalog.addEventListener('click', () => {
 
 showingSelect.addEventListener('change', onShowingChange);
 
+[
+  scopedQuantityInput,
+  scopedStrategySelect,
+  paramDurationInput,
+  paramAttemptsInput,
+  paramPollIntervalInput,
+  paramJitterInput,
+  paramAllowPartialCheckbox,
+].forEach((el) => {
+  if (el) {
+    el.addEventListener('change', () => {
+      rebuildScopedPlanFromMatrix();
+      updateScopedSummaryAndValidation();
+      savePlan();
+    });
+  }
+});
+
+if (summaryConfirmCheckbox) {
+  summaryConfirmCheckbox.addEventListener('change', () => {
+    rebuildScopedPlanFromMatrix();
+    updateScopedSummaryAndValidation();
+  });
+}
+
 allowFallbackCheckbox.addEventListener('change', () => {
   fallbackPolicyGroup.style.display = allowFallbackCheckbox.checked ? 'flex' : 'none';
   rebuildPlanFromCards();
@@ -1281,13 +2407,18 @@ fallbackPolicySelect.addEventListener('change', () => {
   savePlan();
 });
 
-// Reactively update popup when new discovery scan is saved to storage
+// Reactively update popup when new discovery scan or persistent state is saved to storage
 if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'local' && changes['latestJourneyUpdate']?.newValue) {
-      const update = changes['latestJourneyUpdate'].newValue;
-      if (update?.catalogSnapshot) {
-        applyNewCatalog(update.catalogSnapshot);
+    if (areaName === 'local') {
+      if (changes['latestJourneyUpdate']?.newValue) {
+        const update = changes['latestJourneyUpdate'].newValue;
+        if (update?.catalogSnapshot) {
+          applyNewCatalog(update.catalogSnapshot);
+        }
+      }
+      if (changes['persistentExecutionState']) {
+        updatePersistentMonitoringDisplay(changes['persistentExecutionState'].newValue);
       }
     }
   });
@@ -1320,6 +2451,106 @@ eventUrlInput.addEventListener('keydown', (e) => {
 ].forEach((el) => {
   if (el) {
     el.addEventListener('change', () => savePlan());
+  }
+});
+
+// Mode switcher listeners
+tabModeBasic?.addEventListener('click', () => switchUiMode('basic'));
+tabModeHardcore?.addEventListener('click', () => switchUiMode('hardcore'));
+
+// Basic Panel action buttons
+btnBasicArm?.addEventListener('click', handleBasicArm);
+btnBasicStop?.addEventListener('click', () => btnStop.click());
+btnBasicReset?.addEventListener('click', () => btnResetConfig?.click());
+btnCancelBasicScheduled?.addEventListener('click', () => btnCancelScheduledArm?.click());
+
+btnBasicSelectAll?.addEventListener('click', () => {
+  basicTicketChecklist?.querySelectorAll('.basic-ticket-item').forEach((item) => {
+    const cb = item.querySelector('.basic-ticket-cb') as HTMLInputElement | null;
+    if (cb) {
+      cb.checked = true;
+      item.classList.add('selected');
+    }
+  });
+  syncBasicChecklistToScopedPlan();
+  savePlan();
+});
+
+btnBasicDeselectAll?.addEventListener('click', () => {
+  basicTicketChecklist?.querySelectorAll('.basic-ticket-item').forEach((item) => {
+    const cb = item.querySelector('.basic-ticket-cb') as HTMLInputElement | null;
+    if (cb) {
+      cb.checked = false;
+      item.classList.remove('selected');
+    }
+  });
+  syncBasicChecklistToScopedPlan();
+  savePlan();
+});
+
+if (basicQuantityInput) {
+  basicQuantityInput.addEventListener('change', () => {
+    syncBasicChecklistToScopedPlan();
+    savePlan();
+  });
+}
+
+if (basicScheduledArmTime) {
+  basicScheduledArmTime.addEventListener('change', () => {
+    const val = basicScheduledArmTime.value;
+    if (val) {
+      const ms = new Date(val).getTime();
+      if (ms > Date.now()) {
+        if (basicScheduledStatus && basicScheduledTimeDisplay) {
+          basicScheduledStatus.style.display = 'flex';
+          basicScheduledTimeDisplay.textContent = new Date(ms).toLocaleString('vi-VN');
+        }
+      } else {
+        if (basicScheduledStatus) basicScheduledStatus.style.display = 'none';
+      }
+    } else {
+      if (basicScheduledStatus) basicScheduledStatus.style.display = 'none';
+    }
+    syncBasicChecklistToScopedPlan();
+    savePlan();
+  });
+}
+
+if (scheduledArmTimeInput) {
+  scheduledArmTimeInput.addEventListener('change', () => {
+    const val = scheduledArmTimeInput.value;
+    if (val) {
+      const ms = new Date(val).getTime();
+      if (ms > Date.now()) {
+        showScheduledArmStatus(new Date(ms).toISOString());
+      }
+    }
+    savePlan();
+  });
+}
+
+if (basicShowingSelect) {
+  basicShowingSelect.addEventListener('change', () => {
+    showingSelect.value = basicShowingSelect.value;
+    onShowingChange();
+    renderBasicTicketChecklist();
+    syncBasicChecklistToScopedPlan();
+    savePlan();
+  });
+}
+
+// Auto-save basic profile fields
+[
+  basicProfileName,
+  basicProfilePhone,
+  basicProfileEmail,
+  basicProfileIdCard,
+].forEach((el) => {
+  if (el) {
+    el.addEventListener('change', () => {
+      syncProfileFields('hardcore');
+      savePlan();
+    });
   }
 });
 

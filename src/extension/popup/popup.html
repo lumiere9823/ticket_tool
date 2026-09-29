@@ -19,7 +19,17 @@
 
       <!-- CONFIGURATION SECTION -->
       <section class="section config-card">
-        <label for="event-url">Target Event URL</label>
+        <!-- MODE SWITCH TABS -->
+        <div class="mode-tabs">
+          <button type="button" class="mode-tab active" id="tab-mode-basic" data-mode="basic">
+            ⚡ Chế độ Cơ bản (Khuyên dùng)
+          </button>
+          <button type="button" class="mode-tab" id="tab-mode-hardcore" data-mode="hardcore">
+            🎯 Chế độ Chuyên sâu (Ma trận)
+          </button>
+        </div>
+
+        <label for="event-url" style="margin-top: 6px;">Target Event URL</label>
         <input type="text" id="event-url" placeholder="https://ticketbox.vn/event/..." />
 
         <!-- ============================================================
@@ -46,75 +56,297 @@
         </div>
 
         <!-- ============================================================
-           SHOWING SELECTION
+           PANEL 1: BASIC MODE (ĐƠN GIẢN, DỄ DÙNG)
            ============================================================ -->
-        <div class="field-group" id="showing-group" style="display: none">
-          <label for="showing-select">BUỔI DIỄN</label>
-          <select id="showing-select" class="select-field">
-            <option value="">— chưa có buổi diễn —</option>
-          </select>
-        </div>
-
-        <!-- ============================================================
-           PURCHASE PLAN: TICKET RULES
-           ============================================================ -->
-        <div class="ticket-selection-card">
-          <div class="ticket-selection-header">Kế hoạch mua vé (theo thứ tự ưu tiên)</div>
-          <div id="ticket-rules-container" class="ticket-rules-container"></div>
-          <button type="button" id="btn-add-ticket-row" class="btn-add-row">+ Thêm loại vé</button>
-          <span class="hint"
-            >Ưu tiên được đánh giá từ trên xuống. Loại vé được chọn từ danh mục đã khám phá.</span
-          >
-        </div>
-
-        <!-- ============================================================
-           FALLBACK POLICY
-           ============================================================ -->
-        <div class="fallback-row">
-          <label class="checkbox-label">
-            <input type="checkbox" id="allow-fallback" checked />
-            Cho phép fallback
-          </label>
-          <div class="fallback-policy-group" id="fallback-policy-group">
-            <label for="fallback-policy-select" class="inline-label">Chính sách:</label>
-            <select id="fallback-policy-select" class="select-field select-inline">
-              <option value="NEXT_PRIORITY">Vé ưu tiên tiếp theo</option>
-              <option value="ANY_AVAILABLE">Bất kỳ vé nào còn</option>
-              <option value="STOP_AND_NOTIFY">Dừng và thông báo</option>
+        <div id="panel-basic" class="basic-panel">
+          <!-- Suất diễn (nếu sự kiện có nhiều suất) -->
+          <div class="field-group" id="basic-showing-group" style="display: none">
+            <label for="basic-showing-select">BUỔI DIỄN</label>
+            <select id="basic-showing-select" class="select-field">
+              <option value="">— Đang tải buổi diễn —</option>
             </select>
           </div>
+
+          <!-- Danh sách chọn vé -->
+          <div class="basic-card">
+            <div class="basic-section-title">
+              <span>1. CHỌN HẠNG VÉ MUỐN MUA</span>
+              <div style="display: flex; gap: 6px;">
+                <button type="button" id="btn-basic-select-all" class="btn-cancel-small" style="background: rgba(59, 130, 246, 0.15); color: #93c5fd; border-color: rgba(59, 130, 246, 0.4);">Tất cả</button>
+                <button type="button" id="btn-basic-deselect-all" class="btn-cancel-small">Bỏ chọn</button>
+              </div>
+            </div>
+            <p class="basic-help-text" style="margin-bottom: 6px;">
+              💡 <em>Cơ chế dự phòng:</em> Trợ lý chỉ mua đúng <strong>Số lượng vé</strong> bạn chọn ở Mục 2. Nếu tick nhiều vé, trợ lý sẽ cố mua vé trên cùng trước; nếu hết vé mới tự động đẩy dần xuống các vé dưới.
+            </p>
+            <div class="basic-ticket-checklist" id="basic-ticket-checklist">
+              <div class="empty-cell" style="padding: 12px; text-align: center; color: var(--text-muted);">
+                Chưa phát hiện vé. Vui lòng mở trang sự kiện trên trình duyệt rồi bấm nút ↺ ở trên.
+              </div>
+            </div>
+          </div>
+
+          <!-- Số lượng & Hẹn giờ -->
+          <div class="basic-card">
+            <div class="basic-section-title">2. SỐ LƯỢNG &amp; THỜI GIAN MỞ BÁN</div>
+            
+            <div class="basic-quantity-row">
+              <label for="basic-quantity" class="field-label">Số lượng vé muốn mua:</label>
+              <input type="number" id="basic-quantity" min="1" max="10" value="1" class="input-number" style="width: 70px;" />
+            </div>
+
+            <div class="field-group" style="margin-top: 4px;">
+              <label for="basic-scheduled-arm-time" class="field-label">⏰ Giờ mở bán (Để trống nếu vé đã mở và muốn săn ngay):</label>
+              <input type="datetime-local" id="basic-scheduled-arm-time" class="input-datetime" />
+              <p class="basic-help-text" style="margin-top: 4px;">
+                💡 <em>Mẹo hẹn giờ:</em> Cấu hình xong → chọn giờ mở bán → bấm ARM. Extension sẽ tự động bật tab Ticketbox lên và săn vé đúng từng giây!
+              </p>
+              <div id="basic-scheduled-status" class="scheduled-arm-status" style="display: none; margin-top: 6px;">
+                ⏳ Đã hẹn ARM vào: <strong id="basic-scheduled-time-display">-</strong>
+                <button id="btn-cancel-basic-scheduled" class="btn-cancel-small" type="button">✕ Hủy hẹn</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Thông tin người nhận vé -->
+          <details class="user-profile-details" open>
+            <summary>3. Thông tin người nhận vé (Profile)</summary>
+            <div class="profile-fields">
+              <input type="text" id="basic-profile-name" placeholder="Họ và tên (e.g. Nguyễn Văn A)" />
+              <input type="text" id="basic-profile-phone" placeholder="Số điện thoại (e.g. 0901234567)" />
+              <input type="email" id="basic-profile-email" placeholder="Email nhận vé (e.g. user@example.com)" />
+              <input type="text" id="basic-profile-id-card" placeholder="Số CCCD / CMND (nếu có)" />
+            </div>
+          </details>
+
+          <!-- Nút hành động chế độ cơ bản -->
+          <div class="actions" style="margin-top: 6px; display: flex; flex-direction: column; gap: 8px;">
+            <button id="btn-basic-arm" class="btn-large-arm" type="button">
+              🚀 BẮT ĐẦU SĂN VÉ (ARM)
+            </button>
+            <div style="display: flex; gap: 8px;">
+              <button id="btn-basic-stop" class="btn btn-danger" type="button" style="flex: 1;">🛑 DỪNG LẠI</button>
+              <button id="btn-basic-reset" class="btn btn-ghost" type="button" title="Xóa toàn bộ cấu hình đã lưu để cài đặt cho sự kiện khác">🗑 RESET CONFIG</button>
+            </div>
+          </div>
         </div>
 
         <!-- ============================================================
-           USER PROFILE
+           PANEL 2: HARDCORE MODE (CHUYÊN SÂU / SCOPED MATRIX)
            ============================================================ -->
-        <details class="user-profile-details" open>
-          <summary>User Profile &amp; Form Autofill (Thông tin điền form)</summary>
-          <div class="profile-fields">
-            <input type="text" id="profile-name" placeholder="Họ và tên / Full Name (e.g. Nguyễn Văn A)" />
-            <input type="text" id="profile-phone" placeholder="Số điện thoại / Phone (e.g. 0901234567)" />
-            <input type="email" id="profile-email" placeholder="Email nhận vé (e.g. user@example.com)" />
-            <input type="text" id="profile-id-card" placeholder="Số CCCD / CMND / Passport (e.g. 079...)" />
-            <input type="text" id="profile-birth-year" placeholder="Năm sinh / Ngày sinh (e.g. 1995 hoặc 15/08/1995)" />
-            <div class="profile-row">
-              <select id="profile-gender" class="profile-select">
-                <option value="">— Giới tính —</option>
-                <option value="Nam">Nam / Male</option>
-                <option value="Nữ">Nữ / Female</option>
-                <option value="Khác">Khác / Other</option>
-              </select>
-              <input type="text" id="profile-address" placeholder="Địa chỉ / Tỉnh thành" />
-            </div>
-            <label class="checkbox-label" style="margin-top: 4px">
-              <input type="checkbox" id="profile-agree-terms" />
-              Đồng ý điều khoản &amp; BTC sử dụng thông tin (Có/Yes)
-            </label>
+        <div id="panel-hardcore" class="hardcore-panel" style="display: none">
+          <!-- SHOWING SELECTION -->
+          <div class="field-group" id="showing-group" style="display: none">
+            <label for="showing-select">BUỔI DIỄN</label>
+            <select id="showing-select" class="select-field">
+              <option value="">— chưa có buổi diễn —</option>
+            </select>
           </div>
-        </details>
 
-        <div class="actions" style="margin-top: 10px">
-          <button id="btn-arm" class="btn btn-primary">ARM ASSISTANT</button>
-          <button id="btn-stop" class="btn btn-danger">STOP</button>
+          <!-- SCOPED PURCHASE MATRIX (Scope Guard Cứng) -->
+          <div class="scoped-purchase-card" id="scoped-purchase-section">
+            <div class="card-header-with-badge">
+              <span class="card-header-title">🎯 SĂN VÉ CÓ PHẠM VI (SCOPED MATRIX)</span>
+              <span class="badge-mini">Scope Guard Cứng</span>
+            </div>
+
+            <!-- SHOWINGS X TIERS MATRIX -->
+            <div class="matrix-container" id="scoped-matrix-container">
+              <div class="matrix-empty" id="matrix-empty">
+                Chưa khám phá thấy suất diễn hoặc hạng vé. Vui lòng mở trang sự kiện để quét.
+              </div>
+              <div class="matrix-table-wrapper" id="matrix-table-wrapper" style="display: none">
+                <table class="scoped-matrix-table" id="scoped-matrix-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 50px">Rank</th>
+                      <th>Suất diễn / Ngày</th>
+                      <th>Hạng vé được phép (Tick để chọn)</th>
+                    </tr>
+                  </thead>
+                  <tbody id="scoped-matrix-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- SCOPED CONFIGURATION: QUANTITY & STRATEGY -->
+            <div class="scoped-config-grid">
+              <div class="field-group">
+                <label for="scoped-quantity" class="field-label">Số lượng vé:</label>
+                <input
+                  type="number"
+                  id="scoped-quantity"
+                  min="1"
+                  max="10"
+                  value="1"
+                  class="input-number"
+                />
+              </div>
+
+              <div class="field-group">
+                <label for="scoped-strategy" class="field-label">Chiến lược ưu tiên:</label>
+                <select id="scoped-strategy" class="select-field">
+                  <option value="BY_TARGET_ORDER">Theo thứ tự mục tiêu (Rank)</option>
+                  <option value="SHOWING_FIRST">Ưu tiên suất diễn trước</option>
+                  <option value="TIER_FIRST">Ưu tiên hạng vé trước</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- PERSISTENCE POLICY -->
+            <details class="persistence-details">
+              <summary>Thông số kiên trì (Persistence Policy)</summary>
+              <div class="persistence-fields">
+                <div class="param-row">
+                  <label for="param-duration">Trần thời gian (phút, 0 = không giới hạn):</label>
+                  <input type="number" id="param-duration" min="0" max="1440" value="120" placeholder="0 = vô hạn" />
+                </div>
+                <div class="param-row">
+                  <label for="param-attempts">Trần số lần thử (0 = không giới hạn):</label>
+                  <input type="number" id="param-attempts" min="0" max="10000" value="1000" placeholder="0 = vô hạn" />
+                </div>
+                <div class="param-row">
+                  <label for="param-poll-interval">Giãn cách poll (ms, sàn 1500):</label>
+                  <input
+                    type="number"
+                    id="param-poll-interval"
+                    min="1500"
+                    max="10000"
+                    step="100"
+                    value="2000"
+                  />
+                </div>
+                <div class="param-row">
+                  <label for="param-jitter">Tỷ lệ Jitter (0 - 1):</label>
+                  <input type="number" id="param-jitter" min="0" max="0.5" step="0.05" value="0.2" />
+                </div>
+                <div class="param-row full-width-param">
+                  <label class="checkbox-label" for="param-allow-partial">
+                    <input type="checkbox" id="param-allow-partial" />
+                    Cho phép mua ít hơn số lượng mong muốn (allowPartialQuantity)
+                  </label>
+                </div>
+              </div>
+            </details>
+
+            <!-- CONFIRMATION SUMMARY MODAL / BOX -->
+            <div class="scoped-summary-box" id="scoped-summary-box" style="display: none">
+              <div class="summary-box-title">XÁC NHẬN PHẠM VI MUA VÉ (SCOPE CONFIRMATION)</div>
+              <div class="summary-allowed" id="summary-allowed">Sẽ chỉ mua: ...</div>
+              <div class="summary-disallowed" id="summary-disallowed">
+                Sẽ KHÔNG mua: mọi thứ còn lại
+              </div>
+              <label class="checkbox-label summary-confirm-label">
+                <input type="checkbox" id="summary-confirm-checkbox" />
+                Tôi xác nhận chỉ mua các vé trong phạm vi trên
+              </label>
+            </div>
+
+            <!-- VALIDATION ERROR BANNER -->
+            <div
+              class="scoped-validation-error"
+              id="scoped-validation-error"
+              style="display: none"
+            ></div>
+          </div>
+
+          <!-- PURCHASE PLAN: TICKET RULES (LEGACY) -->
+          <details class="ticket-selection-card" id="legacy-rules-details">
+            <summary class="ticket-selection-header" style="cursor: pointer">
+              Cấu hình đơn lẻ (Tuỳ chọn phụ / Legacy)
+            </summary>
+            <div
+              id="ticket-rules-container"
+              class="ticket-rules-container"
+              style="margin-top: 8px"
+            ></div>
+            <button type="button" id="btn-add-ticket-row" class="btn-add-row">+ Thêm loại vé</button>
+            <div class="fallback-row">
+              <label class="checkbox-label">
+                <input type="checkbox" id="allow-fallback" checked />
+                Cho phép fallback
+              </label>
+              <div class="fallback-policy-group" id="fallback-policy-group">
+                <label for="fallback-policy-select" class="inline-label">Chính sách:</label>
+                <select id="fallback-policy-select" class="select-field select-inline">
+                  <option value="NEXT_PRIORITY">Vé ưu tiên tiếp theo</option>
+                  <option value="ANY_AVAILABLE">Bất kỳ vé nào còn</option>
+                  <option value="STOP_AND_NOTIFY">Dừng và thông báo</option>
+                </select>
+              </div>
+            </div>
+          </details>
+
+          <!-- USER PROFILE (HARDCORE) -->
+          <details class="user-profile-details" open>
+            <summary>User Profile &amp; Form Autofill (Thông tin điền form)</summary>
+            <div class="profile-fields">
+              <input
+                type="text"
+                id="profile-name"
+                placeholder="Họ và tên / Full Name (e.g. Nguyễn Văn A)"
+              />
+              <input
+                type="text"
+                id="profile-phone"
+                placeholder="Số điện thoại / Phone (e.g. 0901234567)"
+              />
+              <input
+                type="email"
+                id="profile-email"
+                placeholder="Email nhận vé (e.g. user@example.com)"
+              />
+              <input
+                type="text"
+                id="profile-id-card"
+                placeholder="Số CCCD / CMND / Passport (e.g. 079...)"
+              />
+              <input
+                type="text"
+                id="profile-birth-year"
+                placeholder="Năm sinh / Ngày sinh (e.g. 1995 hoặc 15/08/1995)"
+              />
+              <div class="profile-row">
+                <select id="profile-gender" class="profile-select">
+                  <option value="">— Giới tính —</option>
+                  <option value="Nam">Nam / Male</option>
+                  <option value="Nữ">Nữ / Female</option>
+                  <option value="Khác">Khác / Other</option>
+                </select>
+                <input type="text" id="profile-address" placeholder="Địa chỉ / Tỉnh thành" />
+              </div>
+              <label class="checkbox-label" style="margin-top: 4px">
+                <input type="checkbox" id="profile-agree-terms" />
+                Đồng ý điều khoản &amp; BTC sử dụng thông tin (Có/Yes)
+              </label>
+            </div>
+          </details>
+
+          <div class="actions" style="margin-top: 10px">
+            <button id="btn-arm" class="btn btn-primary">ARM ASSISTANT</button>
+            <button id="btn-stop" class="btn btn-danger">STOP</button>
+            <button id="btn-reset-config" class="btn btn-ghost" title="Xóa toàn bộ cấu hình đã lưu (URL, preference, profile, matrix). Profiles tài khoản vẫn được giữ.">🗑 RESET</button>
+          </div>
+
+          <!-- SCHEDULED ARM SECTION -->
+          <details class="scheduled-arm-card" id="scheduled-arm-details">
+            <summary class="scheduled-arm-summary">⏰ Hẹn giờ ARM tự động (Nâng cao)</summary>
+            <div class="scheduled-arm-fields">
+              <div class="param-row">
+                <label for="scheduled-arm-time">ARM vào lúc:</label>
+                <input type="datetime-local" id="scheduled-arm-time" class="input-datetime" />
+              </div>
+              <p class="scheduled-arm-help">
+                Mở tab Ticketbox trước → cấu hình xong → chọn giờ mở bán → nhấn ARM.<br />
+                Extension sẽ tự ARM đúng giờ và đưa tab lên foreground.
+              </p>
+              <div id="scheduled-arm-status" class="scheduled-arm-status" style="display: none">
+                ⏳ Đã hẹn ARM vào:
+                <strong id="scheduled-arm-time-display">-</strong>
+                <button id="btn-cancel-scheduled-arm" class="btn-cancel-small" type="button">✕ Hủy hẹn</button>
+              </div>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -195,9 +427,28 @@
             <span>Status:</span>
             <strong id="current-step-display">IDLE</strong>
           </div>
+          <div class="state-row" id="persistent-target-row">
+            <span>Mục tiêu đang săn:</span>
+            <strong id="persistent-target-display">-</strong>
+          </div>
+          <div class="state-row" id="persistent-attempts-row">
+            <span>Lần thử (Attempts):</span>
+            <span id="persistent-attempts-display">0 / 200</span>
+          </div>
+          <div class="state-row" id="persistent-elapsed-row">
+            <span>Thời gian đã chạy:</span>
+            <span id="persistent-elapsed-display">0m / 30m</span>
+          </div>
+          <div class="blocking-row" id="persistent-stop-reason-row" style="display: none">
+            <span class="blocking-label">Lý do dừng:</span>
+            <span id="persistent-stop-reason-display" class="blocking-text">-</span>
+          </div>
           <div class="blocking-row" id="blocking-reason-container" style="display: none">
             <span class="blocking-label">Blocking Reason:</span>
             <span id="blocking-reason-text" class="blocking-text">-</span>
+          </div>
+          <div class="tab-hidden-banner" id="tab-hidden-banner" style="display: none">
+            ⚠️ Giữ tab Ticketbox ở foreground để poll đúng nhịp
           </div>
         </div>
       </section>
