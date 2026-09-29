@@ -56,6 +56,10 @@ const fallbackPolicyGroup = document.getElementById('fallback-policy-group') as 
 const profileNameInput = document.getElementById('profile-name') as HTMLInputElement;
 const profilePhoneInput = document.getElementById('profile-phone') as HTMLInputElement;
 const profileEmailInput = document.getElementById('profile-email') as HTMLInputElement;
+const profileIdCardInput = document.getElementById('profile-id-card') as HTMLInputElement;
+const profileBirthYearInput = document.getElementById('profile-birth-year') as HTMLInputElement;
+const profileGenderSelect = document.getElementById('profile-gender') as HTMLSelectElement;
+const profileAddressInput = document.getElementById('profile-address') as HTMLInputElement;
 const profileAgreeTermsCheckbox = document.getElementById(
   'profile-agree-terms'
 ) as HTMLInputElement;
@@ -159,7 +163,23 @@ function updateShowingDropdown(snapshot: TicketCatalogSnapshot): void {
 
   if (validShowings.length <= 1) {
     showingGroup.style.display = 'none';
+    // Auto-select the single showing so ticket filtering still works
+    if (validShowings.length === 1 && !currentPlan.showingId) {
+      currentPlan.showingId = validShowings[0]!.id ?? null;
+    }
     return;
+  }
+
+  // If no showing selected yet, auto-select first showing with available tickets, or first showing
+  if (!currentPlan.showingId && validShowings.length > 0) {
+    const firstAvail =
+      validShowings.find((s) => {
+        const tickets = 'tickets' in s && Array.isArray(s.tickets) ? (s.tickets as TicketOption[]) : [];
+        return tickets.some((t) => t.availability === 'AVAILABLE');
+      }) || validShowings[0];
+    if (firstAvail?.id) {
+      currentPlan.showingId = firstAvail.id;
+    }
   }
 
   showingGroup.style.display = 'block';
@@ -168,7 +188,13 @@ function updateShowingDropdown(snapshot: TicketCatalogSnapshot): void {
   for (const s of validShowings) {
     const opt = document.createElement('option');
     opt.value = s.id ?? '';
-    opt.textContent = [s.date, s.name].filter(Boolean).join(' — ') || `Showing ${s.id ?? '?'}`;
+    const showingTickets = 'tickets' in s && Array.isArray(s.tickets) ? s.tickets as TicketOption[] : [];
+    const availCount = showingTickets.filter((t) => t.availability === 'AVAILABLE').length;
+    const availLabel = showingTickets.length > 0
+      ? (availCount > 0 ? ` (${availCount} loại còn vé)` : ' (hết vé)')
+      : '';
+    const baseLabel = s.date || s.name || `Buổi diễn ${s.id ?? '?'}`;
+    opt.textContent = baseLabel + availLabel;
     if (currentPlan.showingId === s.id) opt.selected = true;
     showingSelect.appendChild(opt);
   }
@@ -176,7 +202,16 @@ function updateShowingDropdown(snapshot: TicketCatalogSnapshot): void {
 
 function onShowingChange(): void {
   currentPlan.showingId = showingSelect.value || null;
+  const newTickets = getTicketsForCurrentShowing();
+  // Preserve existing ticket rules by matching ticket name in the new showing
+  for (const rule of currentPlan.ticketRules) {
+    const match = newTickets.find((t) => t.name === rule.ticketName);
+    if (match) {
+      rule.ticketId = match.id ?? match.name;
+    }
+  }
   savePlan();
+  refreshAllRuleCards();
 }
 
 // ─── Ticket Option Helpers ────────────────────────────────────────────────────
@@ -186,6 +221,13 @@ function onShowingChange(): void {
  * Falls back to all tickets when showingId is null.
  */
 function getTicketsForCurrentShowing(): TicketOption[] {
+  const sid = currentPlan.showingId;
+  if (sid) {
+    const showing = (currentCatalog.showings || []).find((s) => s.id === sid);
+    if (showing && 'tickets' in showing && Array.isArray(showing.tickets) && showing.tickets.length > 0) {
+      return showing.tickets as TicketOption[];
+    }
+  }
   return currentCatalog.tickets;
 }
 
@@ -753,6 +795,10 @@ async function savePlan(): Promise<void> {
       fullName: profileNameInput.value.trim(),
       phone: profilePhoneInput.value.trim(),
       email: profileEmailInput.value.trim(),
+      idCard: profileIdCardInput?.value?.trim() || undefined,
+      birthYear: profileBirthYearInput?.value?.trim() || undefined,
+      gender: profileGenderSelect?.value?.trim() || undefined,
+      address: profileAddressInput?.value?.trim() || undefined,
       agreeToTerms: profileAgreeTermsCheckbox.checked,
     },
     // Keep legacy preferences for backward compat with ARM_REQUESTED
@@ -910,6 +956,10 @@ async function loadInitialData(): Promise<void> {
       profileNameInput.value = config.userProfile.fullName ?? '';
       profilePhoneInput.value = config.userProfile.phone ?? '';
       profileEmailInput.value = config.userProfile.email ?? '';
+      if (profileIdCardInput) profileIdCardInput.value = config.userProfile.idCard ?? '';
+      if (profileBirthYearInput) profileBirthYearInput.value = config.userProfile.birthYear ?? '';
+      if (profileGenderSelect) profileGenderSelect.value = config.userProfile.gender ?? '';
+      if (profileAddressInput) profileAddressInput.value = config.userProfile.address ?? '';
       profileAgreeTermsCheckbox.checked = config.userProfile.agreeToTerms ?? false;
     }
 
@@ -1154,15 +1204,12 @@ btnArm.addEventListener('click', async () => {
     return;
   }
 
-  // Validate plan against current catalog (warn but don't block)
-  const validation = PurchasePlanValidator.validate(currentPlan, currentCatalog.tickets);
-  if (!validation.hasActionableRule && currentCatalog.tickets.length > 0) {
-    const proceed = confirm(
-      'Warning: No selected ticket is currently available.\n\n' +
-        (validation.errors.join('\n') || 'All selected tickets are unavailable.') +
-        '\n\nArm anyway and wait for availability?'
-    );
-    if (!proceed) return;
+  // Validate plan against current showing tickets (warn but don't block)
+  const currentShowingTickets = getTicketsForCurrentShowing();
+  const validationTickets = currentShowingTickets.length > 0 ? currentShowingTickets : currentCatalog.tickets;
+  const validation = PurchasePlanValidator.validate(currentPlan, validationTickets);
+  if (!validation.hasActionableRule && validationTickets.length > 0) {
+    addLog('Cảnh báo: Loại vé đã chọn hiện chưa khả dụng hoặc hết vé. Trợ lý vẫn sẽ ARM và tự động theo dõi để đặt ngay khi có vé.');
   }
 
   await savePlan();
@@ -1173,6 +1220,10 @@ btnArm.addEventListener('click', async () => {
     fullName: profileNameInput.value.trim(),
     phone: profilePhoneInput.value.trim(),
     email: profileEmailInput.value.trim(),
+    idCard: profileIdCardInput?.value?.trim() || undefined,
+    birthYear: profileBirthYearInput?.value?.trim() || undefined,
+    gender: profileGenderSelect?.value?.trim() || undefined,
+    address: profileAddressInput?.value?.trim() || undefined,
     agreeToTerms: profileAgreeTermsCheckbox.checked,
   };
 
@@ -1197,7 +1248,8 @@ btnArm.addEventListener('click', async () => {
 });
 
 btnStop.addEventListener('click', async () => {
-  addLog('Stop requested by user.');
+  addLog('Đã dừng trợ lý theo yêu cầu.');
+  updateStateBadge(PurchaseState.STOPPED, 'Đã dừng theo yêu cầu của bạn');
   await messageBus.publish({
     type: 'STOP_REQUESTED',
     timestamp: new Date().toISOString(),
@@ -1252,6 +1304,22 @@ eventUrlInput.addEventListener('keydown', (e) => {
     e.preventDefault();
     savePlan();
     requestDiscoveryFromTab(true);
+  }
+});
+
+// Auto-save when user edits profile fields
+[
+  profileNameInput,
+  profilePhoneInput,
+  profileEmailInput,
+  profileIdCardInput,
+  profileBirthYearInput,
+  profileGenderSelect,
+  profileAddressInput,
+  profileAgreeTermsCheckbox,
+].forEach((el) => {
+  if (el) {
+    el.addEventListener('change', () => savePlan());
   }
 });
 

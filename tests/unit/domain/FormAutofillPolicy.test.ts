@@ -254,4 +254,136 @@ describe('FormAutofillPolicy', () => {
     expect(result.plan[0]?.satisfied).toBe(true);
     expect(result.plan[0]?.requiresUserAction).toBe(false);
   });
+
+  it('should successfully autofill Event 26215 question form with consent radio, email, and phone', () => {
+    const event26215Schema: FormSchema = {
+      fields: [
+        {
+          id: 'q-consent-yes',
+          label: 'Tôi đồng ý Ticketbox & BTC sử dụng thông tin đặt vé nhằm mục đích vận hành sự kiện [Có/Yes]',
+          type: 'RADIO',
+          required: true,
+          value: 'Có/Yes',
+          selector: '#q-consent-yes',
+        },
+        {
+          id: 'q-email',
+          label: 'Email của bạn để nhận vé/Your Email address for receiving tickets',
+          type: 'EMAIL',
+          required: true,
+          value: '',
+          selector: '#q-email',
+        },
+        {
+          id: 'q-phone',
+          label: 'Số điện thoại của bạn/ Your Phone Number',
+          type: 'PHONE',
+          required: true,
+          value: '',
+          selector: '#q-phone',
+        },
+      ],
+      hasConsentCheckbox: true,
+      consentLabel: 'Tôi đồng ý Ticketbox & BTC sử dụng thông tin đặt vé nhằm mục đích vận hành sự kiện [Có/Yes]',
+    };
+
+    const userProfile: UserProfileData = {
+      fullName: 'Boris Eifman Fan',
+      email: 'eifman.fan@ticketbox.vn',
+      phone: '0987654321',
+      agreeToTerms: true,
+    };
+
+    const result = FormAutofillPolicy.evaluate(event26215Schema, userProfile);
+
+    expect(result.canProceed).toBe(true);
+    expect(result.isConsentBlocked).toBe(false);
+    expect(result.hasUnsatisfiedRequiredFields).toBe(false);
+    expect(result.missingFields).toHaveLength(0);
+    expect(result.plan).toHaveLength(3);
+
+    // Consent radio should be satisfied and targeted with 'true'
+    expect(result.plan[0]?.source).toBe('CONSENT');
+    expect(result.plan[0]?.targetValue).toBe('true');
+    expect(result.plan[0]?.satisfied).toBe(true);
+
+    // Email
+    expect(result.plan[1]?.source).toBe('EMAIL');
+    expect(result.plan[1]?.targetValue).toBe('eifman.fan@ticketbox.vn');
+    expect(result.plan[1]?.satisfied).toBe(true);
+
+    // Phone
+    expect(result.plan[2]?.source).toBe('PHONE');
+    expect(result.plan[2]?.targetValue).toBe('0987654321');
+    expect(result.plan[2]?.satisfied).toBe(true);
+  });
+
+  it('should autofill extended profile fields (idCard, birthYear, gender, address)', () => {
+    const extendedSchema: FormSchema = {
+      fields: [
+        {
+          id: 'f-cccd',
+          label: 'Số CCCD / Hộ chiếu',
+          type: 'ID_CARD',
+          required: true,
+          value: '',
+          selector: '#f-cccd',
+        },
+        {
+          id: 'f-dob',
+          label: 'Năm sinh / Date of Birth',
+          type: 'BIRTH_YEAR',
+          required: true,
+          value: '',
+          selector: '#f-dob',
+        },
+        {
+          id: 'f-gender',
+          label: 'Giới tính [Nam/Male]',
+          type: 'RADIO',
+          required: true,
+          value: 'Nam',
+          selector: '#f-gender-male',
+        },
+        {
+          id: 'f-address',
+          label: 'Địa chỉ / Tỉnh thành',
+          type: 'ADDRESS',
+          required: true,
+          value: '',
+          selector: '#f-address',
+        },
+      ],
+      hasConsentCheckbox: false,
+    };
+
+    const extendedProfile: UserProfileData = {
+      fullName: 'Tran Van B',
+      email: 'tranb@example.com',
+      phone: '0912345678',
+      idCard: '079123456789',
+      birthYear: '1992',
+      gender: 'Nam',
+      address: 'TP. Hồ Chí Minh',
+      agreeToTerms: true,
+    };
+
+    const result = FormAutofillPolicy.evaluate(extendedSchema, extendedProfile);
+
+    expect(result.canProceed).toBe(true);
+    expect(result.hasUnsatisfiedRequiredFields).toBe(false);
+    expect(result.missingFields).toHaveLength(0);
+
+    expect(result.plan[0]?.source).toBe('ID_CARD');
+    expect(result.plan[0]?.targetValue).toBe('079123456789');
+
+    expect(result.plan[1]?.source).toBe('BIRTH_YEAR');
+    expect(result.plan[1]?.targetValue).toBe('1992');
+
+    expect(result.plan[2]?.source).toBe('GENDER');
+    expect(result.plan[2]?.targetValue).toBe('true');
+
+    expect(result.plan[3]?.source).toBe('ADDRESS');
+    expect(result.plan[3]?.targetValue).toBe('TP. Hồ Chí Minh');
+  });
 });

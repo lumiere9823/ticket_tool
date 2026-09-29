@@ -193,6 +193,21 @@ input:focus {
   margin-top: 8px;
 }
 
+.profile-row {
+  display: flex;
+  gap: 6px;
+}
+
+.profile-select {
+  flex: 0 0 110px;
+  background-color: var(--bg-card, #1e293b);
+  color: var(--text-main, #f8fafc);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
 /* Ticket Selection Builder */
 .ticket-selection-card {
   background-color: rgba(59, 130, 246, 0.1);

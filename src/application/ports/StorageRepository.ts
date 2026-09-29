@@ -1,6 +1,7 @@
 import { StateContext } from '../../domain/states/PurchaseState';
 import { AccountProfile } from '../../domain/entities/AccountProfile';
 import { PurchasePlan, TicketCatalogSnapshot } from '../../domain/entities/PurchasePlan';
+import { UserProfileData } from '../../domain/entities/BookingJourneyModels';
 
 export interface AssistantConfiguration {
   targetEventUrl: string;
@@ -16,14 +17,7 @@ export interface AssistantConfiguration {
   activeProfileId?: string;
   /** Cached ticket catalog snapshot for instant popup rendering on re-open. */
   ticketCatalogSnapshot?: TicketCatalogSnapshot;
-  userProfile?:
-    | {
-        fullName: string;
-        phone: string;
-        email: string;
-        agreeToTerms?: boolean | undefined;
-      }
-    | undefined;
+  userProfile?: UserProfileData | undefined;
 }
 
 export interface StorageRepository {

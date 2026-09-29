@@ -89,14 +89,25 @@
            USER PROFILE
            ============================================================ -->
         <details class="user-profile-details" open>
-          <summary>User Profile &amp; Form Autofill (Họ tên, SĐT đặt vé)</summary>
+          <summary>User Profile &amp; Form Autofill (Thông tin điền form)</summary>
           <div class="profile-fields">
-            <input type="text" id="profile-name" placeholder="Full Name (e.g. Nguyễn Văn A)" />
-            <input type="text" id="profile-phone" placeholder="Phone (e.g. 0901234567)" />
-            <input type="email" id="profile-email" placeholder="Email (e.g. user@example.com)" />
+            <input type="text" id="profile-name" placeholder="Họ và tên / Full Name (e.g. Nguyễn Văn A)" />
+            <input type="text" id="profile-phone" placeholder="Số điện thoại / Phone (e.g. 0901234567)" />
+            <input type="email" id="profile-email" placeholder="Email nhận vé (e.g. user@example.com)" />
+            <input type="text" id="profile-id-card" placeholder="Số CCCD / CMND / Passport (e.g. 079...)" />
+            <input type="text" id="profile-birth-year" placeholder="Năm sinh / Ngày sinh (e.g. 1995 hoặc 15/08/1995)" />
+            <div class="profile-row">
+              <select id="profile-gender" class="profile-select">
+                <option value="">— Giới tính —</option>
+                <option value="Nam">Nam / Male</option>
+                <option value="Nữ">Nữ / Female</option>
+                <option value="Khác">Khác / Other</option>
+              </select>
+              <input type="text" id="profile-address" placeholder="Địa chỉ / Tỉnh thành" />
+            </div>
             <label class="checkbox-label" style="margin-top: 4px">
               <input type="checkbox" id="profile-agree-terms" />
-              Pre-agree to Event Terms &amp; Conditions
+              Đồng ý điều khoản &amp; BTC sử dụng thông tin (Có/Yes)
             </label>
           </div>
         </details>

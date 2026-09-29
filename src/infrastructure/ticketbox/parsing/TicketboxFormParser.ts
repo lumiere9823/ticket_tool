@@ -157,10 +157,57 @@ export class TicketboxFormParser {
     }
 
     if (
+      cleanLabel.includes('cccd') ||
+      cleanLabel.includes('cmnd') ||
+      cleanLabel.includes('căn cước') ||
+      cleanLabel.includes('hộ chiếu') ||
+      cleanLabel.includes('passport') ||
+      cleanLabel.includes('citizen id') ||
+      cleanLabel.includes('id number') ||
+      cleanLabel.includes('giấy tờ')
+    ) {
+      return 'ID_CARD';
+    }
+
+    if (
+      cleanLabel.includes('năm sinh') ||
+      cleanLabel.includes('ngày sinh') ||
+      cleanLabel.includes('ngày tháng năm sinh') ||
+      cleanLabel.includes('birth year') ||
+      cleanLabel.includes('date of birth') ||
+      cleanLabel.includes('dob') ||
+      cleanLabel.includes('sinh năm')
+    ) {
+      return 'BIRTH_YEAR';
+    }
+
+    if (
+      cleanLabel.includes('giới tính') ||
+      cleanLabel.includes('gender') ||
+      cleanLabel.includes('sex')
+    ) {
+      return 'GENDER';
+    }
+
+    if (
+      cleanLabel.includes('địa chỉ') ||
+      cleanLabel.includes('address') ||
+      cleanLabel.includes('tỉnh thành') ||
+      cleanLabel.includes('tỉnh / thành phố') ||
+      cleanLabel.includes('tỉnh/thành') ||
+      cleanLabel.includes('city') ||
+      cleanLabel.includes('thành phố')
+    ) {
+      return 'ADDRESS';
+    }
+
+    if (
       cleanLabel.includes('họ & tên') ||
       cleanLabel.includes('họ và tên') ||
       cleanLabel.includes('họ tên') ||
       cleanLabel.includes('full name') ||
+      cleanLabel.includes('your name') ||
+      cleanLabel.includes('tên người') ||
       cleanLabel.includes('người nhận')
     ) {
       return 'TEXT';
@@ -175,13 +222,37 @@ export class TicketboxFormParser {
 
   private static extractFieldLabel(el: DOMElementLike, root: DOMElementLike, id: string): string {
     const name = el.getAttribute('name');
+    const rawType = (el.getAttribute('type') || '').toLowerCase();
+    const isChoiceInput = rawType === 'radio' || rawType === 'checkbox';
+
+    // 0. Discover parent question container title (e.g. Ant Design or Ticketbox question item)
+    let questionTitle = '';
+    if (el.rawElement && typeof (el.rawElement as HTMLElement).closest === 'function') {
+      const native = el.rawElement as HTMLElement;
+      const questionContainer = native.closest(
+        '.question-item, .question-container, [class*="question-item"], [class*="questionCollection"], .ant-form-item, [class*="form-item"], [class*="question"], .field-container, .form-group'
+      );
+      if (questionContainer) {
+        const titleEl = questionContainer.querySelector(
+          '.ant-form-item-label label, .question-title, [class*="question-title"], [class*="title"], h3, h4, h5'
+        );
+        if (titleEl && titleEl.textContent?.trim()) {
+          const t = titleEl.textContent.trim();
+          if (!t.toLowerCase().includes('điền câu trả lời')) {
+            questionTitle = t;
+          }
+        }
+      }
+    }
 
     // 1. Associated <label for="id">
     if (id) {
       const labelEl = root.querySelector(`label[for="${id}"]`);
       if (labelEl && labelEl.textContent.trim()) {
         const text = labelEl.textContent.trim();
-        if (!text.toLowerCase().includes('điền câu trả lời')) return text;
+        if (!text.toLowerCase().includes('điền câu trả lời')) {
+          return questionTitle && isChoiceInput ? `${questionTitle} [${text}]` : text;
+        }
       }
     }
 
@@ -194,9 +265,16 @@ export class TicketboxFormParser {
       ) {
         if (lbl.textContent.trim()) {
           const text = lbl.textContent.trim();
-          if (!text.toLowerCase().includes('điền câu trả lời')) return text;
+          if (!text.toLowerCase().includes('điền câu trả lời')) {
+            return questionTitle && isChoiceInput ? `${questionTitle} [${text}]` : text;
+          }
         }
       }
+    }
+
+    // If choice input has a questionTitle, return it even if enclosing label was not found
+    if (questionTitle) {
+      return questionTitle;
     }
 
     // 1c. Real browser DOM traversal via closest container or previous sibling
