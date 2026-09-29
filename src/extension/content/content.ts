@@ -115,6 +115,21 @@ async function performDiscoveryScan(force = false): Promise<void> {
         name: s.name,
         date: s.date,
         venue: null as string | null,
+        tickets: s.ticketTypes.map((t) => ({
+          id: t.id ?? null,
+          name: t.name,
+          price: t.price.amount,
+          currency: 'VND' as const,
+          mode: (t.mode === 'ZONE' ? 'AREA_BASED' : t.mode) as
+            'STANDING' | 'SEATED' | 'AREA_BASED' | 'UNKNOWN',
+          availability: t.availability as
+            'AVAILABLE' | 'SOLD_OUT' | 'OFFLINE_SALE' | 'NOT_STARTED' | 'CLOSED' | 'UNKNOWN',
+          selectable: t.selectable,
+          minQuantity: t.minQuantity,
+          maxQuantity: t.maxQuantity,
+          source: 'EVENT_PAGE' as const,
+          evidence: t.source.evidence,
+        })),
       })),
       tickets: allTickets.map((t) => ({
         id: t.id ?? null,
@@ -280,12 +295,18 @@ async function attemptBookingJourney(): Promise<void> {
       seatPreference: 'ANY_AVAILABLE',
       nonAdjacentFallback: 'SELECT_NON_ADJACENT',
       userProfile: config.userProfile,
+      preferredShowingId: plan?.showingId ?? null,
     };
 
     if (!isOnQuestionForm && !isOnPayment) {
-      // Discover catalog
-      const catalog = await adapter.discoverTicketCatalog();
-      const allTickets = catalog.showings.flatMap((s) => s.ticketTypes);
+      // Discover catalog for the preferred showing (or all showings)
+      const catalog = await adapter.discoverTicketCatalog(preferences.preferredShowingId);
+      const relevantShowings = preferences.preferredShowingId
+        ? catalog.showings.filter((s) => s.id === preferences.preferredShowingId)
+        : catalog.showings;
+      const allTickets = (relevantShowings.length > 0 ? relevantShowings : catalog.showings).flatMap(
+        (s) => s.ticketTypes
+      );
       const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
 
       if (availableTickets.length === 0) {
@@ -360,11 +381,17 @@ async function attemptBookingJourney(): Promise<void> {
         result.finalState === PurchaseState.FILLING_ATTENDEE_FORM ||
         result.finalState === PurchaseState.HELD ||
         result.finalState === PurchaseState.CONFIRMED ||
-        result.finalState === PurchaseState.STOPPED ||
-        result.finalState === PurchaseState.FAILED) &&
+        result.finalState === PurchaseState.STOPPED) &&
       result.requiresUserAction
     ) {
       logger.info(`Journey reached target state ${result.finalState}. Halting monitoring loop.`);
+      isMonitoringActive = false;
+      if (monitoringTimer) {
+        clearInterval(monitoringTimer);
+        monitoringTimer = null;
+      }
+    } else if (result.finalState === PurchaseState.FAILED) {
+      logger.info('Journey execution failed after retries. Halting monitoring loop to prevent retry storm.');
       isMonitoringActive = false;
       if (monitoringTimer) {
         clearInterval(monitoringTimer);
@@ -508,18 +535,31 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'ARM_REQUESTED': {
       logger.info('Content script received ARM_REQUESTED');
-      if (
-        stateMachine.state === PurchaseState.FAILED ||
-        stateMachine.state === PurchaseState.STOPPED ||
-        stateMachine.state === PurchaseState.CONFIRMED ||
-        stateMachine.state === PurchaseState.PAYMENT_GATE ||
-        stateMachine.state === PurchaseState.HELD ||
-        stateMachine.state === PurchaseState.CONSENT_REQUIRED ||
-        stateMachine.state === PurchaseState.SEATS_SELECTED ||
-        stateMachine.state === PurchaseState.FORM_VALIDATED
-      ) {
-        try {
+      try {
+        const s = stateMachine.state;
+        if (
+          s !== PurchaseState.STOPPED &&
+          s !== PurchaseState.FAILED &&
+          s !== PurchaseState.CONFIRMED &&
+          s !== PurchaseState.READY &&
+          s !== PurchaseState.INIT
+        ) {
+          stateMachine.transition({ type: 'STOP_REQUESTED', reason: 'Re-arm reset' });
+        }
+        if (
+          stateMachine.state === PurchaseState.STOPPED ||
+          stateMachine.state === PurchaseState.FAILED ||
+          stateMachine.state === PurchaseState.CONFIRMED
+        ) {
           stateMachine.transition({ type: 'RESET_REQUESTED' });
+        }
+        if (stateMachine.state === PurchaseState.READY || stateMachine.state === PurchaseState.IDLE) {
+          stateMachine.transition({ type: 'ARM' });
+          stateMachine.transition({ type: 'MONITORING_STARTED' });
+        }
+      } catch (err) {
+        logger.warn('Content script state machine transition during ARM failed', { err: String(err) });
+        try {
           stateMachine.transition({ type: 'ARM' });
           stateMachine.transition({ type: 'MONITORING_STARTED' });
         } catch {
@@ -527,6 +567,8 @@ messageBus.subscribe((message: ExtensionMessage) => {
         }
       }
       isMonitoringActive = true;
+      isExecutingJourney = false;
+      awaitingNavigationFromUrl = null;
       performDiscoveryScan();
       setTimeout(attemptBookingJourney, 400);
       if (!monitoringTimer) {
@@ -546,18 +588,31 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'START_MONITORING': {
       logger.info('Content script received START_MONITORING');
-      if (
-        stateMachine.state === PurchaseState.FAILED ||
-        stateMachine.state === PurchaseState.STOPPED ||
-        stateMachine.state === PurchaseState.CONFIRMED ||
-        stateMachine.state === PurchaseState.PAYMENT_GATE ||
-        stateMachine.state === PurchaseState.HELD ||
-        stateMachine.state === PurchaseState.CONSENT_REQUIRED ||
-        stateMachine.state === PurchaseState.SEATS_SELECTED ||
-        stateMachine.state === PurchaseState.FORM_VALIDATED
-      ) {
-        try {
+      try {
+        const s = stateMachine.state;
+        if (
+          s !== PurchaseState.STOPPED &&
+          s !== PurchaseState.FAILED &&
+          s !== PurchaseState.CONFIRMED &&
+          s !== PurchaseState.READY &&
+          s !== PurchaseState.INIT
+        ) {
+          stateMachine.transition({ type: 'STOP_REQUESTED', reason: 'Start monitoring reset' });
+        }
+        if (
+          stateMachine.state === PurchaseState.STOPPED ||
+          stateMachine.state === PurchaseState.FAILED ||
+          stateMachine.state === PurchaseState.CONFIRMED
+        ) {
           stateMachine.transition({ type: 'RESET_REQUESTED' });
+        }
+        if (stateMachine.state === PurchaseState.READY || stateMachine.state === PurchaseState.IDLE) {
+          stateMachine.transition({ type: 'ARM' });
+          stateMachine.transition({ type: 'MONITORING_STARTED' });
+        }
+      } catch (err) {
+        logger.warn('Content script state machine transition during START_MONITORING failed', { err: String(err) });
+        try {
           stateMachine.transition({ type: 'ARM' });
           stateMachine.transition({ type: 'MONITORING_STARTED' });
         } catch {
@@ -565,6 +620,8 @@ messageBus.subscribe((message: ExtensionMessage) => {
         }
       }
       isMonitoringActive = true;
+      isExecutingJourney = false;
+      awaitingNavigationFromUrl = null;
       performDiscoveryScan();
       setTimeout(attemptBookingJourney, 400);
       if (!monitoringTimer) {
@@ -585,9 +642,18 @@ messageBus.subscribe((message: ExtensionMessage) => {
     case 'STOP_REQUESTED': {
       logger.info('Content script received STOP_REQUESTED');
       isMonitoringActive = false;
+      isExecutingJourney = false;
+      awaitingNavigationFromUrl = null;
       if (monitoringTimer) {
         clearInterval(monitoringTimer);
         monitoringTimer = null;
+      }
+      try {
+        if (stateMachine.state !== PurchaseState.STOPPED) {
+          stateMachine.transition({ type: 'STOP_REQUESTED', reason: message.reason || 'User requested stop' });
+        }
+      } catch (err) {
+        logger.warn('Failed to transition to STOPPED in content script', { err: String(err) });
       }
       break;
     }

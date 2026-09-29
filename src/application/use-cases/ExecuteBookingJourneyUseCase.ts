@@ -124,13 +124,16 @@ export class ExecuteBookingJourneyUseCase {
       };
     }
 
-    // Reset if in stale terminal state on non-payment page
+    // Reset if in intermediate or stale state on non-payment page
     if (
-      currentState === PurchaseState.PAYMENT_GATE ||
-      currentState === PurchaseState.FAILED ||
-      currentState === PurchaseState.STOPPED
+      currentState !== PurchaseState.READY &&
+      currentState !== PurchaseState.MONITORING &&
+      currentState !== PurchaseState.INIT
     ) {
       try {
+        if (currentState !== PurchaseState.STOPPED && currentState !== PurchaseState.FAILED) {
+          this.stateMachine.transition({ type: 'STOP_REQUESTED', reason: 'Journey initial clean reset' });
+        }
         this.stateMachine.transition({ type: 'RESET_REQUESTED' });
         this.stateMachine.transition({ type: 'ARM' });
         this.stateMachine.transition({ type: 'MONITORING_STARTED' });
@@ -366,7 +369,10 @@ export class ExecuteBookingJourneyUseCase {
       (s) => s.id !== null || s.name !== null || s.date !== null || s.ticketTypes.length > 0
     );
     if (meaningfulShowings.length > 0) {
-      const activeShowing = meaningfulShowings[0]!;
+      const activeShowing =
+        (preferences.preferredShowingId
+          ? meaningfulShowings.find((s) => s.id === preferences.preferredShowingId)
+          : null) || meaningfulShowings[0]!;
       this.stateMachine.transition({
         type: 'SHOWING_DETECTED',
         showingId: activeShowing.id ?? undefined,
@@ -380,7 +386,7 @@ export class ExecuteBookingJourneyUseCase {
     // 2. TICKET DISCOVERY
     const tDiscoveryStart = Date.now();
     const tickets: JourneyTicketType[] = this.adapter.discoverJourneyTickets
-      ? await this.adapter.discoverJourneyTickets()
+      ? await this.adapter.discoverJourneyTickets(preferences.preferredShowingId)
       : [];
 
     const tDiscoveryEnd = Date.now();
@@ -441,7 +447,12 @@ export class ExecuteBookingJourneyUseCase {
     // 4. TICKET SELECTION & VERIFICATION (Section 7)
     const tSelectionStart = Date.now();
     const ticketId = chosenTicket.id ?? chosenTicket.name;
-    const selectedSuccess = await this.adapter.selectTicket(ticketId, preferences.quantity);
+    const targetShowingId = chosenTicket.showingId ?? preferences.preferredShowingId ?? null;
+    const selectedSuccess = await this.adapter.selectTicket(
+      ticketId,
+      preferences.quantity,
+      targetShowingId
+    );
     const tSelectionEnd = Date.now();
     latencyTracker?.recordTicketSelection(tSelectionEnd - tSelectionStart);
 

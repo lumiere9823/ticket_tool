@@ -697,6 +697,9 @@ export class PurchaseStateMachine {
         if (event.type === 'TICKETS_DETECTED') {
           return this.performTransition(PurchaseState.TICKETS_DETECTED);
         }
+        if (event.type === 'TICKET_SELECTED') {
+          return this.performTransition(PurchaseState.TICKET_SELECTED);
+        }
         if (event.type === 'INVALID_SELECTION') {
           this._failureReason = event.reason ?? FailureReason.INVALID_SELECTION;
           return this.performTransition(PurchaseState.INVALID_SELECTION);

@@ -153,6 +153,7 @@ export interface TicketCatalogSnapshot {
     name: string | null;
     date: string | null;
     venue?: string | null;
+    tickets?: TicketOption[];
   }>;
   tickets: TicketOption[];
   loadState: CatalogLoadState;

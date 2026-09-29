@@ -116,7 +116,17 @@ export interface BookingSummary {
 }
 
 export type FormFieldType =
-  'TEXT' | 'EMAIL' | 'PHONE' | 'CHECKBOX' | 'SELECT' | 'RADIO' | 'UNKNOWN';
+  | 'TEXT'
+  | 'EMAIL'
+  | 'PHONE'
+  | 'ID_CARD'
+  | 'BIRTH_YEAR'
+  | 'GENDER'
+  | 'ADDRESS'
+  | 'CHECKBOX'
+  | 'SELECT'
+  | 'RADIO'
+  | 'UNKNOWN';
 
 export interface FormField {
   id: string;
@@ -138,6 +148,10 @@ export interface UserProfileData {
   fullName: string;
   phone: string;
   email: string;
+  idCard?: string | undefined;
+  birthYear?: string | undefined;
+  gender?: string | undefined;
+  address?: string | undefined;
   agreeToTerms?: boolean | undefined;
   additionalFields?: Record<string, string> | undefined;
 }
@@ -185,4 +199,6 @@ export interface BookingPreferences {
   seatPreference?: SeatPreferencePolicy | undefined;
   nonAdjacentFallback?: NonAdjacentFallbackPolicy | undefined;
   userProfile?: UserProfileData | undefined;
+  /** When set, the journey must target this specific showing. */
+  preferredShowingId?: string | null | undefined;
 }

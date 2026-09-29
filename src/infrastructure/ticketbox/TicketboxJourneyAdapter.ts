@@ -17,6 +17,8 @@ import {
   TicketCandidate,
   TicketType,
   TicketboxPageType,
+  TicketMode,
+  TicketAvailability,
 } from '../../domain/entities/EventCatalog';
 import {
   BookingSummary,
@@ -43,6 +45,57 @@ interface MutableDOMElement extends DOMElementLike {
   attributes: Record<string, string>;
 }
 
+/** Shape of the /gin/api/v2/events/{id} response */
+interface TicketboxEventApiShowingTicket {
+  id: number;
+  name: string;
+  price: number;
+  status: string;
+  maxQtyPerOrder: number;
+  minQtyPerOrder: number;
+}
+interface TicketboxEventApiShowing {
+  id: number;
+  status: string;
+  isSalable: boolean;
+  showingTime: string;
+  ticketTypes: TicketboxEventApiShowingTicket[];
+}
+interface TicketboxEventApiResponse {
+  status: number;
+  data: {
+    result: {
+      id: number;
+      title: string;
+      showings: TicketboxEventApiShowing[];
+    };
+  };
+}
+
+export interface TicketboxQuestionOption {
+  optionText: string;
+}
+
+export interface TicketboxQuestionItem {
+  type: number;
+  question: string;
+  helperText?: string;
+  isAnswerRequired: boolean;
+  options?: TicketboxQuestionOption[];
+}
+
+export interface TicketboxQuestionFormApiResponse {
+  status: number;
+  message?: string;
+  data: {
+    result: {
+      id: number;
+      eventId: number;
+      questionCollection: TicketboxQuestionItem[];
+    };
+  };
+}
+
 /**
  * Concrete Page Adapter for executing the complete Ticketbox booking journey.
  * Strictly enforces:
@@ -55,6 +108,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   private customRoot?: DOMElementLike | undefined;
   private cachedSeatmapData?: SeatmapApiResponse | null = null;
   private cachedShowingId?: string | null = null;
+  private cachedEventApiData: TicketboxEventApiResponse | null = null;
+  private cachedEventApiId: string | null = null;
+  private cachedQuestionFormData: TicketboxQuestionFormApiResponse | null = null;
+  private cachedQuestionFormEventId: string | null = null;
   private cachedSeats: Seat[] = [];
   private selectedSeatIds = new Set<string>();
   public navigationPending = false;
@@ -171,6 +228,60 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       }
     }
 
+    return null;
+  }
+
+  /** Fetches all showings from the authoritative Event API. Cached per eventId. */
+  public async fetchEventApi(eventId: string): Promise<TicketboxEventApiResponse | null> {
+    if (this.cachedEventApiId === eventId && this.cachedEventApiData) {
+      return this.cachedEventApiData;
+    }
+    const url = `https://api-v2.ticketbox.vn/gin/api/v2/events/${eventId}`;
+    this.logger?.info('Fetching Event API for showings', { eventId, url });
+    try {
+      const res = await fetch(url, { credentials: 'omit' });
+      if (res.ok) {
+        const json = (await res.json()) as TicketboxEventApiResponse;
+        if (json?.data?.result?.showings) {
+          this.cachedEventApiId = eventId;
+          this.cachedEventApiData = json;
+          this.logger?.info('Event API fetched successfully', {
+            eventId,
+            showingsCount: json.data.result.showings.length,
+          });
+          return json;
+        }
+      }
+    } catch (err) {
+      this.logger?.warn('Event API fetch failed', { err: String(err) });
+    }
+    return null;
+  }
+
+  /** Fetches question form schema from the authoritative API. Cached per eventId. */
+  public async fetchQuestionFormApi(eventId: string): Promise<TicketboxQuestionFormApiResponse | null> {
+    if (this.cachedQuestionFormEventId === eventId && this.cachedQuestionFormData) {
+      return this.cachedQuestionFormData;
+    }
+    const url = `https://api-v2.ticketbox.vn/event/api/v1/events/${eventId}/question-form`;
+    this.logger?.info('Fetching Question Form API', { eventId, url });
+    try {
+      const res = await fetch(url, { credentials: 'omit' });
+      if (res.ok) {
+        const json = (await res.json()) as TicketboxQuestionFormApiResponse;
+        if (json?.data?.result?.questionCollection) {
+          this.cachedQuestionFormEventId = eventId;
+          this.cachedQuestionFormData = json;
+          this.logger?.info('Question Form API fetched successfully', {
+            eventId,
+            questionCount: json.data.result.questionCollection.length,
+          });
+          return json;
+        }
+      }
+    } catch (err) {
+      this.logger?.warn('Question Form API fetch failed', { err: String(err) });
+    }
     return null;
   }
 
@@ -344,6 +455,65 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const url = typeof window !== 'undefined' ? window.location.href : '';
     const targetShowingId = showingId || this.getShowingId();
 
+    // 0. On event landing page: fetch all showings from Event API for multi-showing events
+    const isBookingPage =
+      url.includes('/bookings/') ||
+      url.includes('/select-ticket') ||
+      url.includes('/question-form');
+    const baseCatalogForEventId = root ? TicketboxCatalogParser.parseCatalog(root, url) : null;
+    const discoveredEventId = baseCatalogForEventId?.eventId;
+
+    if (!isBookingPage && discoveredEventId && !targetShowingId) {
+      try {
+        const eventApiData = await this.fetchEventApi(discoveredEventId);
+        if (eventApiData?.data?.result?.showings?.length) {
+          const result = eventApiData.data.result;
+          const showingSnapshots: ShowingSnapshot[] = result.showings
+            .filter((s) => s.isSalable)
+            .map((s) => ({
+              id: String(s.id),
+              name: s.showingTime || null,
+              date: s.showingTime || null,
+              ticketTypes: s.ticketTypes.map((t) => ({
+                id: String(t.id),
+                name: t.name,
+                price: { amount: t.price, currency: 'VND' as const },
+                mode: 'UNKNOWN' as TicketMode,
+                availability: (
+                  t.status === 'book_now'
+                    ? 'AVAILABLE'
+                    : t.status === 'sold_out'
+                      ? 'SOLD_OUT'
+                      : 'UNKNOWN'
+                ) as TicketAvailability,
+                minQuantity: t.minQtyPerOrder,
+                maxQuantity: t.maxQtyPerOrder,
+                selectedQuantity: 0,
+                selectable: t.status === 'book_now',
+                source: { page: 'EVENT' as const, evidence: ['event-api-v2'] },
+              })),
+            }));
+
+          if (showingSnapshots.length > 0) {
+            this.logger?.info('Discovered showings from Event API', {
+              eventId: discoveredEventId,
+              showingsCount: showingSnapshots.length,
+            });
+            return {
+              eventId: discoveredEventId,
+              eventTitle: result.title || baseCatalogForEventId?.eventTitle || null,
+              eventUrl: url,
+              showings: showingSnapshots,
+            };
+          }
+        }
+      } catch (err) {
+        this.logger?.warn('Error fetching Event API showings, falling back to DOM', {
+          err: String(err),
+        });
+      }
+    }
+
     // 1. Attempt to fetch authoritative ticket tiers from Seatmap API when showing ID is available or cached seatmap data is present
     if (this.cachedSeatmapData || targetShowingId) {
       try {
@@ -439,14 +609,21 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
    * Discovers normalized ticket types from the visible page.
    * Conforms to Section 4.
    */
-  public async discoverJourneyTickets(): Promise<JourneyTicketType[]> {
+  /**
+   * Discovers normalized ticket types from the visible page.
+   * Conforms to Section 4.
+   */
+  public async discoverJourneyTickets(targetShowingId?: string | null): Promise<JourneyTicketType[]> {
     const root = this.getRoot();
     if (!root) return [];
 
-    const catalog = await this.discoverTicketCatalog();
+    const catalog = await this.discoverTicketCatalog(targetShowingId);
     const journeyTickets: JourneyTicketType[] = [];
 
     for (const showing of catalog.showings) {
+      if (targetShowingId && showing.id && showing.id !== targetShowingId) {
+        continue;
+      }
       for (const t of showing.ticketTypes) {
         journeyTickets.push({
           id: t.id,
@@ -477,13 +654,139 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   }
 
   /**
+   * Clicks the calendar date cell corresponding to the given showingId.
+   * Looks up the showingTime (e.g. "19:30 - 21:45, 21 Tháng 10, 2026") to find the day number.
+   * Returns true if a calendar date element was clicked.
+   */
+  private async clickCalendarShowingDate(showingId: string | null): Promise<boolean> {
+    if (typeof document === 'undefined') return false;
+
+    let targetDateText: string | null = null;
+    let dayNum: number | null = null;
+
+    if (showingId && this.cachedEventApiData?.data?.result?.showings) {
+      const showing = this.cachedEventApiData.data.result.showings.find(
+        (s) => String(s.id) === showingId
+      );
+      if (showing?.showingTime) {
+        targetDateText = showing.showingTime;
+        const dayMatch = targetDateText.match(/\b(\d{1,2})\s*Tháng/i) || targetDateText.match(/\b(\d{1,2})\b/);
+        if (dayMatch && dayMatch[1]) {
+          dayNum = parseInt(dayMatch[1], 10);
+        }
+      }
+    }
+
+    this.logger?.info('Attempting calendar date selection', {
+      showingId,
+      targetDateText,
+      dayNum,
+    });
+
+    const calendarScope =
+      document.querySelector('#ticket-info, [class*="calendar"], [class*="schedule"], .ant-picker-calendar') ||
+      document;
+
+    const candidates = Array.from(
+      calendarScope.querySelectorAll(
+        '.ant-picker-cell, [class*="cell"], [class*="date"], td, li, div[role="button"], button'
+      )
+    );
+
+    const indicatorCells = candidates.filter((el) => {
+      const style = el.getAttribute('style') || '';
+      const cls = (el.className || '').toString();
+      const hasGreen =
+        style.includes('green') ||
+        style.includes('#') ||
+        cls.includes('underline') ||
+        cls.includes('showing') ||
+        cls.includes('active') ||
+        cls.includes('event');
+      const hasIndicatorChild =
+        el.querySelector('[class*="underline"], [class*="indicator"], [class*="dot"], svg, span[style*="background"], div[style*="background"]') !== null;
+      return hasGreen || hasIndicatorChild;
+    });
+
+    if (dayNum !== null) {
+      const dayStr = String(dayNum);
+      const dayPadded = dayNum < 10 ? `0${dayNum}` : dayStr;
+
+      const pool = indicatorCells.length > 0 ? indicatorCells : candidates;
+      for (const el of pool) {
+        const txt = el.textContent?.trim() || '';
+        if (txt === dayStr || txt === dayPadded || new RegExp(`\\b0?${dayNum}\\b`).test(txt)) {
+          this.logger?.info('Found calendar cell matching day number, clicking', { dayNum, txt: txt.slice(0, 30) });
+          this.clickElement(wrapBrowserElement(el));
+          return true;
+        }
+      }
+    }
+
+    if (indicatorCells.length > 0) {
+      const first = indicatorCells[0]!;
+      this.logger?.info('Clicking first calendar cell with showing indicator');
+      this.clickElement(wrapBrowserElement(first));
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Finds and clicks the "Mua vé ngay" button in the side panel/drawer that opened
+   * after clicking a calendar date. Returns true if found and clicked.
+   */
+  private async findAndClickMuaVeNgay(): Promise<boolean> {
+    if (typeof document === 'undefined') return false;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const drawerScope =
+        document.querySelector('.ant-drawer, .ant-drawer-open, [class*="drawer"], [class*="panel"], [class*="slide"], [role="dialog"]') ||
+        document;
+
+      const buttons = Array.from(
+        drawerScope.querySelectorAll('button, a, [role="button"], div[class*="btn"]')
+      );
+
+      for (const btn of buttons) {
+        const text = (btn.textContent || '').toLowerCase().trim();
+        if (
+          text.includes('mua vé ngay') ||
+          text.includes('mua vé') ||
+          text.includes('đặt vé ngay')
+        ) {
+          const href = btn.getAttribute('href') || '';
+          if (href === '#ticket-info' || href.startsWith('#')) {
+            continue;
+          }
+          this.logger?.info('Found "Mua vé ngay" button in side panel/drawer, clicking', {
+            text: text.slice(0, 40),
+            attempt,
+          });
+          this.clickElement(wrapBrowserElement(btn));
+          return true;
+        }
+      }
+
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    return false;
+  }
+
+  /**
    * Selects a ticket tier following Section 7 verification rules.
    */
-  public async selectTicket(candidateId: string, quantity: number): Promise<boolean> {
+  public async selectTicket(
+    candidateId: string,
+    quantity: number,
+    showingId?: string | null
+  ): Promise<boolean> {
     const root = this.getRoot();
     if (!root) return false;
 
-    this.logger?.info('Executing Section 7 Ticket Selection', { candidateId, quantity });
+    this.logger?.info('Executing Section 7 Ticket Selection', { candidateId, quantity, showingId });
 
     // 0. If already on booking / seat map page, ticket tier selection is already fulfilled
     const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
@@ -499,7 +802,77 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       return true;
     }
 
+    // Resolve effective showing ID
+    let effectiveShowingId = showingId || this.getShowingId();
+    if (!effectiveShowingId && this.cachedEventApiData?.data?.result?.showings) {
+      for (const s of this.cachedEventApiData.data.result.showings) {
+        if (
+          s.ticketTypes.some(
+            (t) => String(t.id) === candidateId || t.name.toLowerCase() === candidateId.toLowerCase()
+          )
+        ) {
+          effectiveShowingId = String(s.id);
+          break;
+        }
+      }
+    }
+
     const candidateLower = candidateId.toLowerCase().trim();
+
+    // 0.5. Calendar / Multi-Showing Flow on Event Landing Page:
+    // If there are NO ticket rows in the DOM (like Eifman Ballet calendar page),
+    // click the calendar date to open the side panel, then click "Mua vé ngay",
+    // or trigger direct navigation to the booking page as a guaranteed fail-safe.
+    const hasTicketRows =
+      root.querySelector(
+        '.content-row, [class*="content-row"], .ticket-item, .ticket-row, [data-ticket-id]'
+      ) !== null;
+
+    if (!hasTicketRows && effectiveShowingId) {
+      this.logger?.info('Calendar/showing event page detected (no ticket rows). Initiating calendar date flow', {
+        candidateId,
+        effectiveShowingId,
+      });
+
+      // Step A: Click the calendar date
+      const clickedDate = await this.clickCalendarShowingDate(effectiveShowingId);
+      if (clickedDate) {
+        await new Promise((r) => setTimeout(r, 600));
+        // Step B: Click "Mua vé ngay" in drawer
+        const clickedMuaVe = await this.findAndClickMuaVeNgay();
+        if (clickedMuaVe) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      }
+
+      // Check if URL navigated or booking view opened
+      const postClickUrl = typeof window !== 'undefined' ? window.location.href : '';
+      if (
+        postClickUrl.includes('/select-ticket') ||
+        postClickUrl.includes('/booking') ||
+        postClickUrl.includes('/bookings/') ||
+        root.querySelector('svg.seatmap, [class*="seatmap"], .seat-map') !== null
+      ) {
+        this.logger?.info('Calendar flow navigated to booking view successfully', {
+          candidateId,
+          effectiveShowingId,
+        });
+        this.navigationPending = true;
+        return true;
+      }
+
+      // Step C: Guaranteed direct navigation fallback for showing booking URL
+      if (typeof window !== 'undefined') {
+        const directBookingUrl = `https://ticketbox.vn/bookings/${effectiveShowingId}/select-ticket`;
+        this.logger?.info('Triggering direct navigation to showing booking URL', {
+          directBookingUrl,
+          effectiveShowingId,
+        });
+        this.navigationPending = true;
+        window.location.href = directBookingUrl;
+        return true;
+      }
+    }
 
     // 1. Expand showing or accordion if tickets or quantity controls are not yet visible
     let showingBtn = root.querySelector(
@@ -1538,9 +1911,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           typeof seat.x === 'number' &&
           typeof seat.y === 'number'
         ) {
-          const canvas = document.querySelector(
-            '.konvajs-content canvas'
-          ) as HTMLCanvasElement | null;
+          const canvas = (document.querySelector('.konvajs-content canvas') ||
+            document.querySelector('.konvajs-content') ||
+            document.querySelector('canvas')) as HTMLElement | null;
           if (canvas) {
             nativeTarget = canvas;
             targetEl = wrapBrowserElement(canvas);
@@ -1580,8 +1953,19 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       if (typeof nativeEl.getBoundingClientRect === 'function') {
         const rect = nativeEl.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
-          clientX = rect.left + rect.width / 2;
-          clientY = rect.top + rect.height / 2;
+          const tag = nativeEl.tagName ? nativeEl.tagName.toLowerCase() : '';
+          const isCanvasOrKonva =
+            tag === 'canvas' ||
+            (typeof nativeEl.className === 'string' && nativeEl.className.includes('konvajs')) ||
+            (typeof nativeEl.closest === 'function' && !!nativeEl.closest('.konvajs-content'));
+
+          if (isCanvasOrKonva && seat && typeof seat.x === 'number' && typeof seat.y === 'number') {
+            clientX = rect.left + seat.x;
+            clientY = rect.top + seat.y;
+          } else {
+            clientX = rect.left + rect.width / 2;
+            clientY = rect.top + rect.height / 2;
+          }
         }
       }
 
@@ -1747,6 +2131,16 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   public async getFormSchema(): Promise<FormSchema | null> {
     const root = this.getRoot();
     if (!root) return null;
+
+    // Attempt to pre-fetch question form API if eventId is known
+    const url = typeof window !== 'undefined' ? window.location.href : '';
+    const eventId =
+      this.cachedEventApiId ||
+      (url ? url.match(/events\/(\d+)/)?.[1] || url.match(/-(\d+)(?:\?|$)/)?.[1] || null : null);
+    if (eventId && !this.cachedQuestionFormData) {
+      await this.fetchQuestionFormApi(eventId);
+    }
+
     return TicketboxFormParser.parseForm(root);
   }
 
@@ -1829,8 +2223,39 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
                 (el as MutableDOMElement).attributes['aria-checked'] = 'true';
                 this.logger?.info('Consent radio/checkbox selected', { label: item.field.label });
               }
+            } else if (
+              item.field.type === 'SELECT' ||
+              (nativeEl.tagName && nativeEl.tagName.toLowerCase() === 'select')
+            ) {
+              const selectEl = nativeEl as HTMLSelectElement;
+              const options = Array.from(selectEl.options || []);
+              const targetVal = item.targetValue.toLowerCase();
+              const matchedOpt = options.find(
+                (opt) =>
+                  opt.value.toLowerCase() === targetVal ||
+                  opt.text.toLowerCase().includes(targetVal) ||
+                  targetVal.includes(opt.text.toLowerCase())
+              );
+              if (matchedOpt) {
+                selectEl.value = matchedOpt.value;
+              } else {
+                selectEl.value = item.targetValue;
+              }
+              const EventCtor = (
+                globalThis as unknown as {
+                  Event?: new (type: string, init?: Record<string, unknown>) => unknown;
+                }
+              ).Event;
+              if (typeof EventCtor === 'function' && typeof selectEl.dispatchEvent === 'function') {
+                selectEl.dispatchEvent(new EventCtor('change', { bubbles: true }) as never);
+              }
+              this.logger?.info('Form select dropdown set', {
+                label: item.field.label,
+                source: item.source,
+                value: item.targetValue,
+              });
             } else {
-              // TEXT, EMAIL, PHONE
+              // TEXT, EMAIL, PHONE, ID_CARD, BIRTH_YEAR, ADDRESS
               const inputEl = nativeEl as HTMLInputElement;
               if (typeof window !== 'undefined' && window.HTMLInputElement) {
                 const desc = Object.getOwnPropertyDescriptor(

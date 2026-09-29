@@ -44,7 +44,11 @@ export class SafeStubAdapter implements TicketboxPageAdapter {
     };
   }
 
-  public async selectTicket(candidateId: string, quantity: number): Promise<boolean> {
+  public async selectTicket(
+    candidateId: string,
+    quantity: number,
+    _showingId?: string | null
+  ): Promise<boolean> {
     this.logger?.warn(
       'SafeStubAdapter: selectTicket rejected — DOM interaction requires verified discovery evidence',
       {

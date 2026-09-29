@@ -50,7 +50,7 @@ export interface TicketboxPageAdapter {
   getEventState(): Promise<PageEventState>;
   getInventoryState(): Promise<PageInventoryState>;
   getSelectionState(): Promise<PageSelectionState>;
-  selectTicket(candidateId: string, quantity: number): Promise<boolean>;
+  selectTicket(candidateId: string, quantity: number, showingId?: string | null): Promise<boolean>;
   submitReservation(candidate: CandidateTicket, quantity: number): Promise<PageReservationResult>;
   getReservationState(): Promise<Reservation | null>;
   getCheckoutState(): Promise<PageCheckoutState>;
@@ -66,7 +66,7 @@ export interface TicketboxPageAdapter {
   selectSeats(selection: { zoneId?: string; seatIds: string[] }): Promise<boolean>;
 
   // Complete Booking Journey Port Methods
-  discoverJourneyTickets?(): Promise<
+  discoverJourneyTickets?(showingId?: string | null): Promise<
     import('../../domain/entities/BookingJourneyModels').JourneyTicketType[]
   >;
   discoverAreas?(): Promise<import('../../domain/entities/BookingJourneyModels').SeatArea[]>;
