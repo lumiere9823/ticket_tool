@@ -175,28 +175,27 @@ flowchart LR
 
 ## 5. Bảng So Sánh & Tổng Kết Trạng Thái Chức Năng
 
-| Thành Phần / Chức Năng       |   Trạng Thái    |  Mức Độ Ổn Định  | Ghi Chú Kỹ Thuật                                   |
-| :--------------------------- | :-------------: | :--------------: | :------------------------------------------------- |
-| **State Machine Engine**     |  Đã hoàn thành  |     Rất cao      | 20+ states, zero invalid transition crashes        |
-| **Catalog Discovery**        |  Đã hoàn thành  |     Rất cao      | Đã chống spam log, đọc chính xác giá & tier        |
-| **Selection Policy**         |  Đã hoàn thành  |       Cao        | Hỗ trợ ưu tiên danh mục và fallback                |
-| **Konva Canvas Page Bridge** |  Đã hoàn thành  |       Cao        | Chạy trên `world: MAIN`, tương tác Stage/Node      |
-| **Seated Booking Flow**      |  Đang kiểm thử  | Trung bình - Khá | Cần nạp lại extension trên Chrome để chạy code mới |
-| **Standing Booking Flow**    |  Đã hoàn thành  |       Cao        | Điều khiển stepper số lượng vé chuẩn               |
-| **SPA Navigation Tracker**   |  Đang cải tiến  |    Trung bình    | Cần thay thế timeout 10s bằng History API listener |
-| **Question Form Autofill**   |  Khung cơ bản   |   Cần bổ sung    | Cần hỗ trợ dropdown Tỉnh/Thành và masked inputs    |
-| **Modal & CAPTCHA Detector** | Chưa hoàn thiện |     Sơ khai      | Cần module nhận diện phòng chờ và CAPTCHA          |
-| **Seat Collision Rollback**  | Chưa hoàn thiện |   Cần thiết kế   | Cần cơ chế đổi ghế tự động khi server báo bận      |
+| Thành Phần / Chức Năng       |   Trạng Thái    | Mức Độ Ổn Định | Ghi Chú Kỹ Thuật                                    |
+| :--------------------------- | :-------------: | :------------: | :-------------------------------------------------- |
+| **State Machine Engine**     |  Đã hoàn thành  |    Rất cao     | 20+ states, clean re-arm reset & zero crash         |
+| **Catalog & Multi-Showing**  |  Đã hoàn thành  |    Rất cao     | Hỗ trợ Event API v2, lịch Calendar & drawer flow    |
+| **Selection Policy**         |  Đã hoàn thành  |      Cao       | Hỗ trợ ưu tiên danh mục và fallback                 |
+| **Konva Canvas Page Bridge** |  Đã hoàn thành  |    Rất cao     | Dual-mode matching (thuộc tính + toạ độ tolerance)  |
+| **Seated Booking Flow**      |  Đã hoàn thành  |      Cao       | Tương tác trực tiếp Konva Node và DOM action bar    |
+| **Standing Booking Flow**    |  Đã hoàn thành  |      Cao       | Điều khiển stepper số lượng vé chuẩn                |
+| **SPA Navigation Tracker**   |  Đã hoàn thành  |      Cao       | Hỗ trợ direct URL navigation & wait loop            |
+| **Question Form Autofill**   |  Đã hoàn thành  |    Rất cao     | Prefetch API v1, điền CCCD, năm sinh, radio consent |
+| **Modal & CAPTCHA Detector** | Chưa hoàn thiện |    Sơ khai     | Cần module nhận diện phòng chờ và CAPTCHA           |
+| **Seat Collision Rollback**  | Chưa hoàn thiện |  Cần thiết kế  | Cần cơ chế đổi ghế tự động khi server báo bận       |
 
 ---
 
 ## 6. Kế Hoạch Hành Động Ưu Tiên Tiếp Theo (Immediate Action Items)
 
-1. **Ưu tiên 1 (Vận hành):**
-   - Người dùng nạp lại extension (`chrome://extensions/` -> Reload) và refresh tab Ticketbox để kích hoạt toàn diện `content-main.js`.
-   - Ghi nhận log thực tế khi luồng chọn ghế trên Canvas được kích hoạt.
-2. **Ưu tiên 2 (Cải tiến Navigation):**
-   - Trong `page-bridge.ts`, gắn hook vào `window.history.pushState` và `window.history.replaceState` để báo về `content.js` ngay lập tức khi URL chuyển sang `/question-form`, triệt tiêu hoàn toàn cảnh báo timeout 10s.
-3. **Ưu tiên 3 (Phát hiện Modal & Form Autofill):**
-   - Hoàn thiện bộ quét modal điều khoản ban tổ chức tự động đóng/đồng ý.
-   - Xây dựng bộ điền thông tin người tham dự tại bước `/question-form` để hoàn tất luồng trước khi vào Payment Gate.
+1. **Ưu tiên 1 (Vận hành & Trải nghiệm thực tế):**
+   - Đọc hướng dẫn chi tiết tại `docs/ticketbox/21-detailed-system-and-operation-guide.md`.
+   - Nạp lại extension đã build trong `dist/` vào `chrome://extensions/` và refresh tab Ticketbox.
+2. **Ưu tiên 2 (Cơ chế Fast Retry on Collision):**
+   - Nghiên cứu xử lý toast thông báo khi ghế bị người khác chọn trước để rollback tức thì sang ghế liền kề.
+3. **Ưu tiên 3 (Nhận diện CAPTCHA & Waiting Room):**
+   - Thiết kế module phát hiện Cloudflare Turnstile hoặc Geetest để kích hoạt `HUMAN_INTERVENTION_REQUIRED` kèm cảnh báo âm thanh.

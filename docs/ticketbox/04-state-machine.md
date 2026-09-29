@@ -2909,3 +2909,23 @@ This state machine is considered implementation-ready when:
 ```
 
 Until these criteria are satisfied, implementation should remain in the design/discovery phase.
+
+---
+
+# 78. Scoped Persistent Purchase (Săn Vé Có Phạm Vi) Integration
+
+**Specification Reference:** `docs/ticketbox/22-scoped-persistent-purchase.md`
+
+Trong chế độ Scoped Persistent Purchase:
+
+1. **Scope Guard Hard Gate (BR-S01):** Chỉ cho phép chuyển sang `TICKET_SELECTED` / `RESERVING` khi cặp `(showingId, ticketTypeId)` được xác thực nằm trong Whitelist của `ScopedPurchasePlan`.
+2. **Fallback Boundary:** Khi vé ưu tiên không khả dụng, cơ chế fallback tuyệt đối không được chọn vé ngoài Whitelist. Nếu không có vé hợp lệ trong Whitelist, hệ thống duy trì trạng thái `WAITING_FOR_STOCK`.
+3. **Empty Whitelist Block (BR-S02):** Chặn quá trình `ARM` từ trạng thái `READY` nếu danh sách mục tiêu rỗng.
+4. **Authoritative Completion (BR-S04, BR-S08):** Đạt `PAYMENT_GATE` là điều kiện thành công duy nhất để dừng vòng săn kiên trì, không săn thêm vé thứ hai.
+5. **Phase 2 Extended States:**
+   - `WAITING_FOR_STOCK`: Dò quét không có vé nào trong whitelist còn mở bán.
+   - `RETRYING_TARGET`: Khi mục tiêu hiện tại bị hết vé/unselectable, tự động chuyển mục tiêu tiếp theo trong whitelist theo chiến lược (`BY_TARGET_ORDER`, `SHOWING_FIRST`, `TIER_FIRST`).
+   - `STOPPED_LIMIT_REACHED`: Dừng an toàn khi chạm trần số lần thử (`maxAttempts`), trần thời gian (`maxDurationMinutes`), hoặc mốc `stopAt`.
+   - `STOPPED_NO_TARGET`: Dừng khi không còn mục tiêu khả thi nào trong whitelist.
+   - `HUMAN_INTERVENTION_REQUIRED`: Dừng tự động khi phát hiện CAPTCHA, challenge bảo mật hoặc mất phiên.
+6. **Universal Reversibility:** Mọi trạng thái mới đều chấp nhận `RESET_REQUESTED` để quay về `READY` một cách an toàn và sạch sẽ, cũng như chấp nhận `STOP_REQUESTED` để dừng ngay lập tức.

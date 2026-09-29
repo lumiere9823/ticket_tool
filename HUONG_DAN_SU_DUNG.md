@@ -1,0 +1,148 @@
+# 📖 HƯỚNG DẪN SỬ DỤNG TICKETBOX PURCHASE ASSISTANT
+
+Chào bạn! Đây là tài liệu hướng dẫn chi tiết từng bước sử dụng **Ticketbox Purchase Assistant** — công cụ hỗ trợ săn vé tự động, bảo vệ an toàn danh mục vé, chống mua nhầm hạng vé ngoài ý muốn và tự động kích hoạt đúng giờ mở bán.
+
+---
+
+## 📑 MỤC LỤC
+1. [Cài đặt Extension lên trình duyệt](#1-cài-đặt-extension-lên-trình-duyệt)
+2. [Tổng quan 2 Chế Độ Sử Dụng](#2-tổng-quan-2-chế-độ-sử-dụng)
+3. [Hướng dẫn Chế độ Cơ bản (⚡ Khuyên dùng - Cực dễ)](#3-hướng-dẫn-chế-độ-cơ-bản--khuyên-dùng)
+4. [Hướng dẫn Chế độ Chuyên sâu (🎯 Hardcore / Scoped Matrix)](#4-hướng-dẫn-chế-độ-chuyên-sâu--hardcore--scoped-matrix)
+5. [Tính năng Hẹn Giờ Mở Bán (Scheduled ARM) & Cơ chế Đánh thức](#5-tính-năng-hẹn-giờ-mở-bán-scheduled-arm)
+6. [Các lưu ý "sống còn" khi săn vé Ticketbox](#6-các-lưu-ý-sống-còn-khi-săn-vé-ticketbox)
+7. [Giải đáp thắc mắc thường gặp (FAQ)](#7-giải-đáp-thắc-mắc-thường-gặp-faq)
+
+---
+
+## 1. Cài đặt Extension lên trình duyệt
+
+Nếu bạn vừa tải mã nguồn hoặc vừa build xong:
+1. Mở trình duyệt Google Chrome (hoặc Edge, Brave, Cốc Cốc).
+2. Truy cập đường dẫn: `chrome://extensions/`
+3. Bật công tắc **Chế độ dành cho nhà phát triển (Developer mode)** ở góc trên bên phải.
+4. Nhấn nút **Tải tiện ích đã giải nén (Load unpacked)** ở góc trên bên trái.
+5. Chọn thư mục `dist` trong thư mục dự án (`d:\ticket_tool\dist`).
+6. Ghim (Pin) biểu tượng extension lên thanh công cụ trình duyệt để tiện sử dụng.
+
+---
+
+## 2. Tổng quan 2 Chế Độ Sử Dụng
+
+Giao diện popup hiện nay được chia thành **2 chế độ riêng biệt**, bạn có thể bấm chuyển đổi ngay thanh tab trên cùng:
+
+| Tiêu chí | ⚡ Chế độ Cơ bản (Basic) | 🎯 Chế độ Chuyên sâu (Hardcore) |
+| :--- | :--- | :--- |
+| **Đối tượng** | Người dùng thông thường, muốn săn vé nhanh, dễ hiểu | Săn vé show lớn, nhiều ngày, cần chiến thuật dự phòng chặt chẽ |
+| **Cách chọn vé** | Tick chọn trực tiếp vào danh sách vé hiển thị giá tiền | Bảng ma trận Suất diễn × Hạng vé (Scoped Matrix) |
+| **Chiến lược** | Ưu tiên từ trên xuống dưới theo danh sách vé đã chọn | Tùy biến: Theo Rank mục tiêu, Ưu tiên suất diễn, hay Ưu tiên hạng vé |
+| **Thông số kiên trì** | Tự động áp dụng tối ưu (Poll 1.8s, trần 120 phút, 1000 lần thử) | Cho phép tự chỉnh trần phút, trần số lần thử, khoảng cách poll, Jitter |
+| **Thao tác ARM** | 1 Click duy nhất là chạy ngay | Yêu cầu tick hộp kiểm duyệt an toàn (Scope Confirmation) |
+
+---
+
+## 3. Hướng dẫn Chế độ Cơ bản (⚡ Khuyên dùng)
+
+> **Ví dụ thực tế:** Bạn muốn săn 2 vé cho concert *"Sao Concert Trăm Sao"* (hoặc *"Anh Trai Vượt Ngàn Chông Gai"*). Bạn chỉ muốn mua hạng **VIP 1** hoặc **VIP 2**, nếu hết cả 2 thì không mua các vé khác. Vé mở bán lúc **14:00**.
+
+### Bước 1: Mở trang sự kiện trên Ticketbox
+1. Mở Chrome, đăng nhập tài khoản Ticketbox của bạn trước.
+2. Mở tab trang sự kiện bạn muốn mua vé (Ví dụ: `https://ticketbox.vn/event/...`).
+
+### Bước 2: Mở Extension & Quét thông tin vé
+1. Bấm vào biểu tượng **Ticketbox Assistant** trên thanh công cụ.
+2. URL trang sự kiện sẽ tự động được nhận diện.
+3. Bấm nút **↺ (Làm mới catalog)**.
+   - Biểu tượng trạng thái sẽ chuyển thành `✓` màu xanh và hiển thị tên sự kiện cùng số lượng vé đã tìm thấy.
+
+### Bước 3: Cấu hình nhanh chỉ với 3 mục
+1. **1. CHỌN HẠNG VÉ MUỐN MUA:**
+   - Bạn sẽ thấy danh sách toàn bộ các hạng vé kèm giá tiền rõ ràng:
+     - `[✓] VIP 1 — 2.500.000 đ [Còn vé]`
+     - `[✓] VIP 2 — 2.000.000 đ [Còn vé]`
+     - `[ ] GA Đứng Khu A — 1.200.000 đ [Còn vé]`
+     - `[ ] GA Đứng Khu B — 800.000 đ [Còn vé]`
+   - **Chỉ cần tick chọn các vé bạn đồng ý mua** (Ví dụ tick VIP 1 và VIP 2). *Trợ lý sẽ tự động ưu tiên vé ở trên trước, nếu hết vé trên mới thử vé dưới.*
+2. **2. SỐ LƯỢNG & GIỜ MỞ BÁN:**
+   - **Số lượng vé:** Nhập số vé bạn muốn (Ví dụ: `2`).
+   - **⏰ Giờ mở bán:**
+     - **Nếu vé đã mở bán rồi:** Để trống ô này.
+     - **Nếu chưa mở bán (ví dụ mở lúc 14:00):** Bấm chọn ngày và giờ mở bán là `14:00`.
+3. **3. THÔNG TIN NGƯỜI NHẬN (PROFILE):**
+   - Điền Họ tên, Số điện thoại, Email, Số CCCD. Extension sẽ tự động ghi nhớ cho các lần sau.
+
+### Bước 4: Bấm nút ARM và an tâm chờ đợi
+- Bấm nút to màu xanh lá: **🚀 BẮT ĐẦU SĂN VÉ (ARM)**.
+- **Nếu bạn chọn săn ngay:** Trợ lý sẽ bắt đầu theo dõi và đặt vé ngay lập tức!
+- **Nếu bạn hẹn giờ:** Popup sẽ hiện thông báo *"Đã đặt lịch hẹn ARM thành công!"*. Trạng thái chuyển sang `SCHEDULED`. Bạn có thể yên tâm làm việc khác!
+
+---
+
+## 4. Hướng dẫn Chế độ Chuyên sâu (🎯 Hardcore / Scoped Matrix)
+
+Chế độ này dành cho các đợt mở bán cực kỳ gay cấn, có nhiều suất diễn (Nhiều ngày thứ 7, Chủ nhật), và bạn muốn lập chiến lược dự phòng nhiều lớp.
+
+### 1. Bảng ma trận Scoped Matrix:
+- Hàng ngang là các Suất diễn (Showing).
+- Bạn có thể đặt thứ tự ưu tiên (**Rank 1, Rank 2,...**):
+  - **Rank 1:** Suất diễn ngày 1 (Thứ 7) — Tick chọn [VIP 1, VIP 2].
+  - **Rank 2:** Suất diễn ngày 2 (Chủ nhật) — Tick chọn [VIP 1, VIP 2, GA 1].
+- **Chiến lược ưu tiên (Strategy):**
+  - `BY_TARGET_ORDER`: Theo thứ tự Rank bạn xếp (Rank 1 trước, không có mới sang Rank 2).
+  - `SHOWING_FIRST`: Cố gắng mua bằng được trong cùng 1 ngày trước khi đổi ngày khác.
+  - `TIER_FIRST`: Cố gắng tìm hạng vé VIP trên mọi ngày trước khi hạ tiêu chuẩn xuống GA.
+
+### 2. Thông số kiên trì (Persistence Policy):
+- **Trần thời gian (phút):** Mặc định 120 phút (hoặc đặt `0` = vô hạn, săn cho tới khi bạn bấm dừng).
+- **Trần số lần thử:** Mặc định 1000 lần thử (hoặc đặt `0` = vô hạn).
+- **Giãn cách poll (ms):** Mặc định `1800ms` (1.8 giây mỗi lần quét để vừa bắt kịp vé nhả vừa không bị Cloudflare / Ticketbox chặn IP).
+- **Tỷ lệ Jitter:** Dao động ngẫu nhiên ±20% để mô phỏng hành vi tự nhiên của con người.
+
+### 3. Scope Confirmation Box:
+- Hiển thị danh sách tóm tắt: *"Sẽ chỉ mua những vé này... Sẽ KHÔNG mua bất kỳ vé nào khác"*.
+- Tick vào ô *"Tôi xác nhận chỉ mua các vé trong phạm vi trên"* rồi bấm **ARM ASSISTANT**.
+
+---
+
+## 5. Tính năng Hẹn Giờ Mở Bán (Scheduled ARM)
+
+Ticketbox Assistant được trang bị cơ chế hẹn giờ thông minh qua **Chrome Alarms API** kết hợp **Background Timer**:
+
+### Cơ chế hoạt động:
+1. **Trước giờ mở bán:** Bạn cấu hình xong, chọn giờ mở bán và bấm ARM. Trợ lý vào chế độ `SCHEDULED` và không gửi request liên tục làm nóng máy hay lộ bot.
+2. **Đến đúng giờ mở bán:**
+   - Service worker của extension tự động kích hoạt.
+   - **Tự động đưa tab Ticketbox lên Foreground:** Cửa sổ và tab Ticketbox sẽ tự động được Focus và chuyển lên màn hình chính của bạn.
+   - **Gỡ bỏ Browser Timer Throttling:** Nhờ tab được đưa lên Foreground, Chrome sẽ gỡ bỏ hạn chế timer nền, cho phép tốc độ quét vé đạt độ chính xác từng mili-giây!
+   - **Nếu bạn vô tình tắt tab:** Extension sẽ tự động mở lại tab sự kiện và bắt đầu quét ngay lập tức.
+   - Đẩy thông báo chuông máy tính: `🔔 Ticketbox Assistant — ĐÃ ĐẾN GIỜ MỞ BÁN!`.
+
+---
+
+## 6. Các lưu ý "sống còn" khi săn vé Ticketbox
+
+1. **Đăng nhập trước tài khoản Ticketbox:**
+   - Luôn đăng nhập tài khoản Ticketbox trên trình duyệt trước giờ mở bán ít nhất 15 phút.
+2. **Không để máy tính Sleep / Gập màn hình:**
+   - Trình duyệt cần máy tính đang hoạt động (không ở chế độ Sleep sâu) để chuông hẹn giờ kích hoạt chính xác.
+3. **Bước thanh toán (Payment Gateway) an toàn:**
+   - Để bảo vệ tài khoản ngân hàng của bạn, Ticketbox Assistant sẽ tự động chọn vé, điền thông tin người mua, vượt qua các bước chọn khu vực/ghế và **dừng lại ở màn hình Thanh toán / Nhập OTP**.
+   - Chuông thông báo sẽ reo lên để bạn chọn phương thức thanh toán (MoMo, Thẻ tín dụng, VietQR) và nhập OTP an toàn.
+4. **Nút 🗑 RESET CONFIG:**
+   - Khi bạn muốn chuyển sang săn một sự kiện khác, hãy bấm nút **RESET CONFIG** để xóa cấu hình cũ và bắt đầu cấu hình mới hoàn toàn tinh tươm.
+
+---
+
+## 7. Giải đáp thắc mắc thường gặp (FAQ)
+
+**H: Tôi thấy cảnh báo `Tab hidden: Browser background timer throttling may affect polling interval` là gì?**
+> **Đ:** Đây là tính năng tiết kiệm pin mặc định của trình duyệt Chrome khi một tab bị ẩn dưới nền. Khi đến giờ mở bán, Ticketbox Assistant sẽ **tự động kích hoạt tab lên mặt trước (Foreground)** nên bạn hoàn toàn yên tâm. Tuy nhiên, trong lúc săn vé trực tiếp, tốt nhất bạn nên giữ tab Ticketbox hiển thị trên màn hình.
+
+**H: Nếu vé vừa mở bán mà đã hết sạch thì sao?**
+> **Đ:** Assistant sẽ liên tục kiên trì thăm dò (Polling) theo chu kỳ an toàn. Rất nhiều người giữ vé nhưng sau 10 - 15 phút không thanh toán hoặc hủy đơn, vé sẽ được nhả lại vào hệ thống. Assistant sẽ tóm ngay cơ hội này để giữ vé cho bạn!
+
+**H: Làm sao để hủy lịch hẹn ARM nếu tôi đổi ý?**
+> **Đ:** Trong popup, bạn chỉ cần bấm nút **✕ Hủy hẹn** màu đỏ bên cạnh dòng thông báo lịch hẹn, hoặc bấm nút **🛑 DỪNG LẠI (STOP)**.
+
+---
+*Chúc bạn săn được những tấm vé ưng ý với Ticketbox Purchase Assistant!*
