@@ -598,6 +598,9 @@ function renderCatalogTable(tickets: TicketOption[]): void {
 
 // ─── Catalog Update Handler ───────────────────────────────────────────────────
 
+let lastLoggedCatalogSignature = '';
+let lastLoggedDiscoveryKey = '';
+
 /**
  * Processes a new TicketCatalogSnapshot:
  * 1. Updates catalog status UI
@@ -623,9 +626,13 @@ function applyNewCatalog(snapshot: TicketCatalogSnapshot): void {
     validateAllRuleCards();
   }
 
-  addLog(
-    `Catalog updated: ${newCount} ticket${newCount !== 1 ? 's' : ''} — ${snapshot.loadMessage}`
-  );
+  const signature = `${newCount}_${snapshot.tickets.map((t) => `${t.name}_${t.price}_${t.availability}`).join('|')}_${snapshot.loadMessage}`;
+  if (signature !== lastLoggedCatalogSignature) {
+    lastLoggedCatalogSignature = signature;
+    addLog(
+      `Catalog updated: ${newCount} ticket${newCount !== 1 ? 's' : ''} — ${snapshot.loadMessage}`
+    );
+  }
 }
 
 /**
@@ -1092,7 +1099,13 @@ messageBus.subscribe((message: ExtensionMessage) => {
         eventInfoTitle.textContent = title;
         eventInfoBar.style.display = 'block';
       }
-      addLog(`Discovered ${ticketCount} ticket tier${ticketCount !== 1 ? 's' : ''} on "${title}"`);
+      const discKey = `${ticketCount}_${title}`;
+      if (discKey !== lastLoggedDiscoveryKey) {
+        lastLoggedDiscoveryKey = discKey;
+        addLog(
+          `Discovered ${ticketCount} ticket tier${ticketCount !== 1 ? 's' : ''} on "${title}"`
+        );
+      }
       break;
     }
 

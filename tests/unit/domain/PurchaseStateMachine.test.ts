@@ -151,4 +151,36 @@ describe('PurchaseStateMachine', () => {
     sm.transition({ type: 'AUTHENTICATED' });
     expect(listener).toHaveBeenCalledTimes(1);
   });
+
+  it('should permit page navigation and forward transitions from TICKET_SELECTED', () => {
+    const sm = new PurchaseStateMachine(PurchaseState.TICKET_SELECTED);
+
+    // Re-entrant TICKET_SELECTED
+    sm.transition({ type: 'TICKET_SELECTED', ticketId: 't1' });
+    expect(sm.state).toBe(PurchaseState.TICKET_SELECTED);
+
+    // Re-scan during page transition emits EVENT_DETECTED
+    sm.transition({ type: 'EVENT_DETECTED', eventId: 'evt-100' });
+    expect(sm.state).toBe(PurchaseState.EVENT_DETECTED);
+
+    // Advance back to TICKET_SELECTED
+    sm.transition({ type: 'SHOWING_DETECTED' });
+    sm.transition({ type: 'TICKETS_DETECTED' });
+    sm.transition({ type: 'TICKET_SELECTED' });
+    expect(sm.state).toBe(PurchaseState.TICKET_SELECTED);
+
+    // Advance to SHOWING_DETECTED
+    sm.transition({ type: 'SHOWING_DETECTED', showingId: 'show-200' });
+    expect(sm.state).toBe(PurchaseState.SHOWING_DETECTED);
+
+    // Direct progression from TICKET_SELECTED to SEATS_SELECTED
+    const sm2 = new PurchaseStateMachine(PurchaseState.TICKET_SELECTED);
+    sm2.transition({ type: 'SEATS_SELECTED', seats: ['A1', 'A2'] });
+    expect(sm2.state).toBe(PurchaseState.SEATS_SELECTED);
+
+    // Direct progression from TICKET_SELECTED to PAYMENT_GATE
+    const sm3 = new PurchaseStateMachine(PurchaseState.TICKET_SELECTED);
+    sm3.transition({ type: 'PAYMENT_GATE' });
+    expect(sm3.state).toBe(PurchaseState.PAYMENT_GATE);
+  });
 });

@@ -214,7 +214,10 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
     case 'FETCH_SEATMAP_REQUEST': {
       try {
         const url = `https://api-v2.ticketbox.vn/event/api/v1/events/showings/${message.showingId}/seatmap`;
-        logger.info('Fetching seatmap from background worker', { showingId: message.showingId, url });
+        logger.info('Fetching seatmap from background worker', {
+          showingId: message.showingId,
+          url,
+        });
         const res = await fetch(url);
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);

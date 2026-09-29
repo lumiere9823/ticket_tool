@@ -28,10 +28,7 @@ import {
 } from '../../domain/entities/BookingJourneyModels';
 import { DOMElementLike, wrapBrowserElement } from './parsing/DOMElementLike';
 import { TicketboxCatalogParser } from './parsing/TicketboxCatalogParser';
-import {
-  SeatmapApiResponse,
-  TicketboxSeatMapParser,
-} from './parsing/TicketboxSeatMapParser';
+import { SeatmapApiResponse, TicketboxSeatMapParser } from './parsing/TicketboxSeatMapParser';
 import { TicketboxSummaryParser } from './parsing/TicketboxSummaryParser';
 import { TicketboxFormParser } from './parsing/TicketboxFormParser';
 import { FormAutofillPolicy } from '../../domain/policies/FormAutofillPolicy';
@@ -59,6 +56,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   private cachedSeatmapData?: SeatmapApiResponse | null = null;
   private cachedShowingId?: string | null = null;
   private cachedSeats: Seat[] = [];
+  private selectedSeatIds = new Set<string>();
   public navigationPending = false;
 
   constructor(
@@ -176,6 +174,95 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     return null;
   }
 
+  public async sendPageBridgeRequest<T>(
+    action: string,
+    payload: Record<string, unknown>,
+    timeoutMs = 3500
+  ): Promise<{ success: boolean; data?: T; error?: string }> {
+    if (typeof window === 'undefined') {
+      return { success: false, error: 'NO_WINDOW' };
+    }
+
+    const requestId = `tb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    return new Promise((resolve) => {
+      let resolved = false;
+
+      const cleanup = () => {
+        window.removeEventListener('message', onMessage);
+        window.removeEventListener('TICKETBOX_ASSISTANT_RESPONSE', onCustomEvent as EventListener);
+      };
+
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          resolve({ success: false, error: 'TIMEOUT' });
+        }
+      }, timeoutMs);
+
+      const onMessage = (event: MessageEvent) => {
+        if (
+          event.source === window &&
+          event.data &&
+          event.data.source === 'TICKETBOX_ASSISTANT_PAGE' &&
+          event.data.requestId === requestId
+        ) {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timer);
+            cleanup();
+            resolve(event.data as { success: boolean; data?: T; error?: string });
+          }
+        }
+      };
+
+      const onCustomEvent = (event: unknown) => {
+        const detail = (
+          event as {
+            detail?: {
+              requestId?: string;
+              success?: boolean;
+              data?: T;
+              error?: string;
+            };
+          }
+        ).detail;
+        if (detail && detail.requestId === requestId) {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timer);
+            cleanup();
+            resolve(detail as { success: boolean; data?: T; error?: string });
+          }
+        }
+      };
+
+      window.addEventListener('message', onMessage);
+      window.addEventListener('TICKETBOX_ASSISTANT_RESPONSE', onCustomEvent as EventListener);
+
+      window.postMessage(
+        {
+          source: 'TICKETBOX_ASSISTANT_CONTENT',
+          type: action,
+          requestId,
+          payload,
+        },
+        '*'
+      );
+
+      try {
+        window.dispatchEvent(
+          new CustomEvent('TICKETBOX_ASSISTANT_REQUEST', {
+            detail: { type: action, requestId, payload },
+          })
+        );
+      } catch {
+        // ignore
+      }
+    });
+  }
+
   public async getEventState(): Promise<PageEventState> {
     const root = this.getRoot();
     const url = typeof window !== 'undefined' ? window.location.href : 'http://localhost/event';
@@ -260,7 +347,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     // 1. Attempt to fetch authoritative ticket tiers from Seatmap API when showing ID is available or cached seatmap data is present
     if (this.cachedSeatmapData || targetShowingId) {
       try {
-        const seatmapData = this.cachedSeatmapData || (await this.fetchSeatmapApi(targetShowingId!));
+        const seatmapData =
+          this.cachedSeatmapData || (await this.fetchSeatmapApi(targetShowingId!));
         if (seatmapData) {
           const apiTickets = TicketboxSeatMapParser.parseTicketTypesFromSeatmapApi(seatmapData);
           if (apiTickets.length > 0) {
@@ -297,9 +385,12 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           }
         }
       } catch (err: unknown) {
-        this.logger?.warn('Error discovering tickets from Seatmap API, falling back to DOM parser', {
-          err: String(err),
-        });
+        this.logger?.warn(
+          'Error discovering tickets from Seatmap API, falling back to DOM parser',
+          {
+            err: String(err),
+          }
+        );
       }
     }
 
@@ -418,7 +509,11 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       const allButtons = root.querySelectorAll('button, a[role="button"], a.btn, [class*="btn"]');
       for (const b of allButtons) {
         const text = b.textContent.toLowerCase().trim();
-        if (text.includes('mua vé ngay') || text.includes('mua vé') || text.includes('đặt vé ngay')) {
+        if (
+          text.includes('mua vé ngay') ||
+          text.includes('mua vé') ||
+          text.includes('đặt vé ngay')
+        ) {
           showingBtn = b;
           break;
         }
@@ -427,9 +522,13 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     if (showingBtn && typeof (showingBtn as MutableDOMElement).click === 'function') {
       const hasQtyControls =
-        root.querySelector('.ant-input-number, .qty-input, input[type="number"], .ant-drawer-open') !== null;
+        root.querySelector(
+          '.ant-input-number, .qty-input, input[type="number"], .ant-drawer-open'
+        ) !== null;
       if (!hasQtyControls) {
-        this.logger?.info('Clicking showing/booking button to open ticket purchase view', { candidateId });
+        this.logger?.info('Clicking showing/booking button to open ticket purchase view', {
+          candidateId,
+        });
         (showingBtn as MutableDOMElement).click!();
         await new Promise((r) => setTimeout(r, 600));
 
@@ -489,12 +588,14 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     const rowText = targetRow.textContent.toLowerCase();
     const isSoldOut =
-      rowText.includes('hết vé') ||
-      rowText.includes('sold out') ||
-      rowText.includes('hết chỗ');
+      rowText.includes('hết vé') || rowText.includes('sold out') || rowText.includes('hết chỗ');
 
     if (isRowDisabled || isSoldOut) {
-      this.logger?.warn('Ticket row is disabled or sold out', { candidateId, isRowDisabled, isSoldOut });
+      this.logger?.warn('Ticket row is disabled or sold out', {
+        candidateId,
+        isRowDisabled,
+        isSoldOut,
+      });
       return false;
     }
 
@@ -769,47 +870,91 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const root = this.getRoot();
     if (!root) return false;
 
+    const targetKeywords = [
+      'tiếp tục',
+      'mua vé',
+      'đặt vé',
+      'thanh toán',
+      'continue',
+      'checkout',
+      'xác nhận',
+      'proceed',
+      'chọn vé',
+    ];
+
     const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 10 : 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const candidates: DOMElementLike[] = [];
+      const seenRaw = new Set<unknown>();
+
+      const addCandidate = (el: DOMElementLike | null | undefined) => {
+        if (!el) return;
+        const raw = el.rawElement || el;
+        if (seenRaw.has(raw)) return;
+        seenRaw.add(raw);
+        candidates.push(el);
+      };
+
+      // 1. Standard action/button selectors
       const selector =
         '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, button[type="submit"], .btn-checkout, [class*="checkout"], .ant-drawer-footer button, [class*="bottom"] button, [class*="bottom"] a, [class*="sidebar"] button, [class*="sidebar"] a, [class*="action"] button, [class*="action"] a, button, a.btn, a[class*="button"], [role="button"], div[role="button"]';
 
-      let candidates = root.querySelectorAll(selector);
+      for (const el of root.querySelectorAll(selector)) {
+        addCandidate(el);
+      }
 
-      // In live browser, also check direct document query if candidate list is empty
-      if (candidates.length === 0 && typeof document !== 'undefined') {
-        const liveElements = document.querySelectorAll(
-          'button, [role="button"], a, div[class*="btn"], div[class*="button"], div[class*="continue"], div[class*="bottom"] div, [class*="sidebar"] div'
+      // 2. Direct browser scan: Find any element in document containing target action keywords
+      if (typeof document !== 'undefined') {
+        const liveElements = Array.from(
+          document.querySelectorAll(
+            'button, [role="button"], a, div[class*="btn"], div[class*="button"], div[class*="continue"], div[class*="bottom"] div, div[class*="footer"] div, [class*="action"] div, div.cursor-pointer'
+          )
         );
-        candidates = [];
-        for (let i = 0; i < liveElements.length; i++) {
-          const el = liveElements[i];
-          if (el) candidates.push(wrapBrowserElement(el));
+        for (const liveEl of liveElements) {
+          addCandidate(wrapBrowserElement(liveEl));
+        }
+
+        // Also search elements across document for action keywords
+        const allPotentialEls = Array.from(
+          document.querySelectorAll('div, span, p, a, button, [role="button"]')
+        );
+        for (const el of allPotentialEls) {
+          const txt = (el.textContent || '').trim().toLowerCase();
+          if (txt.length > 0 && txt.length < 80) {
+            if (targetKeywords.some((k) => txt.includes(k))) {
+              const clickable =
+                el.closest(
+                  'button, a, [role="button"], div[class*="btn"], div[class*="button"], div[class*="cursor-pointer"], [onclick]'
+                ) || el;
+              addCandidate(wrapBrowserElement(clickable));
+            }
+          }
         }
       }
 
+      const candidateDebugInfo: Array<{ tag: string; text: string; disabled: boolean }> = [];
+
       for (const btn of candidates) {
-        if (this.isElementDisabled(btn)) {
+        const text = (btn.textContent || '').toLowerCase().trim();
+        const disabled = this.isElementDisabled(btn);
+
+        candidateDebugInfo.push({
+          tag: btn.tagName,
+          text: text.slice(0, 40),
+          disabled,
+        });
+
+        if (disabled) {
           continue;
         }
-        const text = btn.textContent.toLowerCase().trim();
+
         // Avoid clicking a disabled prompt button like "vui lòng chọn vé" or "vui lòng trả lời"
         if (text.includes('vui lòng')) {
           continue;
         }
 
-        if (
-          text.includes('tiếp tục') ||
-          text.includes('mua vé') ||
-          text.includes('đặt vé') ||
-          text.includes('thanh toán') ||
-          text.includes('continue') ||
-          text.includes('checkout') ||
-          text.includes('xác nhận') ||
-          text.includes('proceed') ||
-          text.includes('chọn vé')
-        ) {
+        if (targetKeywords.some((kw) => text.includes(kw))) {
           this.logger?.info('Clicking next step / continue button', {
             buttonText: text,
             tagName: btn.tagName,
@@ -822,6 +967,13 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           return true;
         }
       }
+
+      this.logger?.debug(
+        `Attempt ${attempt}/${maxAttempts}: evaluated ${candidates.length} continue candidates`,
+        {
+          candidates: candidateDebugInfo.filter((c) => c.text.length > 0).slice(0, 10),
+        }
+      );
 
       // If not yet available/enabled, wait 250ms before next attempt
       if (attempt < maxAttempts) {
@@ -864,13 +1016,52 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       root.querySelector(`[id="${safeAreaId}"]`);
 
     if (!areaEl) {
-      const svgArea =
-        root.querySelector(`svg g[id*="${safeAreaId}"], svg path[id*="${safeAreaId}"], [class*="${safeAreaId}"]`);
+      const svgArea = root.querySelector(
+        `svg g[id*="${safeAreaId}"], svg path[id*="${safeAreaId}"], [class*="${safeAreaId}"]`
+      );
       if (svgArea && typeof (svgArea as MutableDOMElement).click === 'function') {
         (svgArea as MutableDOMElement).click!();
         return true;
       }
-      this.logger?.info('Area element not explicitly clickable in DOM; proceeding with coordinate seat discovery', { areaId });
+
+      // Ticketbox Seated Mode: Canvas / Konva interaction via Page-World Bridge
+      if (typeof window !== 'undefined') {
+        const bridgeRes = await this.sendPageBridgeRequest<{ transitioned: boolean }>(
+          'SELECT_AREA',
+          { areaId }
+        );
+
+        if (bridgeRes.success) {
+          this.logger?.info('Area selected successfully via Page Bridge (Konva)', {
+            areaId,
+            transitioned: bridgeRes.data?.transitioned,
+          });
+          await new Promise((r) => setTimeout(r, 400));
+          return true;
+        }
+
+        // Check if page is already in section view
+        const isAlreadySection =
+          document.querySelector('.seat_status, [class*="seat_status"]') !== null;
+        if (isAlreadySection) {
+          this.logger?.info('Page already in section view; area selection fulfilled', { areaId });
+          return true;
+        }
+
+        // Fallback: If Konva canvas exists, simulate click on canvas container
+        const konvaContent = document.querySelector('.konvajs-content') as HTMLElement | null;
+        if (konvaContent) {
+          this.logger?.info('Dispatching simulated click to Konva canvas container', { areaId });
+          this.clickElement(wrapBrowserElement(konvaContent));
+          await new Promise((r) => setTimeout(r, 500));
+          return true;
+        }
+      }
+
+      this.logger?.info(
+        'Area element not explicitly clickable in DOM; proceeding with coordinate seat discovery',
+        { areaId }
+      );
       return true;
     }
 
@@ -897,6 +1088,79 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   }
 
   /**
+   * Finds the actual Seatmap SVG on the page, distinguishing it from icons and toolbars.
+   */
+  private findSeatmapSvg(): SVGSVGElement | null {
+    if (typeof document === 'undefined') return null;
+
+    const allSvgs = Array.from(document.querySelectorAll('svg')) as SVGSVGElement[];
+    if (allSvgs.length === 0) return null;
+
+    // 1. Look for SVG that contains circles, ellipses, or [cx] elements (actual seat elements)
+    for (const svg of allSvgs) {
+      if (svg.querySelectorAll('circle, ellipse, [cx]').length > 5) {
+        return svg;
+      }
+    }
+
+    // 2. Look for SVG inside a container with class or id containing seat, map, or booking
+    for (const svg of allSvgs) {
+      const parent = svg.closest(
+        '[class*="seat"], [id*="seat"], [class*="map"], [id*="map"], [class*="booking"]'
+      );
+      if (parent) {
+        try {
+          const rect = svg.getBoundingClientRect();
+          if (rect.width > 150 && rect.height > 150) {
+            return svg;
+          }
+        } catch {
+          return svg;
+        }
+      }
+    }
+
+    // 3. Look for largest SVG by screen area (ignoring small icons < 150px)
+    let largestSvg: SVGSVGElement | null = null;
+    let maxArea = 0;
+    for (const svg of allSvgs) {
+      try {
+        const rect = svg.getBoundingClientRect();
+        const area = rect.width * rect.height;
+        if (area > maxArea && rect.width > 150 && rect.height > 150) {
+          maxArea = area;
+          largestSvg = svg;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (largestSvg) return largestSvg;
+
+    // 4. Look for SVG with large viewBox
+    for (const svg of allSvgs) {
+      const vb = svg.getAttribute('viewBox');
+      if (vb) {
+        const parts = vb
+          .trim()
+          .split(/[\s,]+/)
+          .map(parseFloat);
+        if (
+          parts.length === 4 &&
+          typeof parts[2] === 'number' &&
+          typeof parts[3] === 'number' &&
+          parts[2] > 200 &&
+          parts[3] > 200
+        ) {
+          return svg;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Seated Flow: Detects seat map presence.
    */
   public async detectSeatMap(): Promise<{ hasSeatMap: boolean; zones?: string[] }> {
@@ -906,9 +1170,11 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
     const isBookingUrl = currentUrl.includes('/select-ticket') || currentUrl.includes('/booking');
 
-    const mapEl = root.querySelector(
-      '.seat-map, #seat-map, svg.seatmap, [data-seat-map], [data-seatmap], .seat-plan, [class*="seatmap"], [class*="seat-map"], svg'
-    );
+    const mapEl =
+      this.findSeatmapSvg() ||
+      root.querySelector(
+        '.seat-map, #seat-map, svg.seatmap, [data-seat-map], [data-seatmap], .seat-plan, [class*="seatmap"], [class*="seat-map"]'
+      );
     const hasSeatMap = mapEl !== null || isBookingUrl;
     const areas = TicketboxSeatMapParser.parseAreas(root);
 
@@ -937,6 +1203,11 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         if (root) {
           this.reconcileSelectedSeatsFromDOM(apiSeats, root);
         }
+        for (const s of apiSeats) {
+          if (this.selectedSeatIds.has(s.id) || this.selectedSeatIds.has(s.label)) {
+            s.status = 'SELECTED';
+          }
+        }
         this.cachedSeats = apiSeats;
         this.logger?.info('Discovered seats from authoritative Seatmap API', {
           totalSeats: apiSeats.length,
@@ -950,7 +1221,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     // 2. DOM Parser fallback
     if (!root) return [];
-    let allSeats = TicketboxSeatMapParser.parseSeats(root);
+    const allSeats = TicketboxSeatMapParser.parseSeats(root);
 
     // If seats are not yet parsed from DOM nodes or if user already selected a seat, inspect bottom action bar
     const selectedBadge = root.querySelector(
@@ -1060,6 +1331,47 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     this.logger?.info('Selecting specific seats', { seatIds });
 
+    // 1. Primary Ticketbox Konva Canvas seat selection via Page-World Bridge
+    if (typeof window !== 'undefined') {
+      const seatsToSelect = seatIds.map((id) => {
+        const cached = this.cachedSeats.find((s) => s.id === id || s.label === id);
+        return {
+          id,
+          label: cached?.label || id,
+          x: cached?.x,
+          y: cached?.y,
+          row: cached?.row,
+          number: cached?.number,
+        };
+      });
+
+      const bridgeRes = await this.sendPageBridgeRequest<{ selectedCount: number }>(
+        'SELECT_SEATS',
+        { seats: seatsToSelect },
+        4000
+      );
+
+      if (bridgeRes.success && bridgeRes.data && bridgeRes.data.selectedCount > 0) {
+        this.logger?.info('Seats selected successfully via Page Bridge (Konva)', {
+          selectedCount: bridgeRes.data.selectedCount,
+          seatIds,
+        });
+
+        for (const id of seatIds) {
+          this.selectedSeatIds.add(id);
+          const seat = this.cachedSeats.find((s) => s.id === id || s.label === id);
+          if (seat) {
+            seat.status = 'SELECTED';
+            if (seat.label) this.selectedSeatIds.add(seat.label);
+          }
+        }
+
+        await new Promise((r) => setTimeout(r, 300));
+        return true;
+      }
+    }
+
+    // 2. DOM / SVG / Native Canvas coordinate simulation loop
     for (const seatId of seatIds) {
       const seat = this.cachedSeats.find((s) => s.id === seatId || s.label === seatId);
 
@@ -1068,73 +1380,59 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
       // Dynamic mount polling retry (up to 5 attempts with delay)
       for (let attempt = 0; attempt < 5; attempt++) {
-        // Strategy 1: Real browser screen coordinate mapping via getScreenCTM and elementFromPoint
-        if (
-          typeof window !== 'undefined' &&
-          typeof document !== 'undefined' &&
-          seat &&
-          typeof seat.x === 'number' &&
-          typeof seat.y === 'number'
-        ) {
-          try {
-            const svgEl = document.querySelector(
-              'svg.seatmap, [class*="seatmap"] svg, .seat-map svg, svg'
-            ) as SVGSVGElement | null;
-            if (
-              svgEl &&
-              typeof svgEl.createSVGPoint === 'function' &&
-              typeof svgEl.getScreenCTM === 'function'
-            ) {
-              const ctm = svgEl.getScreenCTM();
-              if (ctm) {
-                const pt = svgEl.createSVGPoint();
-                pt.x = seat.x;
-                pt.y = seat.y;
-                const screenPt = pt.matrixTransform(ctm);
-                if (
-                  screenPt.x > 0 &&
-                  screenPt.y > 0 &&
-                  screenPt.x < window.innerWidth &&
-                  screenPt.y < window.innerHeight
-                ) {
-                  if (typeof document.elementsFromPoint === 'function') {
-                    const stack = document.elementsFromPoint(screenPt.x, screenPt.y);
-                    const svgMatch = stack.find((el) => {
-                      const tag = el.tagName.toLowerCase();
-                      return (
-                        tag === 'circle' ||
-                        tag === 'rect' ||
-                        tag === 'ellipse' ||
-                        tag === 'path' ||
-                        tag === 'g'
-                      );
-                    });
-                    if (svgMatch) {
-                      nativeTarget = svgMatch;
-                      targetEl = wrapBrowserElement(svgMatch);
-                    }
-                  }
-                  if (!targetEl) {
-                    const elAtPoint = document.elementFromPoint(screenPt.x, screenPt.y);
-                    if (elAtPoint) {
-                      nativeTarget = elAtPoint;
-                      targetEl = wrapBrowserElement(elAtPoint);
-                    }
-                  }
-                  if (targetEl) {
-                    this.logger?.info('Located seat element via SVG screen coordinate transform', {
-                      seatId,
-                      label: seat?.label,
-                      screenX: screenPt.x,
-                      screenY: screenPt.y,
-                    });
-                  }
+        const seatmapSvg = this.findSeatmapSvg();
+
+        // Strategy 1: SVG coordinate distance matching within seatmapSvg (most direct & accurate)
+        if (!targetEl && seat && typeof seat.x === 'number' && typeof seat.y === 'number') {
+          const shapes = seatmapSvg
+            ? Array.from(seatmapSvg.querySelectorAll('circle, ellipse, rect, path, [cx]')).map(
+                (el) => wrapBrowserElement(el)
+              )
+            : root.querySelectorAll(
+                'svg circle, circle, svg rect, rect, svg ellipse, ellipse, svg path, svg [cx], [cx]'
+              );
+
+          let bestMatch: DOMElementLike | null = null;
+          let minDistance = 25.0; // coordinate tolerance
+
+          for (const s of shapes) {
+            const cxAttr = s.getAttribute('cx') || s.getAttribute('x');
+            const cyAttr = s.getAttribute('cy') || s.getAttribute('y');
+            let cx = cxAttr ? parseFloat(cxAttr) : NaN;
+            let cy = cyAttr ? parseFloat(cyAttr) : NaN;
+
+            if (isNaN(cx) || isNaN(cy)) {
+              const raw = (s.rawElement || s) as SVGGraphicsElement;
+              if (raw && typeof raw.getBBox === 'function') {
+                try {
+                  const bbox = raw.getBBox();
+                  cx = bbox.x + bbox.width / 2;
+                  cy = bbox.y + bbox.height / 2;
+                } catch {
+                  // ignore
                 }
               }
             }
-          } catch (ctmErr) {
-            this.logger?.debug('Screen coordinate transform failed, falling back', {
-              err: String(ctmErr),
+
+            if (!isNaN(cx) && !isNaN(cy)) {
+              const dist = Math.hypot(cx - seat.x, cy - seat.y);
+              if (dist < minDistance) {
+                minDistance = dist;
+                bestMatch = s;
+                if (dist < 1.0) break; // exact match
+              }
+            }
+          }
+
+          if (bestMatch) {
+            targetEl = bestMatch;
+            nativeTarget = (targetEl.rawElement || targetEl) as Element;
+            this.logger?.info('Found seat SVG shape by coordinates', {
+              seatId,
+              label: seat?.label,
+              x: seat?.x,
+              y: seat?.y,
+              minDistance,
             });
           }
         }
@@ -1166,51 +1464,91 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           }
         }
 
-        // Strategy 3: SVG coordinate distance matching with expanded tolerance (25px)
-        if (!targetEl && seat && typeof seat.x === 'number' && typeof seat.y === 'number') {
-          const shapes = root.querySelectorAll(
-            'svg circle, circle, svg rect, rect, svg ellipse, ellipse, svg path, svg [cx], [cx]'
-          );
-          let bestMatch: DOMElementLike | null = null;
-          let minDistance = 25.0; // coordinate tolerance (seats are typically 10-15px apart)
-
-          for (const s of shapes) {
-            const cxAttr = s.getAttribute('cx') || s.getAttribute('x');
-            const cyAttr = s.getAttribute('cy') || s.getAttribute('y');
-            let cx = cxAttr ? parseFloat(cxAttr) : NaN;
-            let cy = cyAttr ? parseFloat(cyAttr) : NaN;
-
-            if (isNaN(cx) || isNaN(cy)) {
-              const raw = (s.rawElement || s) as SVGGraphicsElement;
-              if (raw && typeof raw.getBBox === 'function') {
-                try {
-                  const bbox = raw.getBBox();
-                  cx = bbox.x + bbox.width / 2;
-                  cy = bbox.y + bbox.height / 2;
-                } catch {
-                  // ignore
+        // Strategy 3: Screen coordinate mapping via getScreenCTM on verified seatmapSvg
+        if (
+          !targetEl &&
+          typeof window !== 'undefined' &&
+          typeof document !== 'undefined' &&
+          seatmapSvg &&
+          typeof seatmapSvg.createSVGPoint === 'function' &&
+          typeof seatmapSvg.getScreenCTM === 'function' &&
+          seat &&
+          typeof seat.x === 'number' &&
+          typeof seat.y === 'number'
+        ) {
+          try {
+            const ctm = seatmapSvg.getScreenCTM();
+            if (ctm) {
+              const pt = seatmapSvg.createSVGPoint();
+              pt.x = seat.x;
+              pt.y = seat.y;
+              const screenPt = pt.matrixTransform(ctm);
+              if (
+                screenPt.x > 0 &&
+                screenPt.y > 0 &&
+                screenPt.x < window.innerWidth &&
+                screenPt.y < window.innerHeight
+              ) {
+                if (typeof document.elementsFromPoint === 'function') {
+                  const stack = document.elementsFromPoint(screenPt.x, screenPt.y);
+                  const svgMatch = stack.find((el) => {
+                    const tag = el.tagName.toLowerCase();
+                    return (
+                      tag === 'circle' ||
+                      tag === 'rect' ||
+                      tag === 'ellipse' ||
+                      tag === 'path' ||
+                      tag === 'g'
+                    );
+                  });
+                  if (svgMatch) {
+                    nativeTarget = svgMatch;
+                    targetEl = wrapBrowserElement(svgMatch);
+                  }
+                }
+                if (!targetEl) {
+                  const elAtPoint = document.elementFromPoint(screenPt.x, screenPt.y);
+                  if (elAtPoint) {
+                    nativeTarget = elAtPoint;
+                    targetEl = wrapBrowserElement(elAtPoint);
+                  }
+                }
+                if (targetEl) {
+                  this.logger?.info('Located seat element via SVG screen coordinate transform', {
+                    seatId,
+                    label: seat?.label,
+                    screenX: screenPt.x,
+                    screenY: screenPt.y,
+                  });
                 }
               }
             }
-
-            if (!isNaN(cx) && !isNaN(cy)) {
-              const dist = Math.hypot(cx - seat.x, cy - seat.y);
-              if (dist < minDistance) {
-                minDistance = dist;
-                bestMatch = s;
-              }
-            }
+          } catch (ctmErr) {
+            this.logger?.debug('Screen coordinate transform failed, falling back', {
+              err: String(ctmErr),
+            });
           }
+        }
 
-          if (bestMatch) {
-            targetEl = bestMatch;
-            nativeTarget = (targetEl.rawElement || targetEl) as Element;
-            this.logger?.info('Found seat SVG shape by coordinates', {
+        // Strategy 4: Konva canvas container hit dispatching at calculated coordinates
+        if (
+          !targetEl &&
+          typeof document !== 'undefined' &&
+          seat &&
+          typeof seat.x === 'number' &&
+          typeof seat.y === 'number'
+        ) {
+          const canvas = document.querySelector(
+            '.konvajs-content canvas'
+          ) as HTMLCanvasElement | null;
+          if (canvas) {
+            nativeTarget = canvas;
+            targetEl = wrapBrowserElement(canvas);
+            this.logger?.info('Located seat on Konva canvas via coordinates', {
               seatId,
               label: seat?.label,
-              x: seat?.x,
-              y: seat?.y,
-              minDistance,
+              x: seat.x,
+              y: seat.y,
             });
           }
         }
@@ -1227,14 +1565,32 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
       // 4. Dispatch simulated mouse and pointer clicks with coordinate context
       const nativeEl = (nativeTarget || targetEl.rawElement || targetEl) as Element;
-      if (typeof (targetEl as MutableDOMElement).click === 'function') {
-        (targetEl as MutableDOMElement).click!();
+
+      if (typeof (nativeEl as HTMLElement).scrollIntoView === 'function') {
+        try {
+          (nativeEl as HTMLElement).scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        } catch {
+          // ignore
+        }
       }
-      if (
-        typeof (nativeEl as HTMLElement).click === 'function' &&
-        (nativeEl as unknown) !== targetEl
-      ) {
-        (nativeEl as HTMLElement).click();
+
+      let clientX = seat?.x ?? 0;
+      let clientY = seat?.y ?? 0;
+
+      if (typeof nativeEl.getBoundingClientRect === 'function') {
+        const rect = nativeEl.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          clientX = rect.left + rect.width / 2;
+          clientY = rect.top + rect.height / 2;
+        }
+      }
+
+      if (typeof (nativeEl as HTMLElement).focus === 'function') {
+        try {
+          (nativeEl as HTMLElement).focus();
+        } catch {
+          // ignore
+        }
       }
 
       if (
@@ -1242,23 +1598,50 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         typeof window.MouseEvent === 'function' &&
         'dispatchEvent' in (nativeEl as object)
       ) {
-        const rect =
-          typeof nativeEl.getBoundingClientRect === 'function'
-            ? nativeEl.getBoundingClientRect()
-            : { left: 0, top: 0, width: 0, height: 0 };
-        const clientX = rect.width > 0 ? rect.left + rect.width / 2 : (seat?.x ?? 0);
-        const clientY = rect.height > 0 ? rect.top + rect.height / 2 : (seat?.y ?? 0);
-        const opts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
+        const mouseOpts = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY,
+          buttons: 1,
+        };
+        const pointerOpts = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY,
+          buttons: 1,
+          pointerId: 1,
+          pointerType: 'mouse',
+          isPrimary: true,
+        };
+        const releaseOpts = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY,
+          buttons: 0,
+          pointerId: 1,
+          pointerType: 'mouse',
+          isPrimary: true,
+        };
 
         if (typeof window.PointerEvent === 'function') {
-          nativeEl.dispatchEvent(new PointerEvent('pointerdown', opts));
+          nativeEl.dispatchEvent(new PointerEvent('pointerover', pointerOpts));
+          nativeEl.dispatchEvent(new PointerEvent('pointerenter', pointerOpts));
+          nativeEl.dispatchEvent(new PointerEvent('pointerdown', pointerOpts));
         }
-        nativeEl.dispatchEvent(new MouseEvent('mousedown', opts));
+        nativeEl.dispatchEvent(new MouseEvent('mouseover', mouseOpts));
+        nativeEl.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
+
         if (typeof window.PointerEvent === 'function') {
-          nativeEl.dispatchEvent(new PointerEvent('pointerup', opts));
+          nativeEl.dispatchEvent(new PointerEvent('pointerup', releaseOpts));
         }
-        nativeEl.dispatchEvent(new MouseEvent('mouseup', opts));
-        nativeEl.dispatchEvent(new MouseEvent('click', opts));
+        nativeEl.dispatchEvent(new MouseEvent('mouseup', releaseOpts));
+        nativeEl.dispatchEvent(new MouseEvent('click', releaseOpts));
 
         // If child of a group <g> or <a>, also dispatch click to parent
         const parent = nativeEl.parentElement;
@@ -1266,11 +1649,48 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           parent &&
           (parent.tagName.toLowerCase() === 'g' || parent.tagName.toLowerCase() === 'a')
         ) {
-          parent.dispatchEvent(new MouseEvent('click', opts));
+          parent.dispatchEvent(new MouseEvent('click', releaseOpts));
           if (typeof (parent as HTMLElement).click === 'function') {
             (parent as HTMLElement).click();
           }
         }
+
+        // Also check if an overlay exists at (clientX, clientY)
+        if (
+          typeof document !== 'undefined' &&
+          typeof document.elementFromPoint === 'function' &&
+          clientX > 0 &&
+          clientY > 0
+        ) {
+          const topEl = document.elementFromPoint(clientX, clientY);
+          if (
+            topEl &&
+            topEl !== nativeEl &&
+            !nativeEl.contains(topEl) &&
+            !topEl.contains(nativeEl)
+          ) {
+            try {
+              if (typeof window.PointerEvent === 'function') {
+                topEl.dispatchEvent(new PointerEvent('pointerdown', pointerOpts));
+                topEl.dispatchEvent(new PointerEvent('pointerup', releaseOpts));
+              }
+              topEl.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
+              topEl.dispatchEvent(new MouseEvent('mouseup', releaseOpts));
+              topEl.dispatchEvent(new MouseEvent('click', releaseOpts));
+              if (typeof (topEl as HTMLElement).click === 'function') {
+                (topEl as HTMLElement).click();
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+      }
+
+      if (typeof (nativeEl as HTMLElement).click === 'function') {
+        (nativeEl as HTMLElement).click();
+      } else if (typeof (targetEl as MutableDOMElement).click === 'function') {
+        (targetEl as MutableDOMElement).click!();
       }
 
       // 5. Mark selected in node attributes
@@ -1296,6 +1716,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           (targetEl as MutableDOMElement).className = `${cur} selected`.trim();
         }
       }
+
+      this.selectedSeatIds.add(seatId);
+      if (seat?.label) this.selectedSeatIds.add(seat.label);
+      if (seat) seat.status = 'SELECTED';
 
       this.logger?.info('Seat selection clicked and verified', { seatId, label: seat?.label });
       await new Promise((r) => setTimeout(r, 200));
@@ -1382,7 +1806,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
                     Event?: new (type: string, init?: Record<string, unknown>) => unknown;
                   }
                 ).Event;
-                if (typeof EventCtor === 'function' && typeof nativeEl.dispatchEvent === 'function') {
+                if (
+                  typeof EventCtor === 'function' &&
+                  typeof nativeEl.dispatchEvent === 'function'
+                ) {
                   nativeEl.dispatchEvent(new EventCtor('change', { bubbles: true }) as never);
                   nativeEl.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
                 }

@@ -85,7 +85,8 @@ export class SanitizedLogger implements LoggerPort {
         entry.attemptId ? ` [${entry.attemptId}]` : ''
       }${entry.state ? ` [${entry.state}]` : ''}`;
 
-      const errorDetail = entry.error || (entry.metadata?.error ? String(entry.metadata.error) : '');
+      const errorDetail =
+        entry.error || (entry.metadata?.error ? String(entry.metadata.error) : '');
       const fullMessage = errorDetail ? `${formatted} — ${errorDetail}` : formatted;
 
       if (level === 'ERROR') {

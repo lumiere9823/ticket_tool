@@ -431,7 +431,8 @@ export class TicketboxSeatMapParser {
           (ttName.length > 0 && ttName === normTarget) ||
           (normTarget.length > 2 &&
             ((ttName.length > 0 && (ttName.includes(normTarget) || normTarget.includes(ttName))) ||
-              (secName.length > 0 && (secName.includes(normTarget) || normTarget.includes(secName)))))
+              (secName.length > 0 &&
+                (secName.includes(normTarget) || normTarget.includes(secName)))))
         );
       });
       if (matched.length > 0) {
@@ -493,4 +494,3 @@ export class TicketboxSeatMapParser {
     return areas;
   }
 }
-

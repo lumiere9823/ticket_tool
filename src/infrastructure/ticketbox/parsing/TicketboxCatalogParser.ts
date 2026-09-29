@@ -387,7 +387,9 @@ export class TicketboxCatalogParser {
         if (!isNaN(amount) && amount > 0 && !seenPrices.has(amount)) {
           seenPrices.add(amount);
           const nameEl = el.querySelector('[class*="name"], [class*="label"], [class*="title"]');
-          const name = nameEl ? nameEl.textContent.trim() : `Vé ${amount.toLocaleString('vi-VN')} đ`;
+          const name = nameEl
+            ? nameEl.textContent.trim()
+            : `Vé ${amount.toLocaleString('vi-VN')} đ`;
           ticketTypes.push({
             id: `ticket-tier-${amount}`,
             name,

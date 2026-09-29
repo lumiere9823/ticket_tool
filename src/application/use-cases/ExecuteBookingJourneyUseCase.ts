@@ -100,9 +100,7 @@ export class ExecuteBookingJourneyUseCase {
           retryState === PurchaseState.HELD ||
           retryState === PurchaseState.CONSENT_REQUIRED
         ) {
-          this.logger.info(
-            `Target state ${retryState} reached during journey. Halting retries.`
-          );
+          this.logger.info(`Target state ${retryState} reached during journey. Halting retries.`);
           return {
             success: true,
             finalState: retryState,
@@ -111,10 +109,7 @@ export class ExecuteBookingJourneyUseCase {
         }
 
         try {
-          if (
-            retryState !== PurchaseState.STOPPED &&
-            retryState !== PurchaseState.FAILED
-          ) {
+          if (retryState !== PurchaseState.STOPPED && retryState !== PurchaseState.FAILED) {
             this.stateMachine.transition({ type: 'STOP_REQUESTED', reason: 'Journey retry reset' });
           }
           this.stateMachine.transition({ type: 'RESET_REQUESTED' });
@@ -195,7 +190,8 @@ export class ExecuteBookingJourneyUseCase {
     const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
     const isOnPayment = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
     const isOnQuestionForm = currentUrl.includes('/question-form');
-    const isOnSelectTicket = currentUrl.includes('/select-ticket') || currentUrl.includes('/booking');
+    const isOnSelectTicket =
+      currentUrl.includes('/select-ticket') || currentUrl.includes('/booking');
 
     if (isOnPayment) {
       this.stateMachine.transition({ type: 'PAYMENT_GATE' });
@@ -416,8 +412,14 @@ export class ExecuteBookingJourneyUseCase {
     });
 
     // If navigation to /select-ticket was initiated from event page, yield for page navigation
-    if (this.adapter.isNavigationPending && this.adapter.isNavigationPending() && !isOnSelectTicket) {
-      this.logger.info('Navigation to seat selection page initiated. Yielding for page transition.');
+    if (
+      this.adapter.isNavigationPending &&
+      this.adapter.isNavigationPending() &&
+      !isOnSelectTicket
+    ) {
+      this.logger.info(
+        'Navigation to seat selection page initiated. Yielding for page transition.'
+      );
       return {
         success: true,
         finalState: PurchaseState.TICKET_SELECTED,
@@ -547,7 +549,8 @@ export class ExecuteBookingJourneyUseCase {
       // B. Seat Discovery
       const tSeatDiscStart = Date.now();
       this.stateMachine.transition({ type: 'SEAT_MAP_DETECTED' });
-      const targetAreaOrName = currentSelection.areaId || currentSelection.areaName || chosenTicket.name;
+      const targetAreaOrName =
+        currentSelection.areaId || currentSelection.areaName || chosenTicket.name;
       const availableSeats = this.adapter.discoverSeats
         ? await this.adapter.discoverSeats(targetAreaOrName)
         : [];

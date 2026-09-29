@@ -49,15 +49,34 @@ let debounceTimer: number | null = null;
 let awaitingNavigationFromUrl: string | null = null;
 let awaitingNavigationTimestamp = 0;
 
+function ensurePageBridgeInjected(): void {
+  if (typeof document === 'undefined') return;
+  const isLoaded = (window as unknown as Record<string, unknown>).__TICKETBOX_PAGE_BRIDGE_LOADED__;
+  if (!isLoaded && typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
+    try {
+      const script = document.createElement('script');
+      script.src = chrome.runtime.getURL('content-main.js');
+      script.onload = () => script.remove();
+      (document.head || document.documentElement).appendChild(script);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+ensurePageBridgeInjected();
+
 logger.info('Ticketbox Content Script loaded on page', {
   url: window.location.href,
 });
+
+let lastSnapshotSignature = '';
 
 /**
  * Periodically or reactively observes page metadata and publishes snapshots and journey updates.
  * Passive discovery scan does not mutate page state (strictly Phase 8 / safe architecture compliant).
  */
-async function performDiscoveryScan(): Promise<void> {
+async function performDiscoveryScan(force = false): Promise<void> {
   if (!isExtensionContextValid()) {
     if (monitoringTimer) {
       clearInterval(monitoringTimer);
@@ -151,7 +170,13 @@ async function performDiscoveryScan(): Promise<void> {
       }
     }
 
-    if (isExtensionContextValid()) {
+    const currentSignature = `${eventTitle}_${allTickets.length}_${allTickets.map((t) => `${t.name}_${t.price.amount}_${t.availability}`).join('|')}_${summary?.total ?? 0}`;
+    const hasChanged = currentSignature !== lastSnapshotSignature;
+    if (hasChanged) {
+      lastSnapshotSignature = currentSignature;
+    }
+
+    if (isExtensionContextValid() && (hasChanged || force)) {
       // Publish legacy PAGE_DISCOVERY_SNAPSHOT for backward compatibility
       await messageBus.publish({
         type: 'PAGE_DISCOVERY_SNAPSHOT',
@@ -301,15 +326,17 @@ async function attemptBookingJourney(): Promise<void> {
       requiresUserAction: result.requiresUserAction,
     });
 
-    // When seats are selected and continue button is submitted, yield and await navigation
+    // When tickets or seats are selected and navigation is pending, yield and await navigation
     if (
       result.success &&
-      result.finalState === PurchaseState.SEATS_SELECTED &&
+      (result.finalState === PurchaseState.SEATS_SELECTED ||
+        result.finalState === PurchaseState.TICKET_SELECTED) &&
       !result.requiresUserAction
     ) {
       awaitingNavigationFromUrl = typeof window !== 'undefined' ? window.location.href : null;
       awaitingNavigationTimestamp = Date.now();
-      logger.info('Seats selected and submitted. Waiting for page navigation to next step...', {
+      logger.info('Step executed and submitted. Waiting for page navigation to next step...', {
+        finalState: result.finalState,
         currentUrl: awaitingNavigationFromUrl,
       });
     }
@@ -462,7 +489,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
   switch (message.type) {
     case 'REQUEST_DISCOVERY_SCAN': {
       logger.info('Content script received REQUEST_DISCOVERY_SCAN');
-      performDiscoveryScan();
+      performDiscoveryScan(true);
       break;
     }
 

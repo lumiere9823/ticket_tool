@@ -219,7 +219,8 @@ const MOCK_SEATMAP_API_RESPONSE: SeatmapApiResponse = {
 describe('Authoritative Ticketbox Seatmap API Integration', () => {
   describe('TicketboxSeatMapParser.parseTicketTypesFromSeatmapApi', () => {
     it('should parse exactly 8 distinct ticket tiers deduplicated by ticketType id', () => {
-      const tickets = TicketboxSeatMapParser.parseTicketTypesFromSeatmapApi(MOCK_SEATMAP_API_RESPONSE);
+      const tickets =
+        TicketboxSeatMapParser.parseTicketTypesFromSeatmapApi(MOCK_SEATMAP_API_RESPONSE);
 
       expect(tickets).toHaveLength(8);
 
@@ -351,7 +352,10 @@ describe('Authoritative Ticketbox Seatmap API Integration', () => {
         </div>
       `;
       const dom = parseHtmlToDOMElementLike(duplicateHtml);
-      const catalog = TicketboxCatalogParser.parseCatalog(dom, 'https://ticketbox.vn/tudaytunay-26578');
+      const catalog = TicketboxCatalogParser.parseCatalog(
+        dom,
+        'https://ticketbox.vn/tudaytunay-26578'
+      );
 
       const tickets = catalog.showings[0]!.ticketTypes;
       expect(tickets).toHaveLength(8);
@@ -451,8 +455,12 @@ describe('Authoritative Ticketbox Seatmap API Integration', () => {
       expect(decision.status).toBe('SUCCESS');
       expect(decision.isAdjacent).toBe(true);
       expect(decision.selectedSeats).toHaveLength(2);
-      expect(['VIP_A21', 'VIP_A19', 'VIP_A17', 'VIP_A15']).toContain(decision.selectedSeats[0]?.label);
-      expect(['VIP_A21', 'VIP_A19', 'VIP_A17', 'VIP_A15']).toContain(decision.selectedSeats[1]?.label);
+      expect(['VIP_A21', 'VIP_A19', 'VIP_A17', 'VIP_A15']).toContain(
+        decision.selectedSeats[0]?.label
+      );
+      expect(['VIP_A21', 'VIP_A19', 'VIP_A17', 'VIP_A15']).toContain(
+        decision.selectedSeats[1]?.label
+      );
     });
 
     it('should execute end-to-end seated booking journey on seatmap page up to PAYMENT_GATE', async () => {
@@ -532,4 +540,3 @@ describe('Authoritative Ticketbox Seatmap API Integration', () => {
     });
   });
 });
-

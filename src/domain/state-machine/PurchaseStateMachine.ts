@@ -481,6 +481,16 @@ export class PurchaseStateMachine {
         break;
 
       case PurchaseState.TICKET_SELECTED:
+        if (event.type === 'TICKET_SELECTED') {
+          return this.getContext();
+        }
+        if (event.type === 'EVENT_DETECTED') {
+          if (event.eventId) this._eventId = event.eventId;
+          return this.performTransition(PurchaseState.EVENT_DETECTED);
+        }
+        if (event.type === 'SHOWING_DETECTED') {
+          return this.performTransition(PurchaseState.SHOWING_DETECTED);
+        }
         if (event.type === 'BOOKING_MODE_DETECTED') {
           return this.performTransition(PurchaseState.BOOKING_MODE_DETECTED);
         }
@@ -496,8 +506,23 @@ export class PurchaseStateMachine {
         if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
           return this.performTransition(PurchaseState.SELECTING_SEATS);
         }
+        if (event.type === 'SEATS_SELECTED') {
+          return this.performTransition(PurchaseState.SEATS_SELECTED);
+        }
+        if (event.type === 'BOOKING_SUMMARY_DETECTED') {
+          return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
+        }
+        if (event.type === 'QUESTION_FORM_DETECTED') {
+          return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
+        }
+        if (event.type === 'PAYMENT_GATE') {
+          return this.performTransition(PurchaseState.PAYMENT_GATE);
+        }
         if (event.type === 'TICKETS_DETECTED') {
           return this.performTransition(PurchaseState.TICKETS_DETECTED);
+        }
+        if (event.type === 'WAITING') {
+          return this.performTransition(PurchaseState.WAITING, event.reason);
         }
         if (event.type === 'INVALID_SELECTION') {
           this._failureReason = event.reason ?? FailureReason.INVALID_SELECTION;

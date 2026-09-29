@@ -10,6 +10,7 @@ function buildContentScript(): Plugin {
   return {
     name: 'build-content-script',
     async closeBundle() {
+      // 1. Build content.js (Isolated World)
       await build({
         configFile: false,
         resolve: {
@@ -32,6 +33,35 @@ function buildContentScript(): Plugin {
             output: {
               format: 'iife',
               entryFileNames: 'content.js',
+              extend: true,
+            },
+          },
+        },
+      });
+
+      // 2. Build content-main.js (Main / Page World Bridge)
+      await build({
+        configFile: false,
+        resolve: {
+          alias: {
+            '@domain': resolve(__dirname, 'src/domain'),
+            '@application': resolve(__dirname, 'src/application'),
+            '@infrastructure': resolve(__dirname, 'src/infrastructure'),
+            '@extension': resolve(__dirname, 'src/extension'),
+            '@ui': resolve(__dirname, 'src/ui'),
+          },
+        },
+        build: {
+          outDir: 'dist',
+          emptyOutDir: false,
+          target: 'es2022',
+          rollupOptions: {
+            input: {
+              'content-main': resolve(__dirname, 'src/extension/content/page-bridge.ts'),
+            },
+            output: {
+              format: 'iife',
+              entryFileNames: 'content-main.js',
               extend: true,
             },
           },

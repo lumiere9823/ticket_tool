@@ -261,4 +261,3 @@ export type ExtensionMessage =
   | RequestDiscoveryScanMessage
   | FetchSeatmapRequestMessage
   | FetchSeatmapResponseMessage;
-
