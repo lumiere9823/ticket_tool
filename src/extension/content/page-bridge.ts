@@ -63,6 +63,8 @@ interface BridgeSeatPayload {
 interface BridgeRequestPayload {
   areaId?: string;
   areaName?: string;
+  ticketTypeId?: string;
+  coords?: { x?: number; y?: number; width?: number; height?: number };
   seats?: BridgeSeatPayload[];
 }
 
@@ -209,9 +211,11 @@ async function handleSelectArea(
 ): Promise<{ success: boolean; transitioned: boolean; message?: string }> {
   const areaId = payload?.areaId;
   const areaName = payload?.areaName;
+  const ticketTypeId = payload?.ticketTypeId;
+  const coords = payload?.coords;
 
-  if (!areaId && !areaName) {
-    return { success: false, transitioned: false, message: 'Missing areaId or areaName' };
+  if (!areaId && !areaName && !ticketTypeId) {
+    return { success: false, transitioned: false, message: 'Missing areaId, areaName, or ticketTypeId' };
   }
 
   // If already in section view, view transition is already fulfilled
@@ -227,11 +231,24 @@ async function handleSelectArea(
   const groups = typeof stage.find === 'function' ? stage.find('Group') : [];
   let targetGroup: KonvaNodeLike | null = null;
 
-  // 1. Match by data-section-id attribute
-  if (areaId) {
+  // 1. Match by ticketTypeId
+  if (ticketTypeId) {
+    const safeTtId = String(ticketTypeId).trim();
+    for (const g of groups) {
+      const gTtId = g.attrs ? g.attrs['ticketTypeId'] ?? g.attrs['data-ticket-type-id'] ?? g.attrs['data-ticket-id'] : undefined;
+      const matched = String(gTtId ?? '').trim();
+      if (matched && matched === safeTtId) {
+        targetGroup = g;
+        break;
+      }
+    }
+  }
+
+  // 2. Match by data-section-id attribute or areaId
+  if (!targetGroup && areaId) {
     const safeId = String(areaId).trim();
     for (const g of groups) {
-      const gSectionId = g.attrs ? g.attrs['data-section-id'] : undefined;
+      const gSectionId = g.attrs ? g.attrs['data-section-id'] ?? g.attrs['sectionId'] ?? g.attrs['id'] : undefined;
       const directAttr = typeof g.getAttr === 'function' ? g.getAttr('data-section-id') : undefined;
       const matched = String(gSectionId ?? directAttr ?? '').trim();
       if (matched && (matched === safeId || matched.includes(safeId) || safeId.includes(matched))) {
@@ -241,27 +258,35 @@ async function handleSelectArea(
     }
   }
 
-  // 2. Match by id or name
-  if (!targetGroup && areaId) {
-    const safeId = String(areaId).toLowerCase();
+  // 3. Match by areaName (normalized with underscores and spaces)
+  if (!targetGroup && areaName) {
+    const safeName = areaName.toLowerCase().trim();
+    const safeNameClean = safeName.replace(/[\s-]+/g, '_');
     for (const g of groups) {
-      const gId = String(g.attrs?.id ?? '').toLowerCase();
       const gName = String(g.attrs?.name ?? '').toLowerCase();
-      if (gId === safeId || gName === safeId) {
+      const gId = String(g.attrs?.id ?? '').toLowerCase();
+      if (
+        gName === safeName ||
+        gName === safeNameClean ||
+        gId === safeName ||
+        gId === safeNameClean ||
+        (safeName.length > 3 && (gName.includes(safeName) || safeName.includes(gName))) ||
+        (safeNameClean.length > 3 && (gName.includes(safeNameClean) || safeNameClean.includes(gName)))
+      ) {
         targetGroup = g;
         break;
       }
-    }
-  }
-
-  // 3. Match by areaName
-  if (!targetGroup && areaName) {
-    const safeName = areaName.toLowerCase().trim();
-    for (const g of groups) {
-      const gName = String(g.attrs?.name ?? '').toLowerCase();
-      if (gName && (gName.includes(safeName) || safeName.includes(gName))) {
-        targetGroup = g;
-        break;
+      // Check child text shapes inside the group
+      if (typeof g.getChildren === 'function') {
+        const children = g.getChildren();
+        const hasMatchingText = children.some((c) => {
+          const txt = typeof c.text === 'function' ? c.text().toLowerCase() : String(c.attrs?.text ?? '').toLowerCase();
+          return txt && (txt === safeName || safeName.includes(txt) || txt.includes(safeName));
+        });
+        if (hasMatchingText) {
+          targetGroup = g;
+          break;
+        }
       }
     }
   }
@@ -274,6 +299,22 @@ async function handleSelectArea(
     });
     if (interactiveGroups.length === 1) {
       targetGroup = interactiveGroups[0] ?? null;
+    }
+  }
+
+  if (!targetGroup && coords && coords.x !== undefined && coords.y !== undefined) {
+    // Coordinate fallback on canvas container
+    const container = stage.container();
+    if (container) {
+      const cRect = container.getBoundingClientRect();
+      const cx = coords.width ? coords.x + coords.width / 2 : coords.x;
+      const cy = coords.height ? coords.y + coords.height / 2 : coords.y;
+      const scaleX = typeof stage.scaleX === 'function' ? stage.scaleX() : 1;
+      const scaleY = typeof stage.scaleY === 'function' ? stage.scaleY() : 1;
+      const clientX = cRect.left + cx * scaleX;
+      const clientY = cRect.top + cy * scaleY;
+      dispatchNativeEvents(stage, clientX, clientY);
+      return { success: true, transitioned: false, message: 'Dispatched simulated coordinate click to canvas' };
     }
   }
 
@@ -322,8 +363,8 @@ async function handleSelectArea(
     }
   }
 
-  // Poll for view transition (up to 2500ms)
-  const maxWait = 25;
+  // Poll for view transition (up to 800ms)
+  const maxWait = 8;
   for (let i = 0; i < maxWait; i++) {
     await new Promise((r) => setTimeout(r, 100));
     if (isSectionViewActive()) {
@@ -379,7 +420,12 @@ function hasDomSelectionIndicator(label?: string): boolean {
   if (!bar) return false;
   const text = (bar.textContent || '').toUpperCase();
   if (label && text.includes(label.toUpperCase())) return true;
-  if (text.includes('VÉ') || text.includes('GHẾ') || text.includes('TIẾP TỤC') || text.includes('ĐẶT VÉ')) {
+  if (
+    text.includes('VÉ') ||
+    text.includes('GHẾ') ||
+    text.includes('TIẾP TỤC') ||
+    text.includes('ĐẶT VÉ')
+  ) {
     return true;
   }
   return false;
@@ -404,8 +450,12 @@ function findSeatCandidates(
     const attrs = circle.attrs || {};
     const cId = String(attrs.id ?? (typeof circle.id === 'function' ? circle.id() : '')).trim();
     const cSeatId = String(attrs.seatId ?? attrs['data-seat-id'] ?? attrs['data-id'] ?? '').trim();
-    const cName = String(attrs.name ?? (typeof circle.name === 'function' ? circle.name() : '')).trim().toLowerCase();
-    const cLabel = String(attrs.label ?? '').trim().toLowerCase();
+    const cName = String(attrs.name ?? (typeof circle.name === 'function' ? circle.name() : ''))
+      .trim()
+      .toLowerCase();
+    const cLabel = String(attrs.label ?? '')
+      .trim()
+      .toLowerCase();
 
     if (safeId && (cId === safeId || cSeatId === safeId)) {
       out.push({ node: circle, distance: 0 });
@@ -508,11 +558,7 @@ async function clickSeatNode(
         { evt: new MouseEvent('click', { bubbles: true, button: 0 }), target: node },
         true
       );
-      node.fire(
-        'tap',
-        { evt: { type: 'tap' }, target: node },
-        true
-      );
+      node.fire('tap', { evt: { type: 'tap' }, target: node }, true);
     },
   });
 
@@ -529,10 +575,20 @@ async function clickSeatNode(
 
   // Check if DOM selection indicator changed even if node signature didn't
   if (hasDomSelectionIndicator()) {
-    return { changed: true, method: attempts[0]?.method || 'native', before, after: nodeSignature(node) };
+    return {
+      changed: true,
+      method: attempts[0]?.method || 'native',
+      before,
+      after: nodeSignature(node),
+    };
   }
 
-  return { changed: false, method: attempts[0]?.method || 'none', before, after: nodeSignature(node) };
+  return {
+    changed: false,
+    method: attempts[0]?.method || 'none',
+    before,
+    after: nodeSignature(node),
+  };
 }
 
 /**

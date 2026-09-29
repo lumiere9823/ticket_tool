@@ -21,7 +21,11 @@ export type ExtensionMessageType =
   | 'JOURNEY_UPDATE'
   | 'REQUEST_DISCOVERY_SCAN'
   | 'FETCH_SEATMAP_REQUEST'
-  | 'FETCH_SEATMAP_RESPONSE';
+  | 'FETCH_SEATMAP_RESPONSE'
+  | 'RESET_CONFIG_REQUESTED'
+  | 'RESET_CONFIG_DONE'
+  | 'SCHEDULED_ARM_CONFIRMED'
+  | 'CANCEL_SCHEDULED_ARM';
 
 export interface BaseExtensionMessage {
   type: ExtensionMessageType;
@@ -222,6 +226,8 @@ export interface ArmRequestedMessage extends BaseExtensionMessage {
         agreeToTerms?: boolean | undefined;
       }
     | undefined;
+  scopedPurchasePlan?:
+    import('../../domain/entities/ScopedPurchasePlan').ScopedPurchasePlan | undefined;
 }
 
 export interface RequestDiscoveryScanMessage extends BaseExtensionMessage {
@@ -239,6 +245,23 @@ export interface FetchSeatmapResponseMessage extends BaseExtensionMessage {
   success: boolean;
   data?: unknown;
   error?: string;
+}
+
+export interface ResetConfigRequestedMessage extends BaseExtensionMessage {
+  type: 'RESET_CONFIG_REQUESTED';
+}
+
+export interface ResetConfigDoneMessage extends BaseExtensionMessage {
+  type: 'RESET_CONFIG_DONE';
+}
+
+export interface ScheduledArmConfirmedMessage extends BaseExtensionMessage {
+  type: 'SCHEDULED_ARM_CONFIRMED';
+  scheduledAt: string;
+}
+
+export interface CancelScheduledArmMessage extends BaseExtensionMessage {
+  type: 'CANCEL_SCHEDULED_ARM';
 }
 
 export type ExtensionMessage =
@@ -260,4 +283,9 @@ export type ExtensionMessage =
   | JourneyUpdateMessage
   | RequestDiscoveryScanMessage
   | FetchSeatmapRequestMessage
-  | FetchSeatmapResponseMessage;
+  | FetchSeatmapResponseMessage
+  | ResetConfigRequestedMessage
+  | ResetConfigDoneMessage
+  | ScheduledArmConfirmedMessage
+  | CancelScheduledArmMessage;
+

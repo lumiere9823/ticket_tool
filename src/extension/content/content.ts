@@ -1,3 +1,4 @@
+/// <reference types="chrome" />
 import { ChromeMessageBus } from '../../infrastructure/messaging/ChromeMessageBus';
 import { TicketboxJourneyAdapter } from '../../infrastructure/ticketbox/TicketboxJourneyAdapter';
 import { SanitizedLogger } from '../../infrastructure/logging/SanitizedLogger';
@@ -8,6 +9,11 @@ import { PurchaseState, StateContext } from '../../domain/states/PurchaseState';
 import { ChromeStorageRepository } from '../../infrastructure/storage/ChromeStorageRepository';
 import { BookingPreferences } from '../../domain/entities/BookingJourneyModels';
 import { LatencyTracker } from '../../application/services/LatencyTracker';
+import {
+  filterByScope,
+  pickTarget,
+  ScopedPurchasePlan,
+} from '../../domain/entities/ScopedPurchasePlan';
 
 const logger = new SanitizedLogger({ state: 'CONTENT_SCRIPT' });
 const messageBus = new ChromeMessageBus(logger);
@@ -44,10 +50,12 @@ const journeyUseCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, m
 
 let isMonitoringActive = false;
 let isExecutingJourney = false;
-let monitoringTimer: number | null = null;
+let monitoringTimeout: number | null = null;
 let debounceTimer: number | null = null;
 let awaitingNavigationFromUrl: string | null = null;
 let awaitingNavigationTimestamp = 0;
+let lastWaitingLogTimestamp = 0;
+const triedCandidateKeysInCycle = new Set<string>();
 
 function ensurePageBridgeInjected(): void {
   if (typeof document === 'undefined') return;
@@ -73,14 +81,174 @@ logger.info('Ticketbox Content Script loaded on page', {
 let lastSnapshotSignature = '';
 
 /**
+ * Stops monitoring and marks state as STOPPED_LIMIT_REACHED with a specific reason.
+ */
+async function stopMonitoringWithLimitReason(reason: string): Promise<void> {
+  isMonitoringActive = false;
+  isExecutingJourney = false;
+  if (monitoringTimeout) {
+    window.clearTimeout(monitoringTimeout);
+    monitoringTimeout = null;
+  }
+
+  await storage.savePersistentState({
+    stopReason: reason,
+    currentPhase: 'STOPPED_LIMIT_REACHED',
+  });
+
+  try {
+    stateMachine.transition({ type: 'LIMIT_REACHED' });
+  } catch (err) {
+    logger.warn('Failed state transition on LIMIT_REACHED', { err: String(err) });
+  }
+
+  await messageBus.publish({
+    type: 'STATE_CHANGED',
+    timestamp: new Date().toISOString(),
+    attemptId: stateMachine.attemptId,
+    state: PurchaseState.STOPPED_LIMIT_REACHED,
+    context: {
+      ...stateMachine.getContext(),
+      currentState: PurchaseState.STOPPED_LIMIT_REACHED,
+      failureMessage: reason,
+    },
+  });
+}
+
+/**
+ * Pre-poll stop checks (B3):
+ * 1. User stopped
+ * 2. Duration ceiling reached (startedAt + maxDurationMinutes)
+ * 3. StopAt schedule reached
+ * 4. Max attempts limit reached
+ */
+async function checkLimitsAndStopIfNeeded(scopedPlan?: ScopedPurchasePlan): Promise<boolean> {
+  if (!isMonitoringActive) return true;
+  if (
+    stateMachine.state === PurchaseState.STOPPED ||
+    stateMachine.state === PurchaseState.STOPPED_LIMIT_REACHED ||
+    stateMachine.state === PurchaseState.STOPPED_NO_TARGET
+  ) {
+    return true;
+  }
+
+  const pState = await storage.getPersistentState();
+  const now = Date.now();
+
+  // 1. Duration check
+  if (pState?.startedAt && scopedPlan?.persistence?.maxDurationMinutes) {
+    const startedAtMs =
+      typeof pState.startedAt === 'number'
+        ? pState.startedAt
+        : new Date(pState.startedAt).getTime();
+    const maxDurationMs = scopedPlan.persistence.maxDurationMinutes * 60 * 1000;
+    if (now - startedAtMs >= maxDurationMs) {
+      const reason = `Duration ceiling reached (${scopedPlan.persistence.maxDurationMinutes} minutes)`;
+      logger.info(reason);
+      await stopMonitoringWithLimitReason(reason);
+      return true;
+    }
+  }
+
+  // 2. StopAt check
+  if (scopedPlan?.persistence?.stopAt) {
+    const stopAtTime = new Date(scopedPlan.persistence.stopAt).getTime();
+    if (!isNaN(stopAtTime) && now >= stopAtTime) {
+      const reason = `StopAt schedule reached (${scopedPlan.persistence.stopAt})`;
+      logger.info(reason);
+      await stopMonitoringWithLimitReason(reason);
+      return true;
+    }
+  }
+
+  // 3. Max attempts check
+  if (
+    scopedPlan?.persistence?.maxAttempts &&
+    (pState?.attemptsCount ?? 0) >= scopedPlan.persistence.maxAttempts
+  ) {
+    const reason = `Max attempts limit reached (${pState?.attemptsCount}/${scopedPlan.persistence.maxAttempts})`;
+    logger.info(reason);
+    await stopMonitoringWithLimitReason(reason);
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Schedules the next polling execution using recursive setTimeout with jitter.
+ * Strictly enforces floor of 1500ms (B3 requirement).
+ */
+function scheduleNextPoll(delayMs?: number): void {
+  if (!isExtensionContextValid() || !isMonitoringActive) {
+    if (monitoringTimeout) {
+      window.clearTimeout(monitoringTimeout);
+      monitoringTimeout = null;
+    }
+    return;
+  }
+
+  if (monitoringTimeout) {
+    window.clearTimeout(monitoringTimeout);
+    monitoringTimeout = null;
+  }
+
+  let finalDelay = delayMs ?? 2000;
+  finalDelay = Math.max(1500, Math.round(finalDelay));
+
+  monitoringTimeout = window.setTimeout(async () => {
+    await runMonitoringCycle();
+  }, finalDelay);
+}
+
+/**
+ * Runs a single monitoring cycle, checks boundaries, discovers catalog,
+ * and recursively schedules the next poll with jitter.
+ */
+async function runMonitoringCycle(): Promise<void> {
+  if (!isExtensionContextValid() || !isMonitoringActive) return;
+
+  try {
+    const config = await storage.getConfiguration();
+    const scopedPlan = config?.scopedPurchasePlan;
+
+    const stopped = await checkLimitsAndStopIfNeeded(scopedPlan);
+    if (stopped) return;
+
+    await performDiscoveryScan();
+
+    if (isMonitoringActive) {
+      const baseInterval = scopedPlan?.persistence?.pollIntervalMs ?? 2000;
+      const jitterRatio = scopedPlan?.persistence?.jitterRatio ?? 0.2;
+      const jitter = (Math.random() * 2 - 1) * jitterRatio * baseInterval;
+      const nextDelay = Math.max(1500, Math.round(baseInterval + jitter));
+      scheduleNextPoll(nextDelay);
+    }
+  } catch (err: unknown) {
+    const msg = String(err);
+    if (msg.includes('Extension context invalidated')) {
+      if (monitoringTimeout) {
+        window.clearTimeout(monitoringTimeout);
+        monitoringTimeout = null;
+      }
+      return;
+    }
+    logger.error('Error in runMonitoringCycle', err);
+    if (isMonitoringActive) {
+      scheduleNextPoll(2000);
+    }
+  }
+}
+
+/**
  * Periodically or reactively observes page metadata and publishes snapshots and journey updates.
  * Passive discovery scan does not mutate page state (strictly Phase 8 / safe architecture compliant).
  */
 async function performDiscoveryScan(force = false): Promise<void> {
   if (!isExtensionContextValid()) {
-    if (monitoringTimer) {
-      clearInterval(monitoringTimer);
-      monitoringTimer = null;
+    if (monitoringTimeout) {
+      window.clearTimeout(monitoringTimeout);
+      monitoringTimeout = null;
     }
     return;
   }
@@ -98,13 +266,6 @@ async function performDiscoveryScan(force = false): Promise<void> {
       : undefined;
 
     const eventTitle = catalog.eventTitle ?? eventState.event?.name ?? document.title;
-
-    logger.info('Discovery scan completed', {
-      eventTitle,
-      ticketCount: allTickets.length,
-      availableCount: availableTickets.length,
-      monitoringActive: isMonitoringActive,
-    });
 
     // Build full TicketCatalogSnapshot with rich TicketOption data
     const catalogSnapshot = {
@@ -171,10 +332,10 @@ async function performDiscoveryScan(force = false): Promise<void> {
       })),
       summary: summary
         ? {
-          subtotal: summary.subtotal,
-          fees: summary.fees,
-          total: summary.total,
-        }
+            subtotal: summary.subtotal,
+            fees: summary.fees,
+            total: summary.total,
+          }
         : undefined,
     };
 
@@ -192,6 +353,13 @@ async function performDiscoveryScan(force = false): Promise<void> {
     }
 
     if (isExtensionContextValid() && (hasChanged || force)) {
+      logger.info('Discovery scan completed', {
+        eventTitle,
+        ticketCount: allTickets.length,
+        availableCount: availableTickets.length,
+        monitoringActive: isMonitoringActive,
+      });
+
       // Publish legacy PAGE_DISCOVERY_SNAPSHOT for backward compatibility
       await messageBus.publish({
         type: 'PAGE_DISCOVERY_SNAPSHOT',
@@ -252,9 +420,9 @@ async function performDiscoveryScan(force = false): Promise<void> {
   } catch (err: unknown) {
     const msg = String(err);
     if (msg.includes('Extension context invalidated')) {
-      if (monitoringTimer) {
-        clearInterval(monitoringTimer);
-        monitoringTimer = null;
+      if (monitoringTimeout) {
+        window.clearTimeout(monitoringTimeout);
+        monitoringTimeout = null;
       }
       return;
     }
@@ -274,10 +442,16 @@ async function attemptBookingJourney(): Promise<void> {
     const config = await storage.getConfiguration();
     if (!config) return;
 
+    const scopedPlan = config.scopedPurchasePlan;
+    if (await checkLimitsAndStopIfNeeded(scopedPlan)) return;
+
     const plan = config.purchasePlan;
-    const priorities = plan
-      ? plan.ticketRules.map((r) => r.ticketName || r.ticketId).filter(Boolean)
-      : config.preferences?.categoryPriority || [];
+    const priorities =
+      scopedPlan && scopedPlan.targets.length > 0
+        ? scopedPlan.targets.flatMap((t) => t.ticketTypeIds)
+        : plan
+          ? plan.ticketRules.map((r) => r.ticketName || r.ticketId).filter(Boolean)
+          : config.preferences?.categoryPriority || [];
 
     const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
     const isOnQuestionForm = currentUrl.includes('/question-form');
@@ -288,51 +462,146 @@ async function attemptBookingJourney(): Promise<void> {
       return;
     }
 
+    const scopedShowingIds = scopedPlan?.targets.map((t) => t.showingId).filter(Boolean);
+
     const preferences: BookingPreferences = {
       categoryPriority: priorities,
-      quantity: plan?.ticketRules[0]?.quantity ?? config.preferences?.quantity ?? 1,
-      allowFallback: plan?.allowFallback ?? config.preferences?.allowFallback ?? true,
+      quantity:
+        scopedPlan?.quantity ?? plan?.ticketRules[0]?.quantity ?? config.preferences?.quantity ?? 1,
+      allowFallback: scopedPlan
+        ? false
+        : (plan?.allowFallback ?? config.preferences?.allowFallback ?? true),
       seatPreference: 'ANY_AVAILABLE',
       nonAdjacentFallback: 'SELECT_NON_ADJACENT',
       userProfile: config.userProfile,
-      preferredShowingId: plan?.showingId ?? null,
+      preferredShowingId:
+        scopedShowingIds && scopedShowingIds.length > 0
+          ? scopedShowingIds[0]
+          : (plan?.showingId ?? null),
+      scopedPurchasePlan: scopedPlan,
+      allowPartialQuantity: scopedPlan?.allowPartialQuantity ?? false,
     };
 
+    let activeTargetKey: string | null = null;
+
     if (!isOnQuestionForm && !isOnPayment) {
-      // Discover catalog for the preferred showing (or all showings)
-      const catalog = await adapter.discoverTicketCatalog(preferences.preferredShowingId);
-      const relevantShowings = preferences.preferredShowingId
-        ? catalog.showings.filter((s) => s.id === preferences.preferredShowingId)
-        : catalog.showings;
-      const allTickets = (relevantShowings.length > 0 ? relevantShowings : catalog.showings).flatMap(
-        (s) => s.ticketTypes
+      // Discover catalog for the preferred showing (or allowed showings only)
+      const catalog = await adapter.discoverTicketCatalog(
+        preferences.preferredShowingId,
+        scopedShowingIds && scopedShowingIds.length > 0 ? scopedShowingIds : null
       );
-      const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
 
-      if (availableTickets.length === 0) {
-        logger.info('No tickets currently available. Continuing monitoring...');
-        return;
-      }
+      // If scopedPlan is configured, use domain filterByScope and pickTarget
+      if (scopedPlan && scopedPlan.targets.length > 0) {
+        const scopeResult = filterByScope(catalog, scopedPlan);
+        if (scopeResult.validCandidates.length === 0) {
+          if (stateMachine.state === PurchaseState.MONITORING) {
+            try {
+              stateMachine.transition({ type: 'WAITING_FOR_STOCK' });
+            } catch {
+              // ignore
+            }
+          }
+          const now = Date.now();
+          if (now - lastWaitingLogTimestamp > 30000) {
+            lastWaitingLogTimestamp = now;
+            logger.info('No whitelisted tickets currently available. Continuing monitoring...', {
+              inScopeCount: scopeResult.inScopeCandidates.length,
+              rejectedReasons: scopeResult.rejectedCandidates.map(
+                (r) => `${r.ticketName}: ${r.reason}`
+              ),
+            });
+          }
+          return;
+        }
 
-      // Check if any available ticket matches user priority or fallback
-      const hasMatch =
-        preferences.allowFallback ||
-        availableTickets.some((t) =>
-          priorities.some(
-            (p) =>
-              t.name.toLowerCase().includes(p.toLowerCase()) ||
-              p.toLowerCase().includes(t.name.toLowerCase())
-          )
+        // Target cycling (B3): Filter out candidates already tried in current cycle
+        let candidatePool = scopeResult.validCandidates.filter(
+          (c) => !triedCandidateKeysInCycle.has(`${c.showingId}_${c.ticketId}`)
         );
 
-      if (!hasMatch) {
-        logger.info('Available tickets do not match priority rules. Continuing monitoring...');
-        return;
+        if (candidatePool.length === 0) {
+          // Full cycle exhausted for all valid candidates; reset cycle and wait for stock
+          triedCandidateKeysInCycle.clear();
+          candidatePool = scopeResult.validCandidates;
+          if (stateMachine.state !== PurchaseState.WAITING_FOR_STOCK) {
+            try {
+              stateMachine.transition({ type: 'WAITING_FOR_STOCK' });
+            } catch {
+              // ignore
+            }
+          }
+          return;
+        }
+
+        const chosenTarget = pickTarget(candidatePool, scopedPlan);
+        if (!chosenTarget) {
+          triedCandidateKeysInCycle.clear();
+          return;
+        }
+
+        activeTargetKey = `${chosenTarget.showingId}_${chosenTarget.ticketId}`;
+
+        // Attempt counting (B3): pure discovery does NOT increment attempts.
+        // Increment attemptsCount only when starting booking journey execution.
+        const pState = await storage.getPersistentState();
+        const newAttempts = (pState?.attemptsCount ?? 0) + 1;
+        await storage.savePersistentState({
+          attemptsCount: newAttempts,
+          lastTarget: {
+            showingId: chosenTarget.showingId,
+            ticketTypeId: chosenTarget.ticketId,
+            ticketName: chosenTarget.ticketName,
+          },
+          currentPhase: 'SELECTING',
+        });
+
+        if (
+          scopedPlan.persistence?.maxAttempts &&
+          newAttempts > scopedPlan.persistence.maxAttempts
+        ) {
+          await stopMonitoringWithLimitReason(
+            `Max attempts limit reached (${newAttempts}/${scopedPlan.persistence.maxAttempts})`
+          );
+          return;
+        }
+
+        preferences.preferredShowingId = chosenTarget.showingId;
+        preferences.categoryPriority = [chosenTarget.ticketName, chosenTarget.ticketId];
+      } else {
+        const relevantShowings = preferences.preferredShowingId
+          ? catalog.showings.filter((s) => s.id === preferences.preferredShowingId)
+          : catalog.showings;
+        const allTickets = (
+          relevantShowings.length > 0 ? relevantShowings : catalog.showings
+        ).flatMap((s) => s.ticketTypes);
+        const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
+
+        if (availableTickets.length === 0) {
+          logger.info('No tickets currently available. Continuing monitoring...');
+          return;
+        }
+
+        // Check if any available ticket matches user priority or fallback
+        const hasMatch =
+          preferences.allowFallback ||
+          availableTickets.some((t) =>
+            priorities.some(
+              (p) =>
+                t.name.toLowerCase().includes(p.toLowerCase()) ||
+                p.toLowerCase().includes(t.name.toLowerCase())
+            )
+          );
+
+        if (!hasMatch) {
+          logger.info('Available tickets do not match priority rules. Continuing monitoring...');
+          return;
+        }
       }
     }
 
     logger.info('Matching ticket detected! Starting booking journey execution...', {
-      priorities,
+      priorities: preferences.categoryPriority,
       quantity: preferences.quantity,
     });
 
@@ -350,6 +619,25 @@ async function attemptBookingJourney(): Promise<void> {
       finalState: result.finalState,
       requiresUserAction: result.requiresUserAction,
     });
+
+    if (!result.success) {
+      if (activeTargetKey) {
+        triedCandidateKeysInCycle.add(activeTargetKey);
+        try {
+          stateMachine.transition({ type: 'RETRY_TARGET' });
+        } catch {
+          // ignore
+        }
+        await storage.savePersistentState({
+          currentPhase: 'RETRYING_TARGET',
+        });
+      }
+    } else {
+      triedCandidateKeysInCycle.clear();
+      await storage.savePersistentState({
+        currentPhase: result.finalState,
+      });
+    }
 
     // When tickets or seats are selected and navigation is pending, yield and await navigation
     if (
@@ -386,24 +674,26 @@ async function attemptBookingJourney(): Promise<void> {
     ) {
       logger.info(`Journey reached target state ${result.finalState}. Halting monitoring loop.`);
       isMonitoringActive = false;
-      if (monitoringTimer) {
-        clearInterval(monitoringTimer);
-        monitoringTimer = null;
+      if (monitoringTimeout) {
+        window.clearTimeout(monitoringTimeout);
+        monitoringTimeout = null;
       }
     } else if (result.finalState === PurchaseState.FAILED) {
-      logger.info('Journey execution failed after retries. Halting monitoring loop to prevent retry storm.');
+      logger.info(
+        'Journey execution failed after retries. Halting monitoring loop to prevent retry storm.'
+      );
       isMonitoringActive = false;
-      if (monitoringTimer) {
-        clearInterval(monitoringTimer);
-        monitoringTimer = null;
+      if (monitoringTimeout) {
+        window.clearTimeout(monitoringTimeout);
+        monitoringTimeout = null;
       }
     }
   } catch (err: unknown) {
     const msg = String(err);
     if (msg.includes('Extension context invalidated')) {
-      if (monitoringTimer) {
-        clearInterval(monitoringTimer);
-        monitoringTimer = null;
+      if (monitoringTimeout) {
+        window.clearTimeout(monitoringTimeout);
+        monitoringTimeout = null;
       }
       return;
     }
@@ -432,6 +722,14 @@ window.setTimeout(() => scheduleDiscoveryScan(0), 2500);
 async function checkRehydration(): Promise<void> {
   if (!isExtensionContextValid()) return;
   try {
+    const config = await storage.getConfiguration();
+    if (config?.scheduledArmAt && new Date(config.scheduledArmAt).getTime() > Date.now()) {
+      logger.info('Scheduled ARM pending in future; skipping monitoring rehydration in content script', {
+        scheduledArmAt: config.scheduledArmAt,
+      });
+      return;
+    }
+
     const lastState = await storage.getLastState();
     if (
       lastState &&
@@ -450,19 +748,7 @@ async function checkRehydration(): Promise<void> {
       });
       isMonitoringActive = true;
       scheduleDiscoveryScan(200);
-      setTimeout(attemptBookingJourney, 800);
-      if (!monitoringTimer) {
-        monitoringTimer = window.setInterval(() => {
-          if (!isExtensionContextValid()) {
-            if (monitoringTimer) {
-              clearInterval(monitoringTimer);
-              monitoringTimer = null;
-            }
-            return;
-          }
-          performDiscoveryScan();
-        }, 2000);
-      }
+      scheduleNextPoll(1500);
     }
   } catch (err: unknown) {
     if (String(err).includes('Extension context invalidated')) return;
@@ -471,6 +757,28 @@ async function checkRehydration(): Promise<void> {
 }
 
 checkRehydration();
+
+// Page Visibility API tracking (B4 requirement)
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', async () => {
+    if (!isExtensionContextValid()) return;
+    try {
+      const isHidden = document.hidden;
+      await storage.savePersistentState({
+        tabHiddenWarning: isHidden,
+      });
+      if (isHidden) {
+        logger.warn(
+          'Tab hidden: Browser background timer throttling may affect polling interval. Keep tab active in foreground for best results.'
+        );
+      } else {
+        logger.info('Tab returned to foreground.');
+      }
+    } catch {
+      // ignore
+    }
+  });
+}
 
 // Set up MutationObserver to re-scan when client-side React mounts tickets
 if (typeof MutationObserver !== 'undefined') {
@@ -521,7 +829,14 @@ if (typeof window !== 'undefined') {
 
   window.addEventListener('popstate', checkUrlChange);
   window.addEventListener('hashchange', checkUrlChange);
-  window.setInterval(checkUrlChange, 250);
+  const scheduleUrlCheck = () => {
+    if (!isExtensionContextValid()) return;
+    window.setTimeout(() => {
+      checkUrlChange();
+      scheduleUrlCheck();
+    }, 250);
+  };
+  scheduleUrlCheck();
 }
 
 // Handle coordination messages from the Service Worker and Popup
@@ -535,31 +850,42 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'ARM_REQUESTED': {
       logger.info('Content script received ARM_REQUESTED');
+      // If ARM is scheduled for a future time, DO NOT start monitoring!
+      const startAt = message.scopedPurchasePlan?.persistence?.startAt;
+      if (startAt) {
+        const startMs = new Date(startAt).getTime();
+        if (startMs > Date.now()) {
+          logger.info('ARM is scheduled for future time; content script will wait for alarm', {
+            startAt,
+            delaySeconds: Math.round((startMs - Date.now()) / 1000),
+          });
+          isMonitoringActive = false;
+          if (monitoringTimeout) {
+            window.clearTimeout(monitoringTimeout);
+            monitoringTimeout = null;
+          }
+          break;
+        }
+      }
+
       try {
         const s = stateMachine.state;
-        if (
-          s !== PurchaseState.STOPPED &&
-          s !== PurchaseState.FAILED &&
-          s !== PurchaseState.CONFIRMED &&
-          s !== PurchaseState.READY &&
-          s !== PurchaseState.INIT
-        ) {
-          stateMachine.transition({ type: 'STOP_REQUESTED', reason: 'Re-arm reset' });
-        }
-        if (
-          stateMachine.state === PurchaseState.STOPPED ||
-          stateMachine.state === PurchaseState.FAILED ||
-          stateMachine.state === PurchaseState.CONFIRMED
-        ) {
+        if (s !== PurchaseState.READY && s !== PurchaseState.IDLE && s !== PurchaseState.INIT) {
           stateMachine.transition({ type: 'RESET_REQUESTED' });
         }
-        if (stateMachine.state === PurchaseState.READY || stateMachine.state === PurchaseState.IDLE) {
+        if (
+          stateMachine.state === PurchaseState.READY ||
+          stateMachine.state === PurchaseState.IDLE
+        ) {
           stateMachine.transition({ type: 'ARM' });
           stateMachine.transition({ type: 'MONITORING_STARTED' });
         }
       } catch (err) {
-        logger.warn('Content script state machine transition during ARM failed', { err: String(err) });
+        logger.warn('Content script state machine transition during ARM failed', {
+          err: String(err),
+        });
         try {
+          stateMachine.transition({ type: 'RESET_REQUESTED' });
           stateMachine.transition({ type: 'ARM' });
           stateMachine.transition({ type: 'MONITORING_STARTED' });
         } catch {
@@ -569,20 +895,17 @@ messageBus.subscribe((message: ExtensionMessage) => {
       isMonitoringActive = true;
       isExecutingJourney = false;
       awaitingNavigationFromUrl = null;
-      performDiscoveryScan();
-      setTimeout(attemptBookingJourney, 400);
-      if (!monitoringTimer) {
-        monitoringTimer = window.setInterval(() => {
-          if (!isExtensionContextValid()) {
-            if (monitoringTimer) {
-              clearInterval(monitoringTimer);
-              monitoringTimer = null;
-            }
-            return;
-          }
-          performDiscoveryScan();
-        }, 2000);
-      }
+      triedCandidateKeysInCycle.clear();
+      storage
+        .savePersistentState({
+          startedAt: new Date().toISOString(),
+          attemptsCount: 0,
+          currentPhase: 'ARMED',
+          stopReason: undefined,
+        })
+        .catch(() => {});
+      scheduleDiscoveryScan(50);
+      scheduleNextPoll(400);
       break;
     }
 
@@ -591,30 +914,31 @@ messageBus.subscribe((message: ExtensionMessage) => {
       try {
         const s = stateMachine.state;
         if (
-          s !== PurchaseState.STOPPED &&
-          s !== PurchaseState.FAILED &&
-          s !== PurchaseState.CONFIRMED &&
           s !== PurchaseState.READY &&
+          s !== PurchaseState.IDLE &&
+          s !== PurchaseState.ARMED &&
+          s !== PurchaseState.MONITORING &&
           s !== PurchaseState.INIT
-        ) {
-          stateMachine.transition({ type: 'STOP_REQUESTED', reason: 'Start monitoring reset' });
-        }
-        if (
-          stateMachine.state === PurchaseState.STOPPED ||
-          stateMachine.state === PurchaseState.FAILED ||
-          stateMachine.state === PurchaseState.CONFIRMED
         ) {
           stateMachine.transition({ type: 'RESET_REQUESTED' });
         }
-        if (stateMachine.state === PurchaseState.READY || stateMachine.state === PurchaseState.IDLE) {
+        if (
+          stateMachine.state === PurchaseState.READY ||
+          stateMachine.state === PurchaseState.IDLE
+        ) {
           stateMachine.transition({ type: 'ARM' });
+          stateMachine.transition({ type: 'MONITORING_STARTED' });
+        } else if (stateMachine.state === PurchaseState.ARMED) {
           stateMachine.transition({ type: 'MONITORING_STARTED' });
         }
       } catch (err) {
-        logger.warn('Content script state machine transition during START_MONITORING failed', { err: String(err) });
+        logger.warn('Content script state machine transition during START_MONITORING failed', {
+          err: String(err),
+        });
         try {
-          stateMachine.transition({ type: 'ARM' });
-          stateMachine.transition({ type: 'MONITORING_STARTED' });
+          if (stateMachine.state === PurchaseState.ARMED) {
+            stateMachine.transition({ type: 'MONITORING_STARTED' });
+          }
         } catch {
           // ignore
         }
@@ -622,41 +946,95 @@ messageBus.subscribe((message: ExtensionMessage) => {
       isMonitoringActive = true;
       isExecutingJourney = false;
       awaitingNavigationFromUrl = null;
-      performDiscoveryScan();
-      setTimeout(attemptBookingJourney, 400);
-      if (!monitoringTimer) {
-        monitoringTimer = window.setInterval(() => {
-          if (!isExtensionContextValid()) {
-            if (monitoringTimer) {
-              clearInterval(monitoringTimer);
-              monitoringTimer = null;
-            }
-            return;
-          }
-          performDiscoveryScan();
-        }, 2000);
-      }
+      triedCandidateKeysInCycle.clear();
+      storage
+        .savePersistentState({
+          startedAt: new Date().toISOString(),
+          attemptsCount: 0,
+          currentPhase: 'MONITORING',
+          stopReason: undefined,
+        })
+        .catch(() => {});
+      scheduleDiscoveryScan(50);
+      scheduleNextPoll(400);
       break;
     }
 
     case 'STOP_REQUESTED': {
+      if (!isMonitoringActive && stateMachine.state === PurchaseState.STOPPED) {
+        break;
+      }
       logger.info('Content script received STOP_REQUESTED');
       isMonitoringActive = false;
       isExecutingJourney = false;
       awaitingNavigationFromUrl = null;
-      if (monitoringTimer) {
-        clearInterval(monitoringTimer);
-        monitoringTimer = null;
+      if (monitoringTimeout) {
+        window.clearTimeout(monitoringTimeout);
+        monitoringTimeout = null;
       }
       try {
         if (stateMachine.state !== PurchaseState.STOPPED) {
-          stateMachine.transition({ type: 'STOP_REQUESTED', reason: message.reason || 'User requested stop' });
+          stateMachine.transition({
+            type: 'STOP_REQUESTED',
+            reason: message.reason || 'User requested stop',
+          });
         }
       } catch (err) {
         logger.warn('Failed to transition to STOPPED in content script', { err: String(err) });
       }
       break;
     }
+
+    case 'STATE_CHANGED': {
+      if (
+        message.state === PurchaseState.STOPPED ||
+        message.state === PurchaseState.STOPPED_LIMIT_REACHED ||
+        message.state === PurchaseState.STOPPED_NO_TARGET
+      ) {
+        const stopReason =
+          message.type === 'STATE_CHANGED'
+            ? message.context?.failureMessage
+            : undefined;
+        if (stopReason === 'Re-arm reset' || stopReason === 'Start monitoring reset') {
+          break;
+        }
+        isMonitoringActive = false;
+        isExecutingJourney = false;
+        awaitingNavigationFromUrl = null;
+        if (monitoringTimeout) {
+          window.clearTimeout(monitoringTimeout);
+          monitoringTimeout = null;
+        }
+      } else if (
+        message.state === PurchaseState.ARMED ||
+        message.state === PurchaseState.MONITORING ||
+        message.state === PurchaseState.WAITING_FOR_STOCK
+      ) {
+        if (!isMonitoringActive) {
+          logger.info('STATE_CHANGED to active monitoring state; activating content script polling', {
+            state: message.state,
+          });
+          isMonitoringActive = true;
+          scheduleNextPoll(1000);
+        }
+      }
+      break;
+    }
+
+
+    case 'CANCEL_SCHEDULED_ARM': {
+
+      logger.info('Content script received CANCEL_SCHEDULED_ARM');
+      isMonitoringActive = false;
+      isExecutingJourney = false;
+      awaitingNavigationFromUrl = null;
+      if (monitoringTimeout) {
+        window.clearTimeout(monitoringTimeout);
+        monitoringTimeout = null;
+      }
+      break;
+    }
+
 
     default:
       break;
