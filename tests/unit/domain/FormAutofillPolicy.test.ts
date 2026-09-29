@@ -260,7 +260,8 @@ describe('FormAutofillPolicy', () => {
       fields: [
         {
           id: 'q-consent-yes',
-          label: 'Tôi đồng ý Ticketbox & BTC sử dụng thông tin đặt vé nhằm mục đích vận hành sự kiện [Có/Yes]',
+          label:
+            'Tôi đồng ý Ticketbox & BTC sử dụng thông tin đặt vé nhằm mục đích vận hành sự kiện [Có/Yes]',
           type: 'RADIO',
           required: true,
           value: 'Có/Yes',
@@ -284,7 +285,8 @@ describe('FormAutofillPolicy', () => {
         },
       ],
       hasConsentCheckbox: true,
-      consentLabel: 'Tôi đồng ý Ticketbox & BTC sử dụng thông tin đặt vé nhằm mục đích vận hành sự kiện [Có/Yes]',
+      consentLabel:
+        'Tôi đồng ý Ticketbox & BTC sử dụng thông tin đặt vé nhằm mục đích vận hành sự kiện [Có/Yes]',
     };
 
     const userProfile: UserProfileData = {

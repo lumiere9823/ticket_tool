@@ -1,5 +1,6 @@
 import { CandidateTicket } from '../entities/CandidateTicket';
 import { TicketPreference } from '../entities/TicketPreference';
+import { ScopedPurchasePlan } from '../entities/ScopedPurchasePlan';
 
 export interface SelectionResult {
   candidate: CandidateTicket;
@@ -18,13 +19,28 @@ export class SelectionStrategy {
    */
   public static selectCandidate(
     candidates: readonly CandidateTicket[],
-    preference: TicketPreference
+    preference: TicketPreference,
+    scopedPlan?: ScopedPurchasePlan | null
   ): SelectionResult | null {
     if (!candidates || candidates.length === 0) {
       return null;
     }
 
-    const availableCandidates = candidates.filter(
+    let candidatePool = candidates;
+    if (scopedPlan && scopedPlan.targets && scopedPlan.targets.length > 0) {
+      candidatePool = candidates.filter((c) => {
+        return scopedPlan.targets.some((target) => {
+          return (
+            target.ticketTypeIds.includes(c.id) || target.ticketTypeIds.includes(c.categoryName)
+          );
+        });
+      });
+      if (candidatePool.length === 0) {
+        return null;
+      }
+    }
+
+    const availableCandidates = candidatePool.filter(
       (c) => c.isAvailable && c.availableQuantity >= preference.quantity.value
     );
 
@@ -40,7 +56,8 @@ export class SelectionStrategy {
       const matching = availableCandidates.filter((c) => {
         if (priorityCategory === 'any') return true;
         const cat = c.categoryName.trim().toLowerCase();
-        return cat === priorityCategory || cat.includes(priorityCategory);
+        const cid = c.id.trim().toLowerCase();
+        return cat === priorityCategory || cat.includes(priorityCategory) || cid === priorityCategory;
       });
 
       if (matching.length > 0) {

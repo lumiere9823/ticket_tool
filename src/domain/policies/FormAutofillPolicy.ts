@@ -306,9 +306,11 @@ export class FormAutofillPolicy {
           const normGender = gender.toLowerCase();
           if (field.type === 'RADIO' || field.type === 'CHECKBOX') {
             const matchesOption =
-              (normGender.includes('nam') || normGender === 'male')
-                ? (normalizedLabel.includes('nam') || normalizedLabel.includes('male')) && !normalizedLabel.includes('nữ') && !normalizedLabel.includes('female')
-                : (normGender.includes('nữ') || normGender === 'female')
+              normGender.includes('nam') || normGender === 'male'
+                ? (normalizedLabel.includes('nam') || normalizedLabel.includes('male')) &&
+                  !normalizedLabel.includes('nữ') &&
+                  !normalizedLabel.includes('female')
+                : normGender.includes('nữ') || normGender === 'female'
                   ? normalizedLabel.includes('nữ') || normalizedLabel.includes('female')
                   : normalizedLabel.includes(normGender);
 

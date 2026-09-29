@@ -183,4 +183,101 @@ describe('PurchaseStateMachine', () => {
     sm3.transition({ type: 'PAYMENT_GATE' });
     expect(sm3.state).toBe(PurchaseState.PAYMENT_GATE);
   });
+
+  describe('C5 (A3, B1): Phase 2 Extended States & Transitions', () => {
+    it('supports WAITING_FOR_STOCK transitions and stock replenishment', () => {
+      const sm = new PurchaseStateMachine(PurchaseState.MONITORING);
+      sm.transition({ type: 'WAITING_FOR_STOCK' });
+      expect(sm.state).toBe(PurchaseState.WAITING_FOR_STOCK);
+
+      // When tickets become detected or stock available
+      sm.transition({ type: 'EVALUATING_TICKETS' });
+      expect(sm.state).toBe(PurchaseState.EVALUATING_TICKETS);
+
+      const sm2 = new PurchaseStateMachine(PurchaseState.WAITING_FOR_STOCK);
+      sm2.transition({ type: 'TICKETS_DETECTED' });
+      expect(sm2.state).toBe(PurchaseState.TICKETS_DETECTED);
+    });
+
+    it('supports RETRYING_TARGET when target fails during selection', () => {
+      const sm = new PurchaseStateMachine(PurchaseState.SELECTING);
+      sm.transition({ type: 'RETRY_TARGET' });
+      expect(sm.state).toBe(PurchaseState.RETRYING_TARGET);
+
+      // Can pick next target and select it
+      sm.transition({ type: 'TICKET_SELECTED', ticketId: 't-next' });
+      expect(sm.state).toBe(PurchaseState.TICKET_SELECTED);
+    });
+
+    it('transitions universally to STOPPED_LIMIT_REACHED on LIMIT_REACHED', () => {
+      const statesToTest = [
+        PurchaseState.MONITORING,
+        PurchaseState.WAITING_FOR_STOCK,
+        PurchaseState.SELECTING,
+        PurchaseState.RETRYING_TARGET,
+        PurchaseState.ARMED,
+      ];
+
+      for (const st of statesToTest) {
+        const sm = new PurchaseStateMachine(st);
+        sm.transition({ type: 'LIMIT_REACHED' });
+        expect(sm.state).toBe(PurchaseState.STOPPED_LIMIT_REACHED);
+      }
+    });
+
+    it('transitions to STOPPED_NO_TARGET on NO_TARGET_AVAILABLE', () => {
+      const sm = new PurchaseStateMachine(PurchaseState.MONITORING);
+      sm.transition({ type: 'NO_TARGET_AVAILABLE' });
+      expect(sm.state).toBe(PurchaseState.STOPPED_NO_TARGET);
+    });
+
+    it('transitions universally to HUMAN_INTERVENTION_REQUIRED on SECURITY_CHALLENGE_DETECTED', () => {
+      const statesToTest = [
+        PurchaseState.MONITORING,
+        PurchaseState.SELECTING,
+        PurchaseState.RESERVING,
+        PurchaseState.WAITING_FOR_STOCK,
+      ];
+
+      for (const st of statesToTest) {
+        const sm = new PurchaseStateMachine(st);
+        sm.transition({ type: 'SECURITY_CHALLENGE_DETECTED', challengeType: 'CAPTCHA' });
+        expect(sm.state).toBe(PurchaseState.HUMAN_INTERVENTION_REQUIRED);
+      }
+    });
+
+    it('RESET_REQUESTED cleanly resets active and intermediate states back to READY', () => {
+      const resetStates = [
+        PurchaseState.ARMED,
+        PurchaseState.MONITORING,
+        PurchaseState.IDLE,
+        PurchaseState.READY,
+        PurchaseState.WAITING_FOR_STOCK,
+        PurchaseState.RETRYING_TARGET,
+        PurchaseState.STOPPED_LIMIT_REACHED,
+        PurchaseState.STOPPED_NO_TARGET,
+        PurchaseState.HUMAN_INTERVENTION_REQUIRED,
+      ];
+
+      for (const st of resetStates) {
+        const sm = new PurchaseStateMachine(st);
+        sm.transition({ type: 'RESET_REQUESTED' });
+        expect(sm.state).toBe(PurchaseState.READY);
+      }
+    });
+
+    it('STOP_REQUESTED transitions all Phase 2 states to STOPPED', () => {
+      const newStates = [
+        PurchaseState.WAITING_FOR_STOCK,
+        PurchaseState.RETRYING_TARGET,
+        PurchaseState.HUMAN_INTERVENTION_REQUIRED,
+      ];
+
+      for (const st of newStates) {
+        const sm = new PurchaseStateMachine(st);
+        sm.transition({ type: 'STOP_REQUESTED', reason: 'Test user stop' });
+        expect(sm.state).toBe(PurchaseState.STOPPED);
+      }
+    });
+  });
 });

@@ -42,6 +42,8 @@ export enum PurchaseState {
   PAYMENT_GATE = 'PAYMENT_GATE',
   CONFIRMATION_PENDING = 'CONFIRMATION_PENDING',
   WAITING = 'WAITING',
+  WAITING_FOR_STOCK = 'WAITING_FOR_STOCK',
+  RETRYING_TARGET = 'RETRYING_TARGET',
 
   // Human Intervention States (Automation Paused, NOT failed)
   CAPTCHA_REQUIRED = 'CAPTCHA_REQUIRED',
@@ -49,12 +51,15 @@ export enum PurchaseState {
   PAYMENT_ACTION_REQUIRED = 'PAYMENT_ACTION_REQUIRED',
   SESSION_REAUTH_REQUIRED = 'SESSION_REAUTH_REQUIRED',
   UNKNOWN_SECURITY_CHALLENGE = 'UNKNOWN_SECURITY_CHALLENGE',
+  HUMAN_INTERVENTION_REQUIRED = 'HUMAN_INTERVENTION_REQUIRED',
 
   // Transitional State Verification
   STATE_RECHECK = 'STATE_RECHECK',
 
   // Failure & Terminal States
   STOPPED = 'STOPPED',
+  STOPPED_LIMIT_REACHED = 'STOPPED_LIMIT_REACHED',
+  STOPPED_NO_TARGET = 'STOPPED_NO_TARGET',
   FAILED = 'FAILED',
   UNKNOWN = 'UNKNOWN',
   RATE_LIMITED = 'RATE_LIMITED',
@@ -77,6 +82,7 @@ export function isHumanInterventionState(state: PurchaseState): boolean {
     state === PurchaseState.PAYMENT_ACTION_REQUIRED ||
     state === PurchaseState.SESSION_REAUTH_REQUIRED ||
     state === PurchaseState.UNKNOWN_SECURITY_CHALLENGE ||
+    state === PurchaseState.HUMAN_INTERVENTION_REQUIRED ||
     state === PurchaseState.CONSENT_REQUIRED ||
     state === PurchaseState.PAYMENT_GATE
   );
@@ -89,6 +95,8 @@ export function isTerminalState(state: PurchaseState): boolean {
   return (
     state === PurchaseState.CONFIRMED ||
     state === PurchaseState.STOPPED ||
+    state === PurchaseState.STOPPED_LIMIT_REACHED ||
+    state === PurchaseState.STOPPED_NO_TARGET ||
     state === PurchaseState.FAILED
   );
 }
@@ -216,6 +224,8 @@ export type StateTransitionEvent =
   | { type: 'PAYMENT_GATE' }
   | { type: 'CONFIRMATION_PENDING' }
   | { type: 'WAITING'; reason?: string | undefined }
+  | { type: 'WAITING_FOR_STOCK'; reason?: string | undefined }
+  | { type: 'RETRY_TARGET'; reason?: string | undefined; nextTarget?: string | undefined }
   | { type: 'UNSUPPORTED_FLOW'; reason?: string | undefined }
   // Human Intervention Trigger Events
   | { type: 'CAPTCHA_REQUIRED'; challengeId?: string | undefined }
@@ -223,6 +233,7 @@ export type StateTransitionEvent =
   | { type: 'PAYMENT_ACTION_REQUIRED'; actionType?: string | undefined }
   | { type: 'SESSION_REAUTH_REQUIRED'; reason?: string | undefined }
   | { type: 'UNKNOWN_SECURITY_CHALLENGE'; description?: string | undefined }
+  | { type: 'SECURITY_CHALLENGE_DETECTED'; challengeType?: string | undefined }
   // Human Intervention Resume Events
   | { type: 'USER_COMPLETED_CHALLENGE' }
   | { type: 'HUMAN_INTERVENTION_RESOLVED'; challengeId?: string | undefined }
@@ -230,6 +241,8 @@ export type StateTransitionEvent =
   | { type: 'STATE_UNVERIFIED'; reason?: string | undefined }
   // Universal Control Events
   | { type: 'FAILURE_OCCURRED'; reason: FailureReason; message?: string | undefined }
+  | { type: 'LIMIT_REACHED'; reason?: string | undefined }
+  | { type: 'NO_TARGET_AVAILABLE'; reason?: string | undefined }
   | { type: 'STOP_REQUESTED'; reason?: string | undefined }
   | { type: 'RESET_REQUESTED' };
 

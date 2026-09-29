@@ -230,6 +230,8 @@ export class ActionGuard {
         break;
 
       case PurchaseState.STOPPED:
+      case PurchaseState.STOPPED_LIMIT_REACHED:
+      case PurchaseState.STOPPED_NO_TARGET:
       case PurchaseState.FAILED:
       case PurchaseState.UNKNOWN:
       case PurchaseState.RATE_LIMITED:

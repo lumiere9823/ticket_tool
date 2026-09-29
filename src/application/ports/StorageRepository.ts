@@ -1,6 +1,7 @@
 import { StateContext } from '../../domain/states/PurchaseState';
 import { AccountProfile } from '../../domain/entities/AccountProfile';
 import { PurchasePlan, TicketCatalogSnapshot } from '../../domain/entities/PurchasePlan';
+import { ScopedPurchasePlan } from '../../domain/entities/ScopedPurchasePlan';
 import { UserProfileData } from '../../domain/entities/BookingJourneyModels';
 
 export interface AssistantConfiguration {
@@ -11,21 +12,41 @@ export interface AssistantConfiguration {
     quantity: number;
     allowFallback: boolean;
   };
-  /** New structured purchase plan (replaces preferences.categoryPriority free-text). */
+  /** Structured purchase plan. */
   purchasePlan?: PurchasePlan;
+  /** Scoped persistent purchase plan (whitelist of showingId x ticketTypeId with persistence policy). */
+  scopedPurchasePlan?: ScopedPurchasePlan;
   discoveryMode: boolean;
   activeProfileId?: string;
   /** Cached ticket catalog snapshot for instant popup rendering on re-open. */
   ticketCatalogSnapshot?: TicketCatalogSnapshot;
   userProfile?: UserProfileData | undefined;
+  /** ISO timestamp mirror of scopedPurchasePlan.persistence.startAt — for fast alarm handler lookup. */
+  scheduledArmAt?: string | undefined;
+}
+
+export interface PersistentExecutionState {
+  startedAt: string | number;
+  attemptsCount: number;
+  lastTarget?:
+    string | { showingId: string; ticketTypeId: string; ticketName?: string } | undefined;
+  currentPhase: string;
+  stopReason?: string | undefined;
+  tabHiddenWarning?: boolean | undefined;
 }
 
 export interface StorageRepository {
   getConfiguration(): Promise<AssistantConfiguration | null>;
   saveConfiguration(config: AssistantConfiguration): Promise<void>;
+  /** Clears config + last state + persistent state. Profiles are NOT cleared. */
+  clearConfiguration(): Promise<void>;
 
   getLastState(): Promise<StateContext | null>;
   saveCurrentState(state: StateContext): Promise<void>;
+
+  getPersistentState(): Promise<PersistentExecutionState | null>;
+  savePersistentState(state: Partial<PersistentExecutionState>): Promise<void>;
+  clearPersistentState(): Promise<void>;
 
   getProfiles(): Promise<AccountProfile[]>;
   saveProfile(profile: AccountProfile): Promise<void>;
@@ -35,3 +56,4 @@ export interface StorageRepository {
 
   clearSession(): Promise<void>;
 }
+

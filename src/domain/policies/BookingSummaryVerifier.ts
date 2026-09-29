@@ -50,9 +50,17 @@ export class BookingSummaryVerifier {
     } else {
       // Quantity check
       if (matchedItem.quantity !== expected.quantity) {
-        errors.push(
-          `Summary quantity mismatch for '${expected.name}'. Expected ${expected.quantity}, but summary has ${matchedItem.quantity}`
-        );
+        if (
+          expected.allowPartialQuantity &&
+          matchedItem.quantity > 0 &&
+          matchedItem.quantity < expected.quantity
+        ) {
+          // Partial quantity allowed by user configuration
+        } else {
+          errors.push(
+            `Summary quantity mismatch for '${expected.name}'. Expected ${expected.quantity}, but summary has ${matchedItem.quantity}`
+          );
+        }
       }
 
       // Seats check if seated
@@ -72,7 +80,11 @@ export class BookingSummaryVerifier {
     }
 
     // Subtotal check
-    const expectedSubtotal = expected.price * expected.quantity;
+    const effectiveQty =
+      expected.allowPartialQuantity && matchedItem && matchedItem.quantity < expected.quantity
+        ? matchedItem.quantity
+        : expected.quantity;
+    const expectedSubtotal = expected.price * effectiveQty;
     if (summary.subtotal > 0 && Math.abs(summary.subtotal - expectedSubtotal) > 1) {
       errors.push(
         `Summary subtotal mismatch. Expected ${expectedSubtotal} ${expected.currency}, but summary shows ${summary.subtotal} ${summary.currency}`

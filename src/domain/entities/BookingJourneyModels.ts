@@ -72,6 +72,13 @@ export interface SeatArea {
   availability: JourneyAvailability;
   selectable: boolean;
   availableSeatCount?: number | undefined;
+  ticketTypeId?: string | undefined;
+  ticketTypeName?: string | undefined;
+  isReservingSeat?: boolean | undefined;
+  x?: number | undefined;
+  y?: number | undefined;
+  width?: number | undefined;
+  height?: number | undefined;
 }
 
 export interface SeatMapLegendItem {
@@ -98,6 +105,7 @@ export interface CurrentSelection {
   areaName?: string | null | undefined;
   seats: string[]; // List of seat labels e.g. ["A12", "A13"]
   selectedAt: string;
+  allowPartialQuantity?: boolean | undefined;
 }
 
 export interface SummaryItem {
@@ -201,4 +209,7 @@ export interface BookingPreferences {
   userProfile?: UserProfileData | undefined;
   /** When set, the journey must target this specific showing. */
   preferredShowingId?: string | null | undefined;
+  /** When set, applies the strict Scope Guard on all ticket selections */
+  scopedPurchasePlan?: import('./ScopedPurchasePlan').ScopedPurchasePlan | undefined;
+  allowPartialQuantity?: boolean | undefined;
 }

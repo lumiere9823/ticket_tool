@@ -21,7 +21,8 @@ export class AdjacentSeatStrategy {
     quantity: number,
     targetArea?: string,
     preference: SeatPreferencePolicy = 'ANY_AVAILABLE',
-    fallbackPolicy: NonAdjacentFallbackPolicy = 'SELECT_NON_ADJACENT'
+    fallbackPolicy: NonAdjacentFallbackPolicy = 'SELECT_NON_ADJACENT',
+    blacklistedSeats?: Set<string>
   ): SeatSelectionDecision {
     if (quantity <= 0) {
       return {
@@ -32,10 +33,22 @@ export class AdjacentSeatStrategy {
       };
     }
 
-    // 1. Filter seats to available and selectable, optionally scoped by targetArea
+    // 1. Filter seats to available and selectable, optionally scoped by targetArea and excluding blacklisted seats
     const eligibleSeats = availableSeats.filter((seat) => {
-      if (seat.status !== 'AVAILABLE' || !seat.selectable) {
+      if (seat.status !== 'AVAILABLE' || seat.selectable === false) {
         return false;
+      }
+      if (blacklistedSeats && blacklistedSeats.size > 0) {
+        const normId = seat.id ? seat.id.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+        const normLabel = seat.label ? seat.label.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+        if (
+          (normId && blacklistedSeats.has(normId)) ||
+          (normLabel && blacklistedSeats.has(normLabel)) ||
+          blacklistedSeats.has(seat.id) ||
+          (seat.label && blacklistedSeats.has(seat.label))
+        ) {
+          return false;
+        }
       }
       if (targetArea) {
         const matchesArea =

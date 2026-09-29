@@ -21,6 +21,7 @@ export type BookingErrorCode =
   | 'PAGE_CHANGED'
   | 'STALE_ELEMENT'
   | 'PROCEED_FAILED'
+  | 'SEAT_UNAVAILABLE'
   | 'UNSUPPORTED_FLOW';
 
 export class BookingError extends Error {

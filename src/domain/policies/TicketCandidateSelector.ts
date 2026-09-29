@@ -1,5 +1,6 @@
 import { EventCatalog, TicketCandidate } from '../entities/EventCatalog';
 import { TicketPreference } from '../entities/TicketPreference';
+import { ScopedPurchasePlan } from '../entities/ScopedPurchasePlan';
 
 export interface SelectionEvaluationResult {
   selectedCandidate: TicketCandidate | null;
@@ -11,6 +12,7 @@ export interface SelectionEvaluationResult {
 /**
  * Domain policy for selecting the best ticket candidate from a discovered EventCatalog.
  * Enforces:
+ * - Scope Guard (BR-S01): whitelisted (showingId, ticketTypeId) only
  * - Priority preservation
  * - Rejection of SOLD_OUT, UNKNOWN, NOT_STARTED, CLOSED, non-selectable tickets
  * - Quantity constraint verification
@@ -23,15 +25,40 @@ export class TicketCandidateSelector {
    */
   public static buildCandidates(
     catalog: EventCatalog,
-    preference: TicketPreference
+    preference: TicketPreference,
+    scopedPlan?: ScopedPurchasePlan | null
   ): TicketCandidate[] {
     const candidates: TicketCandidate[] = [];
     const requestedQty = preference.quantity.value;
 
     for (const showing of catalog.showings) {
       for (const ticket of showing.ticketTypes) {
-        const priorityIndex = this.findPriorityIndex(ticket.name, preference.categoryPriority);
+        const priorityIndex = this.findPriorityIndex(ticket.name, preference.categoryPriority, ticket.id);
         const rejectionReasons: string[] = [];
+
+        // 0. Scope Guard (BR-S01)
+        if (scopedPlan && scopedPlan.targets && scopedPlan.targets.length > 0) {
+          const inScope = scopedPlan.targets.some((target) => {
+            const showingMatches =
+              !showing.id ||
+              !target.showingId ||
+              target.showingId === 'default' ||
+              showing.id === 'default' ||
+              target.showingId === showing.id;
+            const ticketMatches =
+              (ticket.id !== null && target.ticketTypeIds.includes(ticket.id)) ||
+              target.ticketTypeIds.includes(ticket.name) ||
+              target.ticketTypeIds.some(
+                (id) =>
+                  (ticket.id !== null && id.toLowerCase().trim() === ticket.id.toLowerCase().trim()) ||
+                  id.toLowerCase().trim() === ticket.name.toLowerCase().trim()
+              );
+            return showingMatches && ticketMatches;
+          });
+          if (!inScope) {
+            rejectionReasons.push('NOT_IN_SCOPED_WHITELIST');
+          }
+        }
 
         // 1. Must match preference category
         if (priorityIndex === -1) {
@@ -93,9 +120,10 @@ export class TicketCandidateSelector {
    */
   public static selectBestCandidate(
     catalog: EventCatalog,
-    preference: TicketPreference
+    preference: TicketPreference,
+    scopedPlan?: ScopedPurchasePlan | null
   ): SelectionEvaluationResult {
-    const allCandidates = this.buildCandidates(catalog, preference);
+    const allCandidates = this.buildCandidates(catalog, preference, scopedPlan);
 
     // Filter only candidates configured in preferences, sorted by priority (lowest index = highest priority)
     const matchingCandidates = allCandidates
@@ -153,12 +181,18 @@ export class TicketCandidateSelector {
     };
   }
 
-  private static findPriorityIndex(ticketName: string, priorities: readonly string[]): number {
+  private static findPriorityIndex(
+    ticketName: string,
+    priorities: readonly string[],
+    ticketId?: string | null
+  ): number {
     const normalizedTicket = ticketName.trim().toLowerCase();
+    const normalizedId = ticketId ? ticketId.trim().toLowerCase() : null;
 
     for (let i = 0; i < priorities.length; i++) {
       const target = priorities[i]!.trim().toLowerCase();
       if (target === 'any') return i;
+      if (normalizedId && normalizedId === target) return i;
       if (normalizedTicket === target) return i;
       if (normalizedTicket.includes(target) || target.includes(normalizedTicket)) return i;
     }

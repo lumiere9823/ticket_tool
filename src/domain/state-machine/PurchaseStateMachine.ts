@@ -178,10 +178,59 @@ export class PurchaseStateMachine {
       return this.performTransition(PurchaseState.STOPPED, event.reason);
     }
 
+    // Handle universal LIMIT_REACHED
+    if (event.type === 'LIMIT_REACHED') {
+      if (
+        this._state === PurchaseState.CONFIRMED ||
+        this._state === PurchaseState.STOPPED_LIMIT_REACHED
+      ) {
+        return this.getContext();
+      }
+      return this.performTransition(PurchaseState.STOPPED_LIMIT_REACHED, event.reason);
+    }
+
+    // Handle universal NO_TARGET_AVAILABLE
+    if (event.type === 'NO_TARGET_AVAILABLE') {
+      if (
+        this._state === PurchaseState.CONFIRMED ||
+        this._state === PurchaseState.STOPPED_NO_TARGET
+      ) {
+        return this.getContext();
+      }
+      return this.performTransition(PurchaseState.STOPPED_NO_TARGET, event.reason);
+    }
+
+    // Handle universal SECURITY_CHALLENGE_DETECTED
+    if (event.type === 'SECURITY_CHALLENGE_DETECTED') {
+      return this.performTransition(PurchaseState.HUMAN_INTERVENTION_REQUIRED);
+    }
+
+    // Handle universal RETRY_TARGET from active purchase states
+    if (event.type === 'RETRY_TARGET') {
+      if (
+        this._state !== PurchaseState.STOPPED &&
+        this._state !== PurchaseState.STOPPED_LIMIT_REACHED &&
+        this._state !== PurchaseState.STOPPED_NO_TARGET &&
+        this._state !== PurchaseState.FAILED &&
+        this._state !== PurchaseState.CONFIRMED &&
+        this._state !== PurchaseState.PAYMENT_GATE &&
+        this._state !== PurchaseState.INIT &&
+        this._state !== PurchaseState.AUTH_CHECK
+      ) {
+        return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
+      }
+    }
+
     // Handle RESET_REQUESTED from terminal/stopped states
     if (event.type === 'RESET_REQUESTED') {
       if (
         this._state === PurchaseState.STOPPED ||
+        this._state === PurchaseState.STOPPED_LIMIT_REACHED ||
+        this._state === PurchaseState.STOPPED_NO_TARGET ||
+        this._state === PurchaseState.WAITING_FOR_STOCK ||
+        this._state === PurchaseState.RETRYING_TARGET ||
+        this._state === PurchaseState.HUMAN_INTERVENTION_REQUIRED ||
+        this._state === PurchaseState.WAITING ||
         this._state === PurchaseState.FAILED ||
         this._state === PurchaseState.CONFIRMED ||
         this._state === PurchaseState.UNKNOWN ||
@@ -191,7 +240,11 @@ export class PurchaseStateMachine {
         this._state === PurchaseState.RESERVATION_FAILED ||
         this._state === PurchaseState.CHECKOUT_FAILED ||
         this._state === PurchaseState.PAYMENT_FAILED ||
-        this._state === PurchaseState.AUTH_FAILURE
+        this._state === PurchaseState.AUTH_FAILURE ||
+        this._state === PurchaseState.ARMED ||
+        this._state === PurchaseState.MONITORING ||
+        this._state === PurchaseState.READY ||
+        this._state === PurchaseState.IDLE
       ) {
         this._failureReason = undefined;
         this._failureMessage = undefined;
@@ -325,8 +378,14 @@ export class PurchaseStateMachine {
         if (event.type === 'INVENTORY_AVAILABLE') {
           return this.performTransition(PurchaseState.AVAILABLE_DETECTED);
         }
-        if (event.type === 'WAITING') {
-          return this.performTransition(PurchaseState.WAITING, event.reason);
+        if (event.type === 'EVALUATING_TICKETS') {
+          return this.performTransition(PurchaseState.EVALUATING_TICKETS);
+        }
+        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
+          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
+        }
+        if (event.type === 'RETRY_TARGET') {
+          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
         }
         if (event.type === 'CAPTCHA_REQUIRED') {
           return this.performTransition(PurchaseState.CAPTCHA_REQUIRED);
@@ -341,14 +400,58 @@ export class PurchaseStateMachine {
         break;
 
       case PurchaseState.WAITING:
+      case PurchaseState.WAITING_FOR_STOCK:
         if (event.type === 'MONITORING_STARTED') {
           return this.performTransition(PurchaseState.MONITORING);
+        }
+        if (event.type === 'EVALUATING_TICKETS') {
+          return this.performTransition(PurchaseState.EVALUATING_TICKETS);
         }
         if (event.type === 'TICKETS_DETECTED') {
           return this.performTransition(PurchaseState.TICKETS_DETECTED);
         }
         if (event.type === 'INVENTORY_AVAILABLE') {
           return this.performTransition(PurchaseState.AVAILABLE_DETECTED);
+        }
+        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
+          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
+        }
+        if (event.type === 'RETRY_TARGET') {
+          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
+        }
+        break;
+
+      case PurchaseState.RETRYING_TARGET:
+        if (event.type === 'MONITORING_STARTED') {
+          return this.performTransition(PurchaseState.MONITORING);
+        }
+        if (event.type === 'EVALUATING_TICKETS') {
+          return this.performTransition(PurchaseState.EVALUATING_TICKETS);
+        }
+        if (event.type === 'TICKETS_DETECTED') {
+          return this.performTransition(PurchaseState.TICKETS_DETECTED);
+        }
+        if (event.type === 'EVENT_DETECTED') {
+          if (event.eventId) this._eventId = event.eventId;
+          return this.performTransition(PurchaseState.EVENT_DETECTED);
+        }
+        if (event.type === 'SHOWING_DETECTED') {
+          return this.performTransition(PurchaseState.SHOWING_DETECTED);
+        }
+        if (event.type === 'TICKET_SELECTED') {
+          return this.performTransition(PurchaseState.TICKET_SELECTED);
+        }
+        if (event.type === 'CANDIDATE_FOUND') {
+          return this.performTransition(PurchaseState.SELECTING);
+        }
+        if (event.type === 'INVENTORY_AVAILABLE') {
+          return this.performTransition(PurchaseState.AVAILABLE_DETECTED);
+        }
+        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
+          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
+        }
+        if (event.type === 'RETRY_TARGET') {
+          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
         }
         break;
 
@@ -434,8 +537,11 @@ export class PurchaseStateMachine {
         if (event.type === 'CANDIDATE_FOUND') {
           return this.performTransition(PurchaseState.SELECTING);
         }
-        if (event.type === 'WAITING') {
-          return this.performTransition(PurchaseState.WAITING, event.reason);
+        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
+          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
+        }
+        if (event.type === 'RETRY_TARGET') {
+          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
         }
         if (event.type === 'NO_CANDIDATE_AVAILABLE') {
           return this.performTransition(PurchaseState.MONITORING);
@@ -473,6 +579,12 @@ export class PurchaseStateMachine {
         }
         if (event.type === 'TICKETS_DETECTED') {
           return this.performTransition(PurchaseState.TICKETS_DETECTED);
+        }
+        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
+          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
+        }
+        if (event.type === 'RETRY_TARGET') {
+          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
         }
         if (event.type === 'INVALID_SELECTION') {
           this._failureReason = event.reason ?? FailureReason.INVALID_SELECTION;
@@ -521,8 +633,11 @@ export class PurchaseStateMachine {
         if (event.type === 'TICKETS_DETECTED') {
           return this.performTransition(PurchaseState.TICKETS_DETECTED);
         }
-        if (event.type === 'WAITING') {
-          return this.performTransition(PurchaseState.WAITING, event.reason);
+        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
+          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
+        }
+        if (event.type === 'RETRY_TARGET') {
+          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
         }
         if (event.type === 'INVALID_SELECTION') {
           this._failureReason = event.reason ?? FailureReason.INVALID_SELECTION;
@@ -640,6 +755,12 @@ export class PurchaseStateMachine {
         }
         if (event.type === 'SELECTING_SEATS') {
           return this.performTransition(PurchaseState.SELECTING_SEATS);
+        }
+        if (event.type === 'SEATS_SELECTED') {
+          return this.performTransition(PurchaseState.SEATS_SELECTED);
+        }
+        if (event.type === 'BOOKING_SUMMARY_DETECTED') {
+          return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
         }
         if (event.type === 'TICKETS_DETECTED') {
           return this.performTransition(PurchaseState.TICKETS_DETECTED);
@@ -892,6 +1013,12 @@ export class PurchaseStateMachine {
         if (event.type === 'UNKNOWN_SECURITY_CHALLENGE') {
           return this.performTransition(PurchaseState.UNKNOWN_SECURITY_CHALLENGE);
         }
+        if (event.type === 'RETRY_TARGET') {
+          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
+        }
+        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
+          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
+        }
         break;
 
       case PurchaseState.HELD:
@@ -979,6 +1106,7 @@ export class PurchaseStateMachine {
       case PurchaseState.OTP_REQUIRED:
       case PurchaseState.PAYMENT_ACTION_REQUIRED:
       case PurchaseState.UNKNOWN_SECURITY_CHALLENGE:
+      case PurchaseState.HUMAN_INTERVENTION_REQUIRED:
         if (
           event.type === 'HUMAN_INTERVENTION_RESOLVED' ||
           event.type === 'USER_COMPLETED_CHALLENGE'
@@ -1045,7 +1173,11 @@ export class PurchaseStateMachine {
     this._updatedAt = new Date().toISOString();
     if (
       message !== undefined &&
-      (to === PurchaseState.STOPPED || to === PurchaseState.FAILED || to === PurchaseState.UNKNOWN)
+      (to === PurchaseState.STOPPED ||
+        to === PurchaseState.STOPPED_LIMIT_REACHED ||
+        to === PurchaseState.STOPPED_NO_TARGET ||
+        to === PurchaseState.FAILED ||
+        to === PurchaseState.UNKNOWN)
     ) {
       this._failureMessage = message;
     }

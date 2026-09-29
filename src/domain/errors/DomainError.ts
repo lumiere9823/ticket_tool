@@ -64,3 +64,12 @@ export class ReservationFailedError extends DomainError {
     super(message, 'RESERVATION_FAILED');
   }
 }
+
+/**
+ * Thrown when an action or navigation targets a showing or ticket outside the scoped purchase plan.
+ */
+export class ScopeViolationError extends DomainError {
+  constructor(message: string) {
+    super(message, 'SCOPE_VIOLATION');
+  }
+}
