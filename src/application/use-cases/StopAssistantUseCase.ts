@@ -15,20 +15,17 @@ export class StopAssistantUseCase {
   public async execute(reason = 'User requested stop'): Promise<StateContext> {
     this.logger.info('StopAssistantUseCase requested', { reason });
 
+    if (this.stateMachine.state === PurchaseState.STOPPED) {
+      this.logger.info('Assistant is already stopped; skipping duplicate stop transition');
+      return this.stateMachine.getContext();
+    }
+
     const context = this.stateMachine.transition({
       type: 'STOP_REQUESTED',
       reason,
     });
 
     await this.storage.saveCurrentState(context);
-
-    await this.eventBus.publish({
-      type: 'STOP_REQUESTED',
-      timestamp: new Date().toISOString(),
-      attemptId: this.stateMachine.attemptId,
-      state: PurchaseState.STOPPED,
-      reason,
-    });
 
     await this.eventBus.publish({
       type: 'STATE_CHANGED',

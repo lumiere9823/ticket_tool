@@ -132,7 +132,10 @@ export class ExecuteBookingJourneyUseCase {
     ) {
       try {
         if (currentState !== PurchaseState.STOPPED && currentState !== PurchaseState.FAILED) {
-          this.stateMachine.transition({ type: 'STOP_REQUESTED', reason: 'Journey initial clean reset' });
+          this.stateMachine.transition({
+            type: 'STOP_REQUESTED',
+            reason: 'Journey initial clean reset',
+          });
         }
         this.stateMachine.transition({ type: 'RESET_REQUESTED' });
         this.stateMachine.transition({ type: 'ARM' });
@@ -163,12 +166,16 @@ export class ExecuteBookingJourneyUseCase {
         }
 
         try {
-          if (retryState !== PurchaseState.STOPPED && retryState !== PurchaseState.FAILED) {
-            this.stateMachine.transition({ type: 'STOP_REQUESTED', reason: 'Journey retry reset' });
+          if (
+            retryState !== PurchaseState.STOPPED &&
+            retryState !== PurchaseState.FAILED &&
+            retryState !== PurchaseState.RETRYING_TARGET
+          ) {
+            this.stateMachine.transition({
+              type: 'RETRY_TARGET',
+              reason: `Journey retry attempt ${retries}`,
+            });
           }
-          this.stateMachine.transition({ type: 'RESET_REQUESTED' });
-          this.stateMachine.transition({ type: 'ARM' });
-          this.stateMachine.transition({ type: 'MONITORING_STARTED' });
         } catch {
           // ignore
         }
@@ -215,13 +222,17 @@ export class ExecuteBookingJourneyUseCase {
         // Delay before retry to allow DOM / React state to settle
         await new Promise((r) => setTimeout(r, 400 * retries));
 
-        // Return to ticket discovery on stale element / DOM refresh
+        // Attempt clean transition to RETRY_TARGET
         if (
           this.stateMachine.state !== PurchaseState.STOPPED &&
-          this.stateMachine.state !== PurchaseState.FAILED
+          this.stateMachine.state !== PurchaseState.FAILED &&
+          this.stateMachine.state !== PurchaseState.RETRYING_TARGET
         ) {
           try {
-            this.stateMachine.transition({ type: 'TICKETS_DETECTED' });
+            this.stateMachine.transition({
+              type: 'RETRY_TARGET',
+              reason: `Preparing retry attempt ${retries}`,
+            });
           } catch {
             // ignore if invalid transition
           }
@@ -247,6 +258,25 @@ export class ExecuteBookingJourneyUseCase {
     const isOnSelectTicket =
       currentUrl.includes('/select-ticket') || currentUrl.includes('/booking');
 
+    // Error modal check at journey entry (e.g. -1242 seat unavailable popup)
+    if (this.adapter.detectAndHandleErrorModal) {
+      const modalResult = await this.adapter.detectAndHandleErrorModal();
+      if (modalResult.hasError && modalResult.isSeatUnavailable) {
+        this.logger.warn(
+          'Seat unavailable modal detected on page (-1242). Retrying alternative seat...',
+          {
+            seat: modalResult.seatLabel,
+          }
+        );
+        throw new BookingError({
+          code: 'SEAT_UNAVAILABLE',
+          message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved by another user. Retrying alternative seat.`,
+          state: this.stateMachine.state,
+          recoverable: true,
+        });
+      }
+    }
+
     if (isOnPayment) {
       this.stateMachine.transition({ type: 'PAYMENT_GATE' });
       this.logger.info('Payment step reached — user action required.');
@@ -267,6 +297,18 @@ export class ExecuteBookingJourneyUseCase {
 
     if (isOnQuestionForm) {
       this.logger.info('Executing Question / Attendee Form step on question-form page');
+      if (this.adapter.detectAndHandleErrorModal) {
+        const modalResult = await this.adapter.detectAndHandleErrorModal();
+        if (modalResult.hasError && modalResult.isSeatUnavailable) {
+          throw new BookingError({
+            code: 'SEAT_UNAVAILABLE',
+            message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved. Retrying alternative seat.`,
+            state: this.stateMachine.state,
+            recoverable: true,
+          });
+        }
+      }
+
       const tFormStart = Date.now();
       const formSchema = this.adapter.getFormSchema ? await this.adapter.getFormSchema() : null;
       latencyTracker?.recordFormDetection(Date.now() - tFormStart);
@@ -329,10 +371,56 @@ export class ExecuteBookingJourneyUseCase {
         this.logger.info('Submitting attendee form / proceeding to payment step');
         await this.adapter.proceedToNextStep();
         await new Promise((r) => setTimeout(r, 600));
+
+        // Check for error modal right after click
+        if (this.adapter.detectAndHandleErrorModal) {
+          const modalResult = await this.adapter.detectAndHandleErrorModal();
+          if (modalResult.hasError && modalResult.isSeatUnavailable) {
+            throw new BookingError({
+              code: 'SEAT_UNAVAILABLE',
+              message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved. Retrying alternative seat.`,
+              state: this.stateMachine.state,
+              recoverable: true,
+            });
+          }
+        }
+
         if (formSchema && formSchema.fields.length > 0) {
           const closed = await this.waitForQuestionFormToClose();
-          if (!closed) return this.formNotAdvancedResult();
+          if (!closed) {
+            if (this.adapter.detectAndHandleErrorModal) {
+              const modalResult = await this.adapter.detectAndHandleErrorModal();
+              if (modalResult.hasError && modalResult.isSeatUnavailable) {
+                throw new BookingError({
+                  code: 'SEAT_UNAVAILABLE',
+                  message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved. Retrying alternative seat.`,
+                  state: this.stateMachine.state,
+                  recoverable: true,
+                });
+              }
+            }
+            return this.formNotAdvancedResult();
+          }
         }
+      }
+
+      // Verify URL before claiming PAYMENT_GATE
+      const afterSubmitUrl = typeof window !== 'undefined' ? window.location.href : '';
+      const isActualPayment =
+        afterSubmitUrl.includes('/payment') ||
+        afterSubmitUrl.includes('/checkout') ||
+        !afterSubmitUrl.includes('ticketbox.vn');
+
+      if (!isActualPayment) {
+        this.logger.info('Question form submitted, waiting for navigation to payment page...', {
+          currentUrl: afterSubmitUrl,
+        });
+        return {
+          success: true,
+          finalState: this.stateMachine.state,
+          requiresUserAction: false,
+          actionRequiredReason: 'Navigating to payment gate...',
+        };
       }
 
       this.stateMachine.transition({ type: 'PAYMENT_GATE' });
@@ -353,8 +441,13 @@ export class ExecuteBookingJourneyUseCase {
       };
     }
 
+    if (this.adapter.setScopedPlan) {
+      this.adapter.setScopedPlan(preferences.scopedPurchasePlan ?? null);
+    }
+
     // 1. EVENT & SHOWING DETECTION
     const eventState = await this.adapter.getEventState();
+
     if (eventState.event) {
       this.stateMachine.transition({
         type: 'EVENT_DETECTED',
@@ -419,20 +512,25 @@ export class ExecuteBookingJourneyUseCase {
       tickets,
       preferences.categoryPriority,
       preferences.allowFallback,
-      preferences.quantity
+      preferences.quantity,
+      preferences.scopedPurchasePlan
     );
     const tDecisionEnd = Date.now();
     latencyTracker?.recordTicketDecision(tDecisionEnd - tDecisionStart);
 
     if (!decision.selectedTicket) {
       this.logger.warn(`No ticket selected: ${decision.reason}`);
+      const waitType = preferences.scopedPurchasePlan ? 'WAITING_FOR_STOCK' : 'WAITING';
+      const waitState = preferences.scopedPurchasePlan
+        ? PurchaseState.WAITING_FOR_STOCK
+        : PurchaseState.WAITING;
       this.stateMachine.transition({
-        type: 'WAITING',
+        type: waitType,
         reason: decision.reason,
       });
       return {
         success: false,
-        finalState: PurchaseState.WAITING,
+        finalState: waitState,
         requiresUserAction: false,
         actionRequiredReason: decision.reason,
       };
@@ -533,6 +631,7 @@ export class ExecuteBookingJourneyUseCase {
       quantity: preferences.quantity,
       seats: [],
       selectedAt: new Date().toISOString(),
+      allowPartialQuantity: preferences.scopedPurchasePlan?.allowPartialQuantity ?? false,
     };
 
     // 6. STANDING FLOW vs SEATED FLOW
@@ -573,14 +672,20 @@ export class ExecuteBookingJourneyUseCase {
       // A. Area Selection check
       const seatMapInfo = await this.adapter.detectSeatMap();
       this.logger.debug('Seat map layout inspected', { hasSeatMap: seatMapInfo.hasSeatMap });
+      let chosenArea: import('../../domain/entities/BookingJourneyModels').SeatArea | null = null;
       if (this.adapter.discoverAreas) {
         const areas = await this.adapter.discoverAreas();
         if (areas.length > 0) {
           this.stateMachine.transition({ type: 'AREA_SELECTION_REQUIRED' });
           const matchingArea = areas.find(
             (a) =>
-              (a.name.toLowerCase() === chosenTicket.name.toLowerCase() ||
+              (a.ticketTypeId === chosenTicket.id ||
                 a.id === chosenTicket.id ||
+                (a.ticketTypeName &&
+                  a.ticketTypeName.toLowerCase().trim() === chosenTicket.name.toLowerCase().trim()) ||
+                a.name.toLowerCase().trim() === chosenTicket.name.toLowerCase().trim() ||
+                a.name.replace(/_/g, ' ').toLowerCase().trim() ===
+                  chosenTicket.name.toLowerCase().trim() ||
                 a.name.toLowerCase().includes(chosenTicket.name.toLowerCase()) ||
                 chosenTicket.name.toLowerCase().includes(a.name.toLowerCase())) &&
               a.selectable &&
@@ -598,6 +703,7 @@ export class ExecuteBookingJourneyUseCase {
             });
           }
 
+          chosenArea = targetArea;
           const tAreaStart = Date.now();
           this.stateMachine.transition({
             type: 'SELECTING_AREA',
@@ -606,7 +712,19 @@ export class ExecuteBookingJourneyUseCase {
           });
 
           if (this.adapter.selectArea) {
-            await this.adapter.selectArea(targetArea.id);
+            await this.adapter.selectArea(
+              targetArea.id,
+              targetArea.name,
+              targetArea.ticketTypeId,
+              targetArea.x !== undefined
+                ? {
+                    x: targetArea.x,
+                    y: targetArea.y,
+                    width: targetArea.width,
+                    height: targetArea.height,
+                  }
+                : undefined
+            );
           }
           latencyTracker?.recordAreaSelection(Date.now() - tAreaStart);
           currentSelection.areaId = targetArea.id;
@@ -617,7 +735,6 @@ export class ExecuteBookingJourneyUseCase {
 
       // B. Seat Discovery
       const tSeatDiscStart = Date.now();
-      this.stateMachine.transition({ type: 'SEAT_MAP_DETECTED' });
       const targetAreaOrName =
         currentSelection.areaId || currentSelection.areaName || chosenTicket.name;
       const availableSeats = this.adapter.discoverSeats
@@ -627,53 +744,116 @@ export class ExecuteBookingJourneyUseCase {
 
       this.logger.info(`Available seats detected: ${availableSeats.length}`);
 
-      if (availableSeats.length === 0) {
-        throw new BookingError({
-          code: 'NO_AVAILABLE_SEATS',
-          message: 'No available seats discovered on seat map',
-          state: this.stateMachine.state,
-          recoverable: true,
-        });
-      }
+      // Area-based / Non-reserving seat selection (e.g. ULTRA VIP - L2, STARDOM - L, FANZONE)
+      const isAreaBased =
+        chosenArea?.isReservingSeat === false ||
+        (availableSeats.length === 0 && chosenArea && chosenArea.mode === 'AREA_BASED');
 
-      // Check if user already has selected seat(s) on the seat map (e.g. L-28)
-      const alreadySelected = availableSeats.filter((s) => s.status === 'SELECTED');
-      if (alreadySelected.length >= preferences.quantity) {
-        const seatLabels = alreadySelected.slice(0, preferences.quantity).map((s) => s.label);
-        currentSelection.seats = seatLabels;
+      if (isAreaBased && availableSeats.length === 0) {
+        this.logger.info(
+          `Target area '${chosenArea?.name}' is an area-based ticket tier (no individual seats to pick).`
+        );
+
+        if (this.adapter.selectQuantity) {
+          try {
+            await this.adapter.selectQuantity(
+              {
+                id: chosenTicket.id,
+                name: chosenTicket.name,
+                price: { amount: chosenTicket.price, currency: 'VND' },
+                mode: 'SEATED',
+                availability: 'AVAILABLE',
+                minQuantity: chosenTicket.minQuantity,
+                maxQuantity: chosenTicket.maxQuantity,
+                selectedQuantity: preferences.quantity,
+                selectable: true,
+                source: { page: 'BOOKING', evidence: [] },
+              },
+              preferences.quantity
+            );
+          } catch {
+            // ignore if quantity control not rendered in area view
+          }
+        }
+
+        const seatLabel = chosenArea ? chosenArea.name : chosenTicket.name;
+        currentSelection.seats = [seatLabel];
         this.stateMachine.transition({
           type: 'SEATS_SELECTED',
-          seats: seatLabels,
+          seats: [seatLabel],
         });
-        this.logger.info(`Existing selected seats recognized: ${seatLabels.join(', ')}`);
+        this.logger.info(`Area-based seat selection confirmed: ${seatLabel}`);
         await this.eventBus.publish({
           type: 'NOTIFICATION_EVENT',
           timestamp: new Date().toISOString(),
           category: 'SEATS_SELECTED',
           title: 'Ticketbox Assistant',
-          body: `Seats selected: ${seatLabels.join(', ')}`,
+          body: `Area selected: ${seatLabel}`,
         });
       } else {
-        // C. Adjacent Seat Selection Strategy
-        const tSeatSelStart = Date.now();
-        this.stateMachine.transition({ type: 'SELECTING_SEATS' });
+        this.stateMachine.transition({ type: 'SEAT_MAP_DETECTED' });
 
-        const seatDecision = AdjacentSeatStrategy.selectSeats(
-          availableSeats,
-          preferences.quantity,
-          currentSelection.areaId ?? undefined,
-          preferences.seatPreference ?? 'ANY_AVAILABLE',
-          preferences.nonAdjacentFallback ?? 'SELECT_NON_ADJACENT'
+        const validAvailableSeats = availableSeats.filter(
+          (s) =>
+            !this.adapter.isSeatBlacklisted?.(s.id) &&
+            !this.adapter.isSeatBlacklisted?.(s.label)
         );
 
-        if (seatDecision.status === 'WAIT') {
+        if (validAvailableSeats.length === 0) {
+          throw new BookingError({
+            code: 'NO_AVAILABLE_SEATS',
+            message: 'No available seats discovered on seat map (all taken or blacklisted)',
+            state: this.stateMachine.state,
+            recoverable: true,
+          });
+        }
+
+        // Check if user already has selected seat(s) on the seat map (e.g. L-28), excluding blacklisted
+        const alreadySelected = validAvailableSeats.filter((s) => s.status === 'SELECTED');
+        if (alreadySelected.length >= preferences.quantity) {
+          const seatLabels = alreadySelected.slice(0, preferences.quantity).map((s) => s.label);
+          currentSelection.seats = seatLabels;
           this.stateMachine.transition({
-            type: 'WAITING',
+            type: 'SEATS_SELECTED',
+            seats: seatLabels,
+          });
+          this.logger.info(`Existing selected seats recognized: ${seatLabels.join(', ')}`);
+          await this.eventBus.publish({
+            type: 'NOTIFICATION_EVENT',
+            timestamp: new Date().toISOString(),
+            category: 'SEATS_SELECTED',
+            title: 'Ticketbox Assistant',
+            body: `Seats selected: ${seatLabels.join(', ')}`,
+          });
+        } else {
+          // C. Adjacent Seat Selection Strategy
+          const tSeatSelStart = Date.now();
+          this.stateMachine.transition({ type: 'SELECTING_SEATS' });
+
+          const blacklisted = this.adapter.getBlacklistedSeats
+            ? this.adapter.getBlacklistedSeats()
+            : undefined;
+          const seatDecision = AdjacentSeatStrategy.selectSeats(
+            validAvailableSeats,
+            preferences.quantity,
+            currentSelection.areaId ?? undefined,
+            preferences.seatPreference ?? 'ANY_AVAILABLE',
+            preferences.nonAdjacentFallback ?? 'SELECT_NON_ADJACENT',
+            blacklisted
+          );
+
+        if (seatDecision.status === 'WAIT') {
+          const waitType = preferences.scopedPurchasePlan ? 'WAITING_FOR_STOCK' : 'WAITING';
+          const waitState = preferences.scopedPurchasePlan
+            ? PurchaseState.WAITING_FOR_STOCK
+            : PurchaseState.WAITING;
+          this.stateMachine.transition({
+            type: waitType,
             reason: seatDecision.reason,
           });
           return {
             success: false,
-            finalState: PurchaseState.WAITING,
+            finalState: waitState,
             requiresUserAction: false,
             actionRequiredReason: seatDecision.reason,
           };
@@ -721,6 +901,7 @@ export class ExecuteBookingJourneyUseCase {
         });
       }
     }
+  }
 
     // Advance to next step if applicable (e.g. click "Tiếp tục" / "Đặt vé")
     if (this.adapter.proceedToNextStep) {
@@ -840,6 +1021,23 @@ export class ExecuteBookingJourneyUseCase {
     }
 
     // 9. PAYMENT GATE (Section 21)
+    const afterAllUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const isActualPayment =
+      afterAllUrl.includes('/payment') ||
+      afterAllUrl.includes('/checkout') ||
+      !afterAllUrl.includes('ticketbox.vn');
+
+    if (!isActualPayment) {
+      this.logger.info('Awaiting navigation to payment page...', { currentUrl: afterAllUrl });
+      return {
+        success: true,
+        finalState: this.stateMachine.state,
+        selection: currentSelection,
+        requiresUserAction: false,
+        actionRequiredReason: 'Waiting for navigation to payment gate...',
+      };
+    }
+
     this.stateMachine.transition({ type: 'PAYMENT_GATE' });
     this.logger.info('Payment step reached — user action required.');
 

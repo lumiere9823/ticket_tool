@@ -3,6 +3,9 @@ import { StorageRepository, AssistantConfiguration } from '../ports/StorageRepos
 import { EventBus } from '../ports/EventBus';
 import { LoggerPort } from '../ports/LoggerPort';
 import { StateContext } from '../../domain/states/PurchaseState';
+import { ScopedPurchasePlan } from '../../domain/entities/ScopedPurchasePlan';
+import { ScopedPurchasePlanValidator } from '../../domain/policies/ScopedPurchasePlanValidator';
+import { DomainError } from '../../domain/errors/DomainError';
 
 export interface ArmAssistantRequest {
   eventUrl: string;
@@ -17,6 +20,7 @@ export interface ArmAssistantRequest {
         agreeToTerms?: boolean | undefined;
       }
     | undefined;
+  scopedPurchasePlan?: ScopedPurchasePlan | undefined;
 }
 
 export class ArmAssistantUseCase {
@@ -30,6 +34,19 @@ export class ArmAssistantUseCase {
   public async execute(request: ArmAssistantRequest): Promise<StateContext> {
     this.logger.info('ArmAssistantUseCase requested', { eventUrl: request.eventUrl });
 
+    // Validate ScopedPurchasePlan if provided (BR-S02, AC-09)
+    if (request.scopedPurchasePlan) {
+      const validation = ScopedPurchasePlanValidator.validate(request.scopedPurchasePlan);
+      if (!validation.valid) {
+        this.logger.warn('ScopedPurchasePlan validation failed on ARM', {
+          errors: validation.errors,
+        });
+        throw new DomainError(
+          `ARM blocked by Scope Guard validation: ${validation.errors.join(', ')}`
+        );
+      }
+    }
+
     // 1. Save configured preferences while preserving existing userProfile and purchasePlan
     const existing = await this.storage.getConfiguration();
     const profile = request.userProfile ?? existing?.userProfile;
@@ -42,6 +59,11 @@ export class ArmAssistantUseCase {
         allowFallback: request.allowFallback ?? true,
       },
       discoveryMode: false,
+      ...(request.scopedPurchasePlan
+        ? { scopedPurchasePlan: request.scopedPurchasePlan }
+        : existing?.scopedPurchasePlan
+          ? { scopedPurchasePlan: existing.scopedPurchasePlan }
+          : {}),
       ...(profile ? { userProfile: profile } : {}),
     };
     await this.storage.saveConfiguration(config);
