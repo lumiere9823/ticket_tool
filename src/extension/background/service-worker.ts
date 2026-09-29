@@ -146,6 +146,7 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
             categoryPriority: message.categoryPriority,
             quantity: message.quantity,
             allowFallback: message.allowFallback ?? true,
+            userProfile: message.userProfile,
           });
 
           // Immediately start monitoring the target event

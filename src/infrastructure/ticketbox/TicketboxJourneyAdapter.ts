@@ -1852,8 +1852,18 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
                 }
               ).Event;
               if (typeof EventCtor === 'function' && typeof nativeEl.dispatchEvent === 'function') {
-                nativeEl.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
+                nativeEl.dispatchEvent(new EventCtor('focus', { bubbles: true }) as never);
+                if (typeof InputEvent !== 'undefined') {
+                  try {
+                    nativeEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: item.targetValue }));
+                  } catch {
+                    nativeEl.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
+                  }
+                } else {
+                  nativeEl.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
+                }
                 nativeEl.dispatchEvent(new EventCtor('change', { bubbles: true }) as never);
+                nativeEl.dispatchEvent(new EventCtor('blur', { bubbles: true }) as never);
               }
 
               (el as MutableDOMElement).attributes = (el as MutableDOMElement).attributes || {};

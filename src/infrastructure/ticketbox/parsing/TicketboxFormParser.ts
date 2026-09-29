@@ -22,7 +22,40 @@ export class TicketboxFormParser {
     const rawInputs = formContainer.querySelectorAll('input, select, textarea');
     const inputElements = rawInputs.filter((el) => {
       const type = (el.getAttribute('type') || 'text').toLowerCase();
-      return type !== 'hidden' && type !== 'submit' && type !== 'button';
+      if (type === 'hidden' || type === 'submit' || type === 'button') return false;
+
+      const name = (el.getAttribute('name') || '').toLowerCase();
+      const id = (el.getAttribute('id') || '').toLowerCase();
+      const className = (el.className || '').toLowerCase();
+
+      // Filter out reCAPTCHA elements
+      if (
+        name.includes('recaptcha') ||
+        id.includes('recaptcha') ||
+        className.includes('recaptcha')
+      ) {
+        return false;
+      }
+
+      // Filter out navigation/search inputs
+      if (type === 'search' || name.includes('search') || id.includes('search')) {
+        return false;
+      }
+
+      // Filter out hidden elements by CSS / attributes
+      if (el.rawElement && typeof window !== 'undefined') {
+        const native = el.rawElement as HTMLElement;
+        if (
+          native.style?.display === 'none' ||
+          native.style?.visibility === 'hidden' ||
+          native.getAttribute('aria-hidden') === 'true' ||
+          native.closest?.('[style*="display: none"], [style*="display:none"], [aria-hidden="true"], header, nav')
+        ) {
+          return false;
+        }
+      }
+
+      return true;
     });
 
     if (inputElements.length === 0) {

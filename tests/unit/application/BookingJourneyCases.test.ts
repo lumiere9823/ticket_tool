@@ -10,6 +10,13 @@ import { BOOKING_JOURNEY_FIXTURES } from '../../fixtures/booking/bookingFixtures
 import { BookingPreferences } from '../../../src/domain/entities/BookingJourneyModels';
 import { BookingError } from '../../../src/domain/errors/BookingErrors';
 
+const TEST_PROFILE = {
+  fullName: 'Nguyen Van A',
+  phone: '0900000000',
+  email: 'a@example.com',
+  agreeToTerms: true,
+};
+
 describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
   let stateMachine: PurchaseStateMachine;
   let eventBus: ChromeMessageBus;
@@ -31,6 +38,7 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
       categoryPriority: ['Hoả Tâm 2'],
       quantity: 2,
       allowFallback: false,
+      userProfile: TEST_PROFILE,
     };
 
     const result = await useCase.execute(preferences);
@@ -73,6 +81,7 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
       categoryPriority: ['GA Special Limited'],
       quantity: 1,
       allowFallback: false,
+      userProfile: TEST_PROFILE,
     };
 
     const result = await useCase.execute(preferences);
@@ -92,6 +101,7 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
       categoryPriority: ['VIP Standing', 'CAT 1 Standing'],
       quantity: 2,
       allowFallback: true,
+      userProfile: TEST_PROFILE,
     };
 
     const result = await useCase.execute(preferences);
@@ -237,6 +247,7 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
       categoryPriority: ['Hoả Tâm 2'],
       quantity: 2,
       allowFallback: false,
+      userProfile: TEST_PROFILE,
     };
 
     const result = await useCase.execute(preferences);
@@ -317,6 +328,7 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
       categoryPriority: ['Hoả Tâm 2'],
       quantity: 2,
       allowFallback: false,
+      userProfile: TEST_PROFILE,
     };
 
     const result = await useCase.execute(preferences);
@@ -351,5 +363,22 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
     expect(result.success).toBe(false);
     expect(result.finalState).toBe(PurchaseState.FAILED);
     expect(result.error).toContain('No ticket tiers detected');
+  });
+
+  // REGRESSION: a detected question form must never be treated as validated without a profile
+  it('should stop for the user (not claim PAYMENT_GATE) when a question form has no configured profile', async () => {
+    const root = parseHtmlToDOMElementLike(BOOKING_JOURNEY_FIXTURES.CASE_A_STANDING);
+    const adapter = new TicketboxJourneyAdapter(logger, root);
+    const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, logger);
+
+    const result = await useCase.execute({
+      categoryPriority: ['Hoả Tâm 2'],
+      quantity: 2,
+      allowFallback: false,
+    });
+
+    expect(result.finalState).not.toBe(PurchaseState.PAYMENT_GATE);
+    expect(result.finalState).toBe(PurchaseState.FILLING_ATTENDEE_FORM);
+    expect(result.requiresUserAction).toBe(true);
   });
 });

@@ -19,6 +19,7 @@ interface KonvaNodeLike {
   stroke?: (color?: string) => string | void;
   getAttr?: (name: string) => unknown;
   getChildren?: () => KonvaNodeLike[];
+  getAbsolutePosition?: () => { x: number; y: number };
   getClientRect?: (config?: { relativeTo?: unknown }) => {
     x: number;
     y: number;
@@ -30,6 +31,8 @@ interface KonvaNodeLike {
 
 interface KonvaStageLike extends KonvaNodeLike {
   container: () => HTMLElement;
+  content?: HTMLElement;
+  getContent?: () => HTMLElement;
   width: () => number;
   height: () => number;
   scaleX: () => number;
@@ -91,53 +94,75 @@ function getActiveStage(): KonvaStageLike | null {
     return null;
   }
 
-  // Find the primary interactive stage (ignoring small minimaps < 200px)
-  for (const stage of konva.stages) {
-    if (typeof stage.width === 'function' && stage.width() > 200) {
-      return stage;
+  // After SPA navigations Konva.stages can keep destroyed stages whose container is detached.
+  const attached = konva.stages.filter((stage) => {
+    try {
+      return stage.container().isConnected;
+    } catch {
+      return false;
+    }
+  });
+  const pool = attached.length > 0 ? attached : konva.stages;
+
+  // Pick the largest interactive stage (ignoring small minimaps < 200px)
+  let best: KonvaStageLike | null = null;
+  let bestArea = 0;
+  for (const stage of pool) {
+    if (typeof stage.width !== 'function' || typeof stage.height !== 'function') continue;
+    const area = stage.width() * stage.height();
+    if (stage.width() > 200 && area > bestArea) {
+      best = stage;
+      bestArea = area;
     }
   }
 
-  return konva.stages[0] ?? null;
+  return best ?? pool[0] ?? null;
 }
 
 /**
- * Dispatches simulated native pointer and mouse events directly to the canvas/container.
+ * Konva binds its DOM listeners on the `.konvajs-content` element (a CHILD of stage.container()).
+ * Events dispatched on the container bubble upwards and never reach Konva, so the target must be
+ * the content element (or the canvas inside it).
  */
-function dispatchNativeEvents(target: Element, clientX: number, clientY: number): void {
-  const pointerOpts: PointerEventInit = {
+function getStageEventTarget(stage: KonvaStageLike): HTMLElement {
+  const content = typeof stage.getContent === 'function' ? stage.getContent() : stage.content;
+  return content ?? stage.container();
+}
+
+function dispatchPointerSequence(target: Element, clientX: number, clientY: number): void {
+  if (typeof PointerEvent === 'undefined') return;
+  const base: PointerEventInit = {
     bubbles: true,
     cancelable: true,
     view: window,
     clientX,
     clientY,
-    buttons: 1,
+    button: 0,
     pointerId: 1,
     pointerType: 'mouse',
     isPrimary: true,
   };
+  target.dispatchEvent(new PointerEvent('pointermove', { ...base, buttons: 0 }));
+  target.dispatchEvent(new PointerEvent('pointerdown', { ...base, buttons: 1 }));
+  target.dispatchEvent(new PointerEvent('pointerup', { ...base, buttons: 0 }));
+}
 
-  const releaseOpts: PointerEventInit = {
-    bubbles: true,
-    cancelable: true,
-    view: window,
-    clientX,
-    clientY,
-    buttons: 0,
-    pointerId: 1,
-    pointerType: 'mouse',
-    isPrimary: true,
-  };
+function dispatchMouseSequence(target: Element, clientX: number, clientY: number): void {
+  const base: MouseEventInit = { bubbles: true, cancelable: true, view: window, clientX, clientY };
+  target.dispatchEvent(new MouseEvent('mousemove', { ...base, buttons: 0 }));
+  target.dispatchEvent(new MouseEvent('mousedown', { ...base, button: 0, buttons: 1 }));
+  target.dispatchEvent(new MouseEvent('mouseup', { ...base, button: 0, buttons: 0 }));
+}
 
-  target.dispatchEvent(new PointerEvent('pointerover', pointerOpts));
-  target.dispatchEvent(new PointerEvent('pointerenter', pointerOpts));
-  target.dispatchEvent(new PointerEvent('pointerdown', pointerOpts));
-  target.dispatchEvent(new MouseEvent('mouseover', pointerOpts));
-  target.dispatchEvent(new MouseEvent('mousedown', pointerOpts));
-
-  target.dispatchEvent(new PointerEvent('pointerup', releaseOpts));
-  target.dispatchEvent(new MouseEvent('mouseup', releaseOpts));
-  target.dispatchEvent(new MouseEvent('click', releaseOpts));
+/**
+ * Dispatches native events at a container-relative point. Konva derives `click` itself from a
+ * matching down/up pair, so a synthetic `click` is deliberately NOT dispatched (it would be ignored
+ * by Konva or, worse, double-trigger a toggle handler).
+ */
+function dispatchNativeEvents(stage: KonvaStageLike, clientX: number, clientY: number): void {
+  const target = getStageEventTarget(stage);
+  dispatchPointerSequence(target, clientX, clientY);
+  dispatchMouseSequence(target, clientX, clientY);
 }
 
 /**
@@ -288,7 +313,7 @@ async function handleSelectArea(
         const cRect = container.getBoundingClientRect();
         const clientX = cRect.left + rect.x + rect.width / 2;
         const clientY = cRect.top + rect.y + rect.height / 2;
-        dispatchNativeEvents(container, clientX, clientY);
+        dispatchNativeEvents(stage, clientX, clientY);
       }
     } catch {
       // ignore rect calculation error
@@ -307,12 +332,121 @@ async function handleSelectArea(
   return { success: true, transitioned: isSectionViewActive() };
 }
 
+const SEAT_MATCH_TOLERANCE = 1.0;
+const SIGNATURE_POLL_MS = 40;
+const SIGNATURE_POLL_MAX = 8;
+
+interface SeatAttemptReport {
+  id: string;
+  label?: string | undefined;
+  found: boolean;
+  candidates: number;
+  changed: boolean;
+  method?: string | undefined;
+  before?: string | undefined;
+  after?: string | undefined;
+  note?: string | undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Visual signature of a seat node: legend colours (white / green / red) live in fill + stroke. */
+function nodeSignature(node: KonvaNodeLike): string {
+  const fill = typeof node.fill === 'function' ? String(node.fill() ?? '') : '';
+  const stroke = typeof node.stroke === 'function' ? String(node.stroke() ?? '') : '';
+  return `${fill}|${stroke}`;
+}
+
+/** Waits until the node's visual state differs from `before` (React/Redux re-render is async). */
+async function waitForSignatureChange(node: KonvaNodeLike, before: string): Promise<boolean> {
+  for (let i = 0; i < SIGNATURE_POLL_MAX; i++) {
+    await sleep(SIGNATURE_POLL_MS);
+    if (nodeSignature(node) !== before) return true;
+  }
+  return false;
+}
+
+/**
+ * Finds Circle nodes whose LOCAL coordinates equal the API seat coordinates (Ticketbox renders each
+ * seat at (seat.x, seat.y)). Returns candidates sorted by distance.
+ */
+function findSeatCandidates(
+  stage: KonvaStageLike,
+  seat: BridgeSeatPayload
+): { node: KonvaNodeLike; distance: number }[] {
+  if (typeof seat.x !== 'number' || typeof seat.y !== 'number') return [];
+  const circles = typeof stage.find === 'function' ? stage.find('Circle') : [];
+  const out: { node: KonvaNodeLike; distance: number }[] = [];
+  for (const circle of circles) {
+    if (typeof circle.x !== 'function' || typeof circle.y !== 'function') continue;
+    const distance = Math.hypot(circle.x() - seat.x, circle.y() - seat.y);
+    if (distance <= SEAT_MATCH_TOLERANCE) out.push({ node: circle, distance });
+  }
+  return out.sort((a, b) => a.distance - b.distance);
+}
+
+/**
+ * Clicks one seat node and VERIFIES the visual state changed. Each mechanism runs at most once and
+ * we stop at the first one that works, so a toggle handler can never be triggered twice.
+ */
+async function clickSeatNode(
+  stage: KonvaStageLike,
+  node: KonvaNodeLike
+): Promise<{ changed: boolean; method: string; before: string; after: string }> {
+  const before = nodeSignature(node);
+  const target = getStageEventTarget(stage);
+  const rect = target.getBoundingClientRect();
+  // getAbsolutePosition() already includes stage/layer scale + pan, so zoom/pan do not matter.
+  const abs = typeof node.getAbsolutePosition === 'function' ? node.getAbsolutePosition() : null;
+
+  const attempts: { method: string; run: () => void }[] = [];
+  if (abs) {
+    const clientX = rect.left + abs.x;
+    const clientY = rect.top + abs.y;
+    attempts.push({
+      method: 'native-pointer',
+      run: () => dispatchPointerSequence(target, clientX, clientY),
+    });
+    attempts.push({
+      method: 'native-mouse',
+      run: () => dispatchMouseSequence(target, clientX, clientY),
+    });
+  }
+  attempts.push({
+    method: 'konva-fire',
+    run: () =>
+      node.fire(
+        'click',
+        { evt: new MouseEvent('click', { bubbles: true, button: 0 }), target: node },
+        true
+      ),
+  });
+
+  for (const attempt of attempts) {
+    try {
+      attempt.run();
+    } catch {
+      continue;
+    }
+    if (await waitForSignatureChange(node, before)) {
+      return { changed: true, method: attempt.method, before, after: nodeSignature(node) };
+    }
+  }
+
+  return { changed: false, method: 'none', before, after: nodeSignature(node) };
+}
+
 /**
  * Handles SELECT_SEATS in Konva.
  */
-async function handleSelectSeats(
-  payload?: BridgeRequestPayload
-): Promise<{ success: boolean; selectedCount: number; message?: string }> {
+async function handleSelectSeats(payload?: BridgeRequestPayload): Promise<{
+  success: boolean;
+  selectedCount: number;
+  message?: string;
+  reports?: SeatAttemptReport[];
+}> {
   const seats = payload?.seats;
   if (!seats || !Array.isArray(seats) || seats.length === 0) {
     return { success: false, selectedCount: 0, message: 'No seats provided' };
@@ -324,134 +458,49 @@ async function handleSelectSeats(
   }
 
   let selectedCount = 0;
+  const reports: SeatAttemptReport[] = [];
 
   for (const seat of seats) {
-    let matchedTarget: KonvaNodeLike | null = null;
-    let matchedGroup: KonvaNodeLike | null = null;
+    const candidates = findSeatCandidates(stage, seat);
+    const report: SeatAttemptReport = {
+      id: seat.id,
+      label: seat.label,
+      found: candidates.length > 0,
+      candidates: candidates.length,
+      changed: false,
+    };
+    reports.push(report);
 
-    // Strategy 1: Coordinates matching against Circle shapes
-    if (typeof seat.x === 'number' && typeof seat.y === 'number') {
-      const circles = typeof stage.find === 'function' ? stage.find('Circle') : [];
-      let minDistance = 4.0;
-
-      for (const circle of circles) {
-        if (typeof circle.x === 'function' && typeof circle.y === 'function') {
-          const dist = Math.hypot(circle.x() - seat.x, circle.y() - seat.y);
-          if (dist < minDistance) {
-            minDistance = dist;
-            matchedTarget = circle;
-            matchedGroup = circle.parent ?? null;
-            if (dist < 0.5) break;
-          }
-        }
-      }
+    const best = candidates[0];
+    if (!best) {
+      report.note = 'No Circle within tolerance of API coordinates';
+      continue;
     }
 
-    // Strategy 2: Text matching by seat number
-    if (!matchedTarget && seat.number) {
-      const numStr = String(seat.number);
-      const texts = typeof stage.find === 'function' ? stage.find('Text') : [];
-      for (const text of texts) {
-        if (typeof text.text === 'function' && text.text() === numStr) {
-          if (typeof seat.y === 'number' && typeof text.y === 'function') {
-            if (Math.abs(text.y() - seat.y) > 30) continue;
-          }
-          matchedTarget = text;
-          matchedGroup = text.parent ?? null;
-          break;
-        }
-      }
+    // Refuse to guess: two circles at (almost) the same local point means another group's seat
+    // could be hit, and clicking the wrong seat of a purchase is worse than clicking none.
+    const second = candidates[1];
+    if (second && second.distance - best.distance < 0.05) {
+      report.note = 'Ambiguous: multiple Circles share the same coordinates';
+      continue;
     }
 
-    // Strategy 3: Konva absolute transform point hit testing
-    if (
-      !matchedTarget &&
-      typeof seat.x === 'number' &&
-      typeof seat.y === 'number' &&
-      typeof stage.getAbsoluteTransform === 'function' &&
-      typeof stage.getIntersection === 'function'
-    ) {
-      try {
-        const tf = stage.getAbsoluteTransform();
-        const stagePos = tf.point({ x: seat.x, y: seat.y });
-        const hit = stage.getIntersection(stagePos);
-        if (hit) {
-          matchedTarget = hit;
-          matchedGroup = hit.parent ?? null;
-        }
-      } catch {
-        // ignore transform error
-      }
-    }
+    const result = await clickSeatNode(stage, best.node);
+    report.changed = result.changed;
+    report.method = result.method;
+    report.before = result.before;
+    report.after = result.after;
 
-    const interactiveNode = matchedGroup ?? matchedTarget;
-
-    if (interactiveNode) {
-      // Fire Konva click and tap
-      interactiveNode.fire(
-        'click',
-        { evt: { type: 'click' }, target: interactiveNode, currentTarget: interactiveNode },
-        true
-      );
-      interactiveNode.fire(
-        'tap',
-        { evt: { type: 'tap' }, target: interactiveNode, currentTarget: interactiveNode },
-        true
-      );
-
-      // If matchedTarget is different from group, also fire on it
-      if (matchedTarget && matchedTarget !== interactiveNode) {
-        matchedTarget.fire(
-          'click',
-          { evt: { type: 'click' }, target: matchedTarget, currentTarget: matchedTarget },
-          true
-        );
-      }
-
-      // Also calculate screen coordinates and dispatch native events to the canvas
-      const container = stage.container();
-      if (container) {
-        try {
-          const cRect = container.getBoundingClientRect();
-          let clientX = 0;
-          let clientY = 0;
-
-          if (typeof interactiveNode.getClientRect === 'function') {
-            const rect = interactiveNode.getClientRect();
-            if (rect && rect.width > 0) {
-              clientX = cRect.left + rect.x + rect.width / 2;
-              clientY = cRect.top + rect.y + rect.height / 2;
-            }
-          }
-
-          if (
-            (clientX === 0 || clientY === 0) &&
-            typeof seat.x === 'number' &&
-            typeof seat.y === 'number'
-          ) {
-            const scaleX = typeof stage.scaleX === 'function' ? stage.scaleX() : 1;
-            const scaleY = typeof stage.scaleY === 'function' ? stage.scaleY() : 1;
-            const sx = typeof stage.x === 'function' ? stage.x() : 0;
-            const sy = typeof stage.y === 'function' ? stage.y() : 0;
-            clientX = cRect.left + sx + seat.x * scaleX;
-            clientY = cRect.top + sy + seat.y * scaleY;
-          }
-
-          if (clientX > 0 && clientY > 0) {
-            dispatchNativeEvents(container, clientX, clientY);
-          }
-        } catch {
-          // ignore native dispatch error
-        }
-      }
-
+    if (result.changed) {
       selectedCount++;
       // Small pause between seats to allow React/Redux updates
-      await new Promise((r) => setTimeout(r, 120));
+      await sleep(120);
+    } else {
+      report.note = 'Clicked but seat visual state did not change';
     }
   }
 
-  return { success: selectedCount > 0, selectedCount };
+  return { success: selectedCount > 0, selectedCount, reports };
 }
 
 /**
@@ -475,6 +524,32 @@ function handleGetSeatmapState(): {
  * Message dispatcher for requests from Content Script.
  */
 async function processBridgeRequest(
+  type: string,
+  payload?: BridgeRequestPayload
+): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  try {
+    return await dispatchBridgeRequest(type, payload);
+  } catch (err) {
+    // Without this an exception inside a Konva handler would leave the content script waiting
+    // for a response until it times out, hiding the real error.
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+const handledRequestIds = new Set<string>();
+
+/** The content script sends every request over BOTH channels; only handle each requestId once. */
+function claimRequest(requestId: string): boolean {
+  if (handledRequestIds.has(requestId)) return false;
+  handledRequestIds.add(requestId);
+  if (handledRequestIds.size > 200) {
+    const oldest = handledRequestIds.values().next().value;
+    if (oldest !== undefined) handledRequestIds.delete(oldest);
+  }
+  return true;
+}
+
+async function dispatchBridgeRequest(
   type: string,
   payload?: BridgeRequestPayload
 ): Promise<{ success: boolean; data?: unknown; error?: string }> {
@@ -512,6 +587,7 @@ function initializePageBridge(): void {
     if (event.source !== window || !event.data) return;
     const msg = event.data as BridgeRequestMessage;
     if (msg.source !== 'TICKETBOX_ASSISTANT_CONTENT' || !msg.type || !msg.requestId) return;
+    if (!claimRequest(msg.requestId)) return;
 
     const result = await processBridgeRequest(msg.type, msg.payload);
     const response: BridgeResponseMessage = {
@@ -530,6 +606,7 @@ function initializePageBridge(): void {
   window.addEventListener('TICKETBOX_ASSISTANT_REQUEST', async (event: Event) => {
     const detail = (event as CustomEvent<BridgeRequestMessage>).detail;
     if (!detail || !detail.type || !detail.requestId) return;
+    if (!claimRequest(detail.requestId)) return;
 
     const result = await processBridgeRequest(detail.type, detail.payload);
     const response: BridgeResponseMessage = {

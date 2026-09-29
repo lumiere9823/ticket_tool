@@ -156,10 +156,10 @@ async function performDiscoveryScan(force = false): Promise<void> {
       })),
       summary: summary
         ? {
-            subtotal: summary.subtotal,
-            fees: summary.fees,
-            total: summary.total,
-          }
+          subtotal: summary.subtotal,
+          fees: summary.fees,
+          total: summary.total,
+        }
         : undefined,
     };
 
@@ -318,6 +318,10 @@ async function attemptBookingJourney(): Promise<void> {
     const tracker = new LatencyTracker(stateMachine.attemptId || `attempt_${Date.now()}`, logger);
     tracker.recordT0(Date.now(), true);
 
+    // Remember where the step STARTED. Ticketbox is a SPA: the URL can already have changed by the
+    // time execute() returns, and waiting for a change "from the new URL" would never end.
+    const urlBeforeStep = typeof window !== 'undefined' ? window.location.href : '';
+
     const result = await journeyUseCase.execute(preferences, tracker);
 
     logger.info('Booking journey executed', {
@@ -333,18 +337,27 @@ async function attemptBookingJourney(): Promise<void> {
         result.finalState === PurchaseState.TICKET_SELECTED) &&
       !result.requiresUserAction
     ) {
-      awaitingNavigationFromUrl = typeof window !== 'undefined' ? window.location.href : null;
-      awaitingNavigationTimestamp = Date.now();
-      logger.info('Step executed and submitted. Waiting for page navigation to next step...', {
-        finalState: result.finalState,
-        currentUrl: awaitingNavigationFromUrl,
-      });
+      const urlAfterStep = typeof window !== 'undefined' ? window.location.href : '';
+      if (urlAfterStep !== urlBeforeStep) {
+        logger.info('Page already navigated during the step; no navigation wait needed', {
+          from: urlBeforeStep,
+          to: urlAfterStep,
+        });
+      } else {
+        awaitingNavigationFromUrl = urlAfterStep || null;
+        awaitingNavigationTimestamp = Date.now();
+        logger.info('Step executed and submitted. Waiting for page navigation to next step...', {
+          finalState: result.finalState,
+          currentUrl: awaitingNavigationFromUrl,
+        });
+      }
     }
 
     // When payment gate, consent, or terminal state is reached requiring user action: pause monitoring
     if (
       (result.finalState === PurchaseState.PAYMENT_GATE ||
         result.finalState === PurchaseState.CONSENT_REQUIRED ||
+        result.finalState === PurchaseState.FILLING_ATTENDEE_FORM ||
         result.finalState === PurchaseState.HELD ||
         result.finalState === PurchaseState.CONFIRMED ||
         result.finalState === PurchaseState.STOPPED ||

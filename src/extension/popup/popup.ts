@@ -1176,6 +1176,10 @@ btnArm.addEventListener('click', async () => {
     agreeToTerms: profileAgreeTermsCheckbox.checked,
   };
 
+  if (!userProfile.fullName || !userProfile.phone) {
+    addLog('Lưu ý: Chưa điền Họ tên hoặc SĐT trong "User Profile". Nếu sự kiện có bảng câu hỏi, hệ thống sẽ dừng chờ bạn điền.');
+  }
+
   // Derive legacy categoryPriority from ticketRules for backward compat
   const categoryPriority = currentPlan.ticketRules
     .map((r) => r.ticketName || r.ticketId)

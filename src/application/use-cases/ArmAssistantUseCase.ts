@@ -8,7 +8,15 @@ export interface ArmAssistantRequest {
   eventUrl: string;
   categoryPriority: string[];
   quantity: number;
-  allowFallback?: boolean;
+  allowFallback?: boolean | undefined;
+  userProfile?:
+    | {
+        fullName: string;
+        phone: string;
+        email: string;
+        agreeToTerms?: boolean | undefined;
+      }
+    | undefined;
 }
 
 export class ArmAssistantUseCase {
@@ -22,8 +30,11 @@ export class ArmAssistantUseCase {
   public async execute(request: ArmAssistantRequest): Promise<StateContext> {
     this.logger.info('ArmAssistantUseCase requested', { eventUrl: request.eventUrl });
 
-    // 1. Save configured preferences
+    // 1. Save configured preferences while preserving existing userProfile and purchasePlan
+    const existing = await this.storage.getConfiguration();
+    const profile = request.userProfile ?? existing?.userProfile;
     const config: AssistantConfiguration = {
+      ...existing,
       targetEventUrl: request.eventUrl,
       preferences: {
         categoryPriority: request.categoryPriority,
@@ -31,6 +42,7 @@ export class ArmAssistantUseCase {
         allowFallback: request.allowFallback ?? true,
       },
       discoveryMode: false,
+      ...(profile ? { userProfile: profile } : {}),
     };
     await this.storage.saveConfiguration(config);
 

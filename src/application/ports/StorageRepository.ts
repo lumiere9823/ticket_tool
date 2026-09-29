@@ -16,12 +16,14 @@ export interface AssistantConfiguration {
   activeProfileId?: string;
   /** Cached ticket catalog snapshot for instant popup rendering on re-open. */
   ticketCatalogSnapshot?: TicketCatalogSnapshot;
-  userProfile?: {
-    fullName: string;
-    phone: string;
-    email: string;
-    agreeToTerms?: boolean;
-  };
+  userProfile?:
+    | {
+        fullName: string;
+        phone: string;
+        email: string;
+        agreeToTerms?: boolean | undefined;
+      }
+    | undefined;
 }
 
 export interface StorageRepository {

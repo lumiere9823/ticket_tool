@@ -7,6 +7,7 @@ import { PurchaseState, FailureReason } from '../../domain/states/PurchaseState'
 import {
   BookingPreferences,
   CurrentSelection,
+  FormSchema,
   JourneyTicketType,
 } from '../../domain/entities/BookingJourneyModels';
 import { PriorityCategoryEngine } from '../../domain/policies/PriorityCategoryEngine';
@@ -35,6 +36,56 @@ export class ExecuteBookingJourneyUseCase {
 
   private getState(): PurchaseState {
     return this.stateMachine.state;
+  }
+
+  /**
+   * Fail-closed guard: a detected question form must never be treated as "validated" unless the
+   * assistant is actually able to fill it from a configured attendee profile.
+   */
+  private profileGate(
+    formSchema: FormSchema,
+    preferences: BookingPreferences,
+    selection?: CurrentSelection | undefined
+  ): JourneyExecutionResult | null {
+    if (this.adapter.fillAttendeeForm && preferences.userProfile) return null;
+    this.logger.warn(
+      'Question form detected but no attendee profile is configured; stopping for the user',
+      { fields: formSchema.fields.length }
+    );
+    return {
+      success: true,
+      finalState: PurchaseState.FILLING_ATTENDEE_FORM,
+      selection,
+      requiresUserAction: true,
+      actionRequiredReason:
+        'Question form needs to be filled: configure name/phone/email/consent in the popup or fill it manually',
+    };
+  }
+
+  /**
+   * After clicking "Tiếp tục" the page must actually leave /question-form. Returns false when the
+   * form is still displayed (typically because of validation errors).
+   */
+  private async waitForQuestionFormToClose(timeoutMs = 6000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const url = typeof window !== 'undefined' ? window.location.href : '';
+      if (!url.includes('/question-form')) return true;
+      await new Promise((r) => setTimeout(r, 400));
+    } while (Date.now() < deadline);
+    return false;
+  }
+
+  private formNotAdvancedResult(selection?: CurrentSelection | undefined): JourneyExecutionResult {
+    this.logger.warn('Form was submitted but the page did not leave /question-form');
+    return {
+      success: true,
+      finalState: PurchaseState.FILLING_ATTENDEE_FORM,
+      selection,
+      requiresUserAction: true,
+      actionRequiredReason:
+        'Form still displayed after submit (validation errors?). Please check the fields.',
+    };
   }
 
   public async execute(
@@ -226,6 +277,9 @@ export class ExecuteBookingJourneyUseCase {
 
         this.stateMachine.transition({ type: 'FILLING_ATTENDEE_FORM' });
 
+        const blocked = this.profileGate(formSchema, preferences);
+        if (blocked) return blocked;
+
         if (this.adapter.fillAttendeeForm && preferences.userProfile) {
           const fillResult = await this.adapter.fillAttendeeForm(preferences.userProfile);
 
@@ -272,6 +326,10 @@ export class ExecuteBookingJourneyUseCase {
         this.logger.info('Submitting attendee form / proceeding to payment step');
         await this.adapter.proceedToNextStep();
         await new Promise((r) => setTimeout(r, 600));
+        if (formSchema && formSchema.fields.length > 0) {
+          const closed = await this.waitForQuestionFormToClose();
+          if (!closed) return this.formNotAdvancedResult();
+        }
       }
 
       this.stateMachine.transition({ type: 'PAYMENT_GATE' });
@@ -720,6 +778,9 @@ export class ExecuteBookingJourneyUseCase {
       this.logger.info(`Question form detected: ${formSchema.fields.length} fields`);
 
       this.stateMachine.transition({ type: 'FILLING_ATTENDEE_FORM' });
+
+      const blocked = this.profileGate(formSchema, preferences, currentSelection);
+      if (blocked) return blocked;
 
       if (this.adapter.fillAttendeeForm && preferences.userProfile) {
         const fillResult = await this.adapter.fillAttendeeForm(preferences.userProfile);
