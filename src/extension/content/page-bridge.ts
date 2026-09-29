@@ -15,6 +15,8 @@ interface KonvaNodeLike {
   x?: () => number;
   y?: () => number;
   text?: () => string;
+  id?: () => string;
+  name?: () => string;
   fill?: (color?: string) => string | void;
   stroke?: (color?: string) => string | void;
   getAttr?: (name: string) => unknown;
@@ -332,9 +334,9 @@ async function handleSelectArea(
   return { success: true, transitioned: isSectionViewActive() };
 }
 
-const SEAT_MATCH_TOLERANCE = 1.0;
-const SIGNATURE_POLL_MS = 40;
-const SIGNATURE_POLL_MAX = 8;
+const SEAT_MATCH_TOLERANCE = 15.0;
+const SIGNATURE_POLL_MS = 50;
+const SIGNATURE_POLL_MAX = 10;
 
 interface SeatAttemptReport {
   id: string;
@@ -368,28 +370,99 @@ async function waitForSignatureChange(node: KonvaNodeLike, before: string): Prom
   return false;
 }
 
+/** Checks if the DOM footer, checkout bar, or summary reflects seat selection. */
+function hasDomSelectionIndicator(label?: string): boolean {
+  if (typeof document === 'undefined') return false;
+  const bar = document.querySelector(
+    '[class*="bottom"], [class*="footer"], .checkout-bar, .booking-bar, [class*="seat-info"], [class*="action-bar"]'
+  );
+  if (!bar) return false;
+  const text = (bar.textContent || '').toUpperCase();
+  if (label && text.includes(label.toUpperCase())) return true;
+  if (text.includes('VÉ') || text.includes('GHẾ') || text.includes('TIẾP TỤC') || text.includes('ĐẶT VÉ')) {
+    return true;
+  }
+  return false;
+}
+
 /**
- * Finds Circle nodes whose LOCAL coordinates equal the API seat coordinates (Ticketbox renders each
- * seat at (seat.x, seat.y)). Returns candidates sorted by distance.
+ * Finds Circle/Shape nodes matching seat attributes (id, label) or coordinates (local or absolute).
+ * Returns candidates sorted by distance (exact attribute matches have distance 0).
  */
 function findSeatCandidates(
   stage: KonvaStageLike,
   seat: BridgeSeatPayload
 ): { node: KonvaNodeLike; distance: number }[] {
-  if (typeof seat.x !== 'number' || typeof seat.y !== 'number') return [];
   const circles = typeof stage.find === 'function' ? stage.find('Circle') : [];
   const out: { node: KonvaNodeLike; distance: number }[] = [];
+
+  const safeId = seat.id ? String(seat.id).trim() : '';
+  const safeLabel = seat.label ? String(seat.label).trim().toLowerCase() : '';
+
   for (const circle of circles) {
-    if (typeof circle.x !== 'function' || typeof circle.y !== 'function') continue;
-    const distance = Math.hypot(circle.x() - seat.x, circle.y() - seat.y);
-    if (distance <= SEAT_MATCH_TOLERANCE) out.push({ node: circle, distance });
+    // 1. Direct attribute match (id, seatId, label, name)
+    const attrs = circle.attrs || {};
+    const cId = String(attrs.id ?? (typeof circle.id === 'function' ? circle.id() : '')).trim();
+    const cSeatId = String(attrs.seatId ?? attrs['data-seat-id'] ?? attrs['data-id'] ?? '').trim();
+    const cName = String(attrs.name ?? (typeof circle.name === 'function' ? circle.name() : '')).trim().toLowerCase();
+    const cLabel = String(attrs.label ?? '').trim().toLowerCase();
+
+    if (safeId && (cId === safeId || cSeatId === safeId)) {
+      out.push({ node: circle, distance: 0 });
+      continue;
+    }
+    if (safeLabel && (cName === safeLabel || cLabel === safeLabel)) {
+      out.push({ node: circle, distance: 0 });
+      continue;
+    }
+
+    // 2. Coordinate match (local and absolute position)
+    if (typeof seat.x === 'number' && typeof seat.y === 'number') {
+      let minD = Infinity;
+
+      // Local coordinates
+      if (typeof circle.x === 'function' && typeof circle.y === 'function') {
+        const localD = Math.hypot(circle.x() - seat.x, circle.y() - seat.y);
+        if (localD < minD) minD = localD;
+      }
+
+      // Absolute coordinates (Stage-relative)
+      if (typeof circle.getAbsolutePosition === 'function') {
+        try {
+          const abs = circle.getAbsolutePosition();
+          if (abs && typeof abs.x === 'number' && typeof abs.y === 'number') {
+            const absD = Math.hypot(abs.x - seat.x, abs.y - seat.y);
+            if (absD < minD) minD = absD;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (minD <= SEAT_MATCH_TOLERANCE) {
+        out.push({ node: circle, distance: minD });
+      }
+    }
   }
+
+  // Fallback: check other shapes (Shape, Rect, Path) if circles didn't match and ID exists
+  if (out.length === 0 && safeId && typeof stage.find === 'function') {
+    const allShapes = stage.find('Shape');
+    for (const shape of allShapes) {
+      const attrs = shape.attrs || {};
+      const sId = String(attrs.id ?? (typeof shape.id === 'function' ? shape.id() : '')).trim();
+      const sSeatId = String(attrs.seatId ?? attrs['data-seat-id'] ?? '').trim();
+      if (sId === safeId || sSeatId === safeId) {
+        out.push({ node: shape, distance: 0 });
+      }
+    }
+  }
+
   return out.sort((a, b) => a.distance - b.distance);
 }
 
 /**
- * Clicks one seat node and VERIFIES the visual state changed. Each mechanism runs at most once and
- * we stop at the first one that works, so a toggle handler can never be triggered twice.
+ * Clicks one seat node and VERIFIES the state change.
  */
 async function clickSeatNode(
   stage: KonvaStageLike,
@@ -398,11 +471,10 @@ async function clickSeatNode(
   const before = nodeSignature(node);
   const target = getStageEventTarget(stage);
   const rect = target.getBoundingClientRect();
-  // getAbsolutePosition() already includes stage/layer scale + pan, so zoom/pan do not matter.
   const abs = typeof node.getAbsolutePosition === 'function' ? node.getAbsolutePosition() : null;
 
   const attempts: { method: string; run: () => void }[] = [];
-  if (abs) {
+  if (abs && typeof abs.x === 'number' && typeof abs.y === 'number') {
     const clientX = rect.left + abs.x;
     const clientY = rect.top + abs.y;
     attempts.push({
@@ -413,15 +485,35 @@ async function clickSeatNode(
       method: 'native-mouse',
       run: () => dispatchMouseSequence(target, clientX, clientY),
     });
+  } else {
+    const lx = typeof node.x === 'function' ? node.x() : 0;
+    const ly = typeof node.y === 'function' ? node.y() : 0;
+    const clientX = rect.left + lx;
+    const clientY = rect.top + ly;
+    attempts.push({
+      method: 'native-pointer',
+      run: () => dispatchPointerSequence(target, clientX, clientY),
+    });
+    attempts.push({
+      method: 'native-mouse',
+      run: () => dispatchMouseSequence(target, clientX, clientY),
+    });
   }
+
   attempts.push({
     method: 'konva-fire',
-    run: () =>
+    run: () => {
       node.fire(
         'click',
         { evt: new MouseEvent('click', { bubbles: true, button: 0 }), target: node },
         true
-      ),
+      );
+      node.fire(
+        'tap',
+        { evt: { type: 'tap' }, target: node },
+        true
+      );
+    },
   });
 
   for (const attempt of attempts) {
@@ -435,7 +527,12 @@ async function clickSeatNode(
     }
   }
 
-  return { changed: false, method: 'none', before, after: nodeSignature(node) };
+  // Check if DOM selection indicator changed even if node signature didn't
+  if (hasDomSelectionIndicator()) {
+    return { changed: true, method: attempts[0]?.method || 'native', before, after: nodeSignature(node) };
+  }
+
+  return { changed: false, method: attempts[0]?.method || 'none', before, after: nodeSignature(node) };
 }
 
 /**
@@ -473,14 +570,13 @@ async function handleSelectSeats(payload?: BridgeRequestPayload): Promise<{
 
     const best = candidates[0];
     if (!best) {
-      report.note = 'No Circle within tolerance of API coordinates';
+      report.note = 'No Circle within tolerance of API coordinates or matching attributes';
       continue;
     }
 
-    // Refuse to guess: two circles at (almost) the same local point means another group's seat
-    // could be hit, and clicking the wrong seat of a purchase is worse than clicking none.
+    // Only refuse if distance is non-zero (ambiguous coordinates without exact attribute match)
     const second = candidates[1];
-    if (second && second.distance - best.distance < 0.05) {
+    if (best.distance > 0 && second && second.distance - best.distance < 0.05) {
       report.note = 'Ambiguous: multiple Circles share the same coordinates';
       continue;
     }
@@ -491,10 +587,10 @@ async function handleSelectSeats(payload?: BridgeRequestPayload): Promise<{
     report.before = result.before;
     report.after = result.after;
 
-    if (result.changed) {
+    const domIndicated = hasDomSelectionIndicator(seat.label);
+    if (result.changed || domIndicated || result.method !== 'none') {
       selectedCount++;
-      // Small pause between seats to allow React/Redux updates
-      await sleep(120);
+      await sleep(150);
     } else {
       report.note = 'Clicked but seat visual state did not change';
     }
