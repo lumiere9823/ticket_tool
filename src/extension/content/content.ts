@@ -49,13 +49,88 @@ stateMachine.subscribe(async (context: StateContext) => {
 const journeyUseCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, messageBus, logger);
 
 let isMonitoringActive = false;
+let userExplicitlyStopped = false;
 let isExecutingJourney = false;
+let activeJourneyPromise: Promise<void> | null = null;
+let isDiscoveryScanning = false;
 let monitoringTimeout: number | null = null;
 let debounceTimer: number | null = null;
 let awaitingNavigationFromUrl: string | null = null;
 let awaitingNavigationTimestamp = 0;
 let lastWaitingLogTimestamp = 0;
 const triedCandidateKeysInCycle = new Set<string>();
+
+let lastPollTimestamp = Date.now();
+let scheduledArmTargetMs: number | null = null;
+let scheduledArmTimer: number | null = null;
+let watchdogInterval: number | null = null;
+
+function resetStateMachineToMonitoring(reason = 'Re-arm reset'): void {
+  try {
+    const s = stateMachine.state;
+    if (s === PurchaseState.MONITORING) return;
+    if (
+      s !== PurchaseState.STOPPED &&
+      s !== PurchaseState.READY &&
+      s !== PurchaseState.IDLE &&
+      s !== PurchaseState.INIT
+    ) {
+      stateMachine.transition({ type: 'STOP_REQUESTED', reason });
+    }
+    if (
+      stateMachine.state !== PurchaseState.READY &&
+      stateMachine.state !== PurchaseState.IDLE &&
+      stateMachine.state !== PurchaseState.INIT
+    ) {
+      stateMachine.transition({ type: 'RESET_REQUESTED' });
+    }
+    if (
+      stateMachine.state === PurchaseState.READY ||
+      stateMachine.state === PurchaseState.IDLE ||
+      stateMachine.state === PurchaseState.INIT
+    ) {
+      stateMachine.transition({ type: 'ARM' });
+      stateMachine.transition({ type: 'MONITORING_STARTED' });
+    } else if (stateMachine.state === PurchaseState.ARMED) {
+      stateMachine.transition({ type: 'MONITORING_STARTED' });
+    }
+  } catch (err) {
+    logger.warn('State machine reset to MONITORING failed', {
+      err: String(err),
+      currentState: stateMachine.state,
+    });
+  }
+}
+
+async function triggerScheduledArmInContent(): Promise<void> {
+  if (scheduledArmTimer) {
+    window.clearTimeout(scheduledArmTimer);
+    scheduledArmTimer = null;
+  }
+  scheduledArmTargetMs = null;
+  if (isMonitoringActive || isExecutingJourney) return;
+
+  logger.info('Scheduled ARM exact target time reached in content script; automatically activating monitoring');
+  resetStateMachineToMonitoring('Scheduled ARM exact timer');
+
+  isMonitoringActive = true;
+  isExecutingJourney = false;
+  awaitingNavigationFromUrl = null;
+  triedCandidateKeysInCycle.clear();
+  lastPollTimestamp = Date.now();
+
+  storage
+    .savePersistentState({
+      startedAt: new Date().toISOString(),
+      attemptsCount: 0,
+      currentPhase: 'MONITORING',
+      stopReason: undefined,
+    })
+    .catch(() => {});
+
+  scheduleDiscoveryScan(50);
+  scheduleNextPoll(200);
+}
 
 function ensurePageBridgeInjected(): void {
   if (typeof document === 'undefined') return;
@@ -208,6 +283,7 @@ function scheduleNextPoll(delayMs?: number): void {
 async function runMonitoringCycle(): Promise<void> {
   if (!isExtensionContextValid() || !isMonitoringActive) return;
 
+  lastPollTimestamp = Date.now();
   try {
     const config = await storage.getConfiguration();
     const scopedPlan = config?.scopedPurchasePlan;
@@ -252,6 +328,11 @@ async function performDiscoveryScan(force = false): Promise<void> {
     }
     return;
   }
+
+  if (isDiscoveryScanning && !force) {
+    return;
+  }
+  isDiscoveryScanning = true;
 
   try {
     const eventState = await adapter.getEventState();
@@ -396,23 +477,65 @@ async function performDiscoveryScan(force = false): Promise<void> {
           to: currentUrl,
         });
         awaitingNavigationFromUrl = null;
-      } else if (Date.now() - awaitingNavigationTimestamp < 10000) {
-        logger.debug('Waiting for page navigation to complete...', { url: currentUrl });
-        return;
       } else {
-        logger.warn('Timed out waiting for page navigation. Clearing wait flag.');
-        awaitingNavigationFromUrl = null;
+        // Check if an error modal (e.g. -1242) has appeared while awaiting navigation
+        if (adapter && typeof adapter.detectAndHandleErrorModal === 'function') {
+          const modalCheck = await adapter.detectAndHandleErrorModal();
+          if (modalCheck.hasError && modalCheck.isSeatUnavailable) {
+            logger.warn(
+              'Seat unavailable modal detected while awaiting page navigation. Aborting navigation wait and retrying journey.',
+              {
+                seatLabel: modalCheck.seatLabel,
+              }
+            );
+            awaitingNavigationFromUrl = null;
+            if (isMonitoringActive && !isExecutingJourney && !activeJourneyPromise) {
+              attemptBookingJourney();
+            }
+            return;
+          }
+        }
+
+        if (Date.now() - awaitingNavigationTimestamp < 10000) {
+          logger.debug('Waiting for page navigation to complete...', { url: currentUrl });
+          return;
+        } else {
+          logger.warn('Timed out waiting for page navigation. Clearing wait flag.');
+          awaitingNavigationFromUrl = null;
+        }
       }
     }
 
     const isOnSpecialBookingPage =
       currentUrl.includes('/question-form') ||
       currentUrl.includes('/select-ticket') ||
+      currentUrl.includes('/booking') ||
       currentUrl.includes('/payment');
+
+    // Auto-resume monitoring if user is on select-ticket page (e.g. after clicking "Chọn ghế khác"),
+    // but NEVER auto-resume if the user explicitly clicked Stop.
+    if (
+      !userExplicitlyStopped &&
+      !isMonitoringActive &&
+      (currentUrl.includes('/select-ticket') || currentUrl.includes('/booking'))
+    ) {
+      logger.info('User on select-ticket page; auto-reactivating monitoring to continue seat selection');
+      isMonitoringActive = true;
+      try {
+        if (stateMachine.state === PurchaseState.FAILED || stateMachine.state === PurchaseState.STOPPED) {
+          stateMachine.transition({ type: 'RESET_REQUESTED' });
+          stateMachine.transition({ type: 'ARM' });
+          stateMachine.transition({ type: 'MONITORING_STARTED' });
+        }
+      } catch {
+        // ignore
+      }
+    }
 
     if (
       isMonitoringActive &&
       !isExecutingJourney &&
+      !activeJourneyPromise &&
       (availableTickets.length > 0 || isOnSpecialBookingPage)
     ) {
       attemptBookingJourney();
@@ -427,6 +550,8 @@ async function performDiscoveryScan(force = false): Promise<void> {
       return;
     }
     logger.error('Error during discovery scan in content script', err);
+  } finally {
+    isDiscoveryScanning = false;
   }
 }
 
@@ -435,11 +560,12 @@ async function performDiscoveryScan(force = false): Promise<void> {
  * Transitions strictly through canonical states up to PAYMENT_GATE.
  */
 async function attemptBookingJourney(): Promise<void> {
-  if (!isMonitoringActive || isExecutingJourney) return;
+  if (!isMonitoringActive || isExecutingJourney || activeJourneyPromise) return;
   isExecutingJourney = true;
 
-  try {
-    const config = await storage.getConfiguration();
+  const journeyPromise = (async () => {
+    try {
+      const config = await storage.getConfiguration();
     if (!config) return;
 
     const scopedPlan = config.scopedPurchasePlan;
@@ -457,9 +583,16 @@ async function attemptBookingJourney(): Promise<void> {
     const isOnQuestionForm = currentUrl.includes('/question-form');
     const isOnPayment = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
 
+    const isOnSelectTicket = currentUrl.includes('/select-ticket') || currentUrl.includes('/booking');
+
     if (priorities.length === 0 && !isOnQuestionForm && !isOnPayment) {
-      logger.info('No ticket priorities configured; waiting for user configuration');
-      return;
+      if (isOnSelectTicket) {
+        logger.info('No explicit ticket priorities configured on select-ticket; defaulting to ANY to select available seats');
+        priorities.push('ANY');
+      } else {
+        logger.info('No ticket priorities configured; waiting for user configuration');
+        return;
+      }
     }
 
     const scopedShowingIds = scopedPlan?.targets.map((t) => t.showingId).filter(Boolean);
@@ -679,28 +812,58 @@ async function attemptBookingJourney(): Promise<void> {
         monitoringTimeout = null;
       }
     } else if (result.finalState === PurchaseState.FAILED) {
-      logger.info(
-        'Journey execution failed after retries. Halting monitoring loop to prevent retry storm.'
-      );
-      isMonitoringActive = false;
-      if (monitoringTimeout) {
-        window.clearTimeout(monitoringTimeout);
-        monitoringTimeout = null;
+      const currentUrlNow = typeof window !== 'undefined' ? window.location.href : '';
+      const isOnActiveBooking =
+        currentUrlNow.includes('/select-ticket') ||
+        currentUrlNow.includes('/booking') ||
+        currentUrlNow.includes('/question-form');
+
+      if (isOnActiveBooking) {
+        logger.info(
+          'Journey encountered failure on active booking page. Backing off 1.5s and maintaining monitoring to allow auto-recovery/reselection.',
+          { url: currentUrlNow }
+        );
+        isMonitoringActive = true;
+        try {
+          if (stateMachine.state === PurchaseState.FAILED || stateMachine.state === PurchaseState.STOPPED) {
+            stateMachine.transition({ type: 'RESET_REQUESTED' });
+            stateMachine.transition({ type: 'ARM' });
+            stateMachine.transition({ type: 'MONITORING_STARTED' });
+          }
+        } catch {
+          // ignore
+        }
+        scheduleNextPoll(1500);
+        scheduleDiscoveryScan(1500);
+      } else {
+        logger.info(
+          'Journey execution failed after retries. Halting monitoring loop to prevent retry storm.'
+        );
+        isMonitoringActive = false;
+        if (monitoringTimeout) {
+          window.clearTimeout(monitoringTimeout);
+          monitoringTimeout = null;
+        }
       }
     }
-  } catch (err: unknown) {
-    const msg = String(err);
-    if (msg.includes('Extension context invalidated')) {
-      if (monitoringTimeout) {
-        window.clearTimeout(monitoringTimeout);
-        monitoringTimeout = null;
+    } catch (err: unknown) {
+      const msg = String(err);
+      if (msg.includes('Extension context invalidated')) {
+        if (monitoringTimeout) {
+          window.clearTimeout(monitoringTimeout);
+          monitoringTimeout = null;
+        }
+        return;
       }
-      return;
+      logger.error('Error during booking journey execution in content script', err);
+    } finally {
+      isExecutingJourney = false;
+      activeJourneyPromise = null;
     }
-    logger.error('Error during booking journey execution in content script', err);
-  } finally {
-    isExecutingJourney = false;
-  }
+  })();
+
+  activeJourneyPromise = journeyPromise;
+  await journeyPromise;
 }
 
 function scheduleDiscoveryScan(delayMs = 300): void {
@@ -723,10 +886,32 @@ async function checkRehydration(): Promise<void> {
   if (!isExtensionContextValid()) return;
   try {
     const config = await storage.getConfiguration();
-    if (config?.scheduledArmAt && new Date(config.scheduledArmAt).getTime() > Date.now()) {
-      logger.info('Scheduled ARM pending in future; skipping monitoring rehydration in content script', {
-        scheduledArmAt: config.scheduledArmAt,
-      });
+    if (config?.scheduledArmAt) {
+      const schedMs = new Date(config.scheduledArmAt).getTime();
+      if (schedMs > Date.now()) {
+        logger.info('Scheduled ARM pending in future; arming content script timer', {
+          scheduledArmAt: config.scheduledArmAt,
+          remainingSeconds: Math.round((schedMs - Date.now()) / 1000),
+        });
+        scheduledArmTargetMs = schedMs;
+        if (scheduledArmTimer) window.clearTimeout(scheduledArmTimer);
+        scheduledArmTimer = window.setTimeout(async () => {
+          await triggerScheduledArmInContent();
+        }, Math.max(0, schedMs - Date.now()));
+        return;
+      } else {
+        logger.info('Scheduled ARM time has already passed; activating immediately', {
+          scheduledArmAt: config.scheduledArmAt,
+        });
+        await triggerScheduledArmInContent();
+        return;
+      }
+    }
+
+    const pState = await storage.getPersistentState();
+    const stoppedPhases = new Set(['STOPPED', 'STOPPED_LIMIT_REACHED', 'STOPPED_NO_TARGET']);
+    if (pState?.currentPhase && stoppedPhases.has(pState.currentPhase)) {
+      userExplicitlyStopped = true;
       return;
     }
 
@@ -772,7 +957,13 @@ if (typeof document !== 'undefined') {
           'Tab hidden: Browser background timer throttling may affect polling interval. Keep tab active in foreground for best results.'
         );
       } else {
-        logger.info('Tab returned to foreground.');
+        logger.info('Tab returned to foreground — immediately resuming and catching up polling.');
+        if (scheduledArmTargetMs && Date.now() >= scheduledArmTargetMs) {
+          await triggerScheduledArmInContent();
+        } else if (isMonitoringActive && !isExecutingJourney) {
+          scheduleDiscoveryScan(50);
+          scheduleNextPoll(100);
+        }
       }
     } catch {
       // ignore
@@ -795,7 +986,7 @@ if (typeof MutationObserver !== 'undefined') {
       }
     }
     if (hasAddedElements) {
-      scheduleDiscoveryScan(400);
+      scheduleDiscoveryScan(100);
     }
   });
 
@@ -823,7 +1014,23 @@ if (typeof window !== 'undefined') {
       if (awaitingNavigationFromUrl && nowUrl !== awaitingNavigationFromUrl) {
         awaitingNavigationFromUrl = null;
       }
-      scheduleDiscoveryScan(150);
+      if (nowUrl.includes('/select-ticket') || nowUrl.includes('/booking')) {
+        if (!userExplicitlyStopped && !isMonitoringActive) {
+          logger.info('Detected navigation to select-ticket page; ensuring monitoring is active');
+          isMonitoringActive = true;
+          try {
+            if (stateMachine.state === PurchaseState.FAILED || stateMachine.state === PurchaseState.STOPPED) {
+              stateMachine.transition({ type: 'RESET_REQUESTED' });
+              stateMachine.transition({ type: 'ARM' });
+              stateMachine.transition({ type: 'MONITORING_STARTED' });
+            }
+          } catch {
+            // ignore
+          }
+          scheduleNextPoll(100);
+        }
+      }
+      scheduleDiscoveryScan(50);
     }
   };
 
@@ -834,7 +1041,7 @@ if (typeof window !== 'undefined') {
     window.setTimeout(() => {
       checkUrlChange();
       scheduleUrlCheck();
-    }, 250);
+    }, 100);
   };
   scheduleUrlCheck();
 }
@@ -850,48 +1057,42 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'ARM_REQUESTED': {
       logger.info('Content script received ARM_REQUESTED');
-      // If ARM is scheduled for a future time, DO NOT start monitoring!
+      // If ARM is scheduled for a future time, arm local timer and wait
       const startAt = message.scopedPurchasePlan?.persistence?.startAt;
       if (startAt) {
         const startMs = new Date(startAt).getTime();
         if (startMs > Date.now()) {
-          logger.info('ARM is scheduled for future time; content script will wait for alarm', {
+          const delaySeconds = Math.round((startMs - Date.now()) / 1000);
+          logger.info('ARM is scheduled for future time; armed local timer in content script', {
             startAt,
-            delaySeconds: Math.round((startMs - Date.now()) / 1000),
+            delaySeconds,
           });
+          scheduledArmTargetMs = startMs;
           isMonitoringActive = false;
           if (monitoringTimeout) {
             window.clearTimeout(monitoringTimeout);
             monitoringTimeout = null;
           }
+          if (scheduledArmTimer) {
+            window.clearTimeout(scheduledArmTimer);
+          }
+          const delayMs = Math.max(0, startMs - Date.now());
+          scheduledArmTimer = window.setTimeout(async () => {
+            logger.info('Scheduled ARM timer fired at target timestamp in content script');
+            await triggerScheduledArmInContent();
+          }, delayMs);
           break;
         }
       }
 
-      try {
-        const s = stateMachine.state;
-        if (s !== PurchaseState.READY && s !== PurchaseState.IDLE && s !== PurchaseState.INIT) {
-          stateMachine.transition({ type: 'RESET_REQUESTED' });
-        }
-        if (
-          stateMachine.state === PurchaseState.READY ||
-          stateMachine.state === PurchaseState.IDLE
-        ) {
-          stateMachine.transition({ type: 'ARM' });
-          stateMachine.transition({ type: 'MONITORING_STARTED' });
-        }
-      } catch (err) {
-        logger.warn('Content script state machine transition during ARM failed', {
-          err: String(err),
-        });
-        try {
-          stateMachine.transition({ type: 'RESET_REQUESTED' });
-          stateMachine.transition({ type: 'ARM' });
-          stateMachine.transition({ type: 'MONITORING_STARTED' });
-        } catch {
-          // ignore
-        }
+      if (scheduledArmTimer) {
+        window.clearTimeout(scheduledArmTimer);
+        scheduledArmTimer = null;
       }
+      scheduledArmTargetMs = null;
+
+      resetStateMachineToMonitoring('User ARM requested');
+      userExplicitlyStopped = false;
       isMonitoringActive = true;
       isExecutingJourney = false;
       awaitingNavigationFromUrl = null;
@@ -911,38 +1112,8 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'START_MONITORING': {
       logger.info('Content script received START_MONITORING');
-      try {
-        const s = stateMachine.state;
-        if (
-          s !== PurchaseState.READY &&
-          s !== PurchaseState.IDLE &&
-          s !== PurchaseState.ARMED &&
-          s !== PurchaseState.MONITORING &&
-          s !== PurchaseState.INIT
-        ) {
-          stateMachine.transition({ type: 'RESET_REQUESTED' });
-        }
-        if (
-          stateMachine.state === PurchaseState.READY ||
-          stateMachine.state === PurchaseState.IDLE
-        ) {
-          stateMachine.transition({ type: 'ARM' });
-          stateMachine.transition({ type: 'MONITORING_STARTED' });
-        } else if (stateMachine.state === PurchaseState.ARMED) {
-          stateMachine.transition({ type: 'MONITORING_STARTED' });
-        }
-      } catch (err) {
-        logger.warn('Content script state machine transition during START_MONITORING failed', {
-          err: String(err),
-        });
-        try {
-          if (stateMachine.state === PurchaseState.ARMED) {
-            stateMachine.transition({ type: 'MONITORING_STARTED' });
-          }
-        } catch {
-          // ignore
-        }
-      }
+      resetStateMachineToMonitoring('User START_MONITORING');
+      userExplicitlyStopped = false;
       isMonitoringActive = true;
       isExecutingJourney = false;
       awaitingNavigationFromUrl = null;
@@ -961,6 +1132,12 @@ messageBus.subscribe((message: ExtensionMessage) => {
     }
 
     case 'STOP_REQUESTED': {
+      userExplicitlyStopped = true;
+      if (scheduledArmTimer) {
+        window.clearTimeout(scheduledArmTimer);
+        scheduledArmTimer = null;
+      }
+      scheduledArmTargetMs = null;
       if (!isMonitoringActive && stateMachine.state === PurchaseState.STOPPED) {
         break;
       }
@@ -995,11 +1172,24 @@ messageBus.subscribe((message: ExtensionMessage) => {
           message.type === 'STATE_CHANGED'
             ? message.context?.failureMessage
             : undefined;
-        if (stopReason === 'Re-arm reset' || stopReason === 'Start monitoring reset') {
+        if (
+          stopReason === 'Re-arm reset' ||
+          stopReason === 'Start monitoring reset' ||
+          stopReason === 'Journey initial clean reset' ||
+          stopReason?.includes('clean reset')
+        ) {
           break;
         }
+        userExplicitlyStopped = true;
+        if (scheduledArmTimer) {
+          window.clearTimeout(scheduledArmTimer);
+          scheduledArmTimer = null;
+        }
+        scheduledArmTargetMs = null;
         isMonitoringActive = false;
-        isExecutingJourney = false;
+        if (!activeJourneyPromise) {
+          isExecutingJourney = false;
+        }
         awaitingNavigationFromUrl = null;
         if (monitoringTimeout) {
           window.clearTimeout(monitoringTimeout);
@@ -1010,6 +1200,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
         message.state === PurchaseState.MONITORING ||
         message.state === PurchaseState.WAITING_FOR_STOCK
       ) {
+        userExplicitlyStopped = false;
         if (!isMonitoringActive) {
           logger.info('STATE_CHANGED to active monitoring state; activating content script polling', {
             state: message.state,
@@ -1021,10 +1212,13 @@ messageBus.subscribe((message: ExtensionMessage) => {
       break;
     }
 
-
     case 'CANCEL_SCHEDULED_ARM': {
-
       logger.info('Content script received CANCEL_SCHEDULED_ARM');
+      if (scheduledArmTimer) {
+        window.clearTimeout(scheduledArmTimer);
+        scheduledArmTimer = null;
+      }
+      scheduledArmTargetMs = null;
       isMonitoringActive = false;
       isExecutingJourney = false;
       awaitingNavigationFromUrl = null;
@@ -1035,6 +1229,21 @@ messageBus.subscribe((message: ExtensionMessage) => {
       break;
     }
 
+    case 'HEARTBEAT_PING': {
+      if (scheduledArmTargetMs && Date.now() >= scheduledArmTargetMs) {
+        logger.info('Heartbeat ping detected scheduled ARM time reached; activating monitoring');
+        triggerScheduledArmInContent();
+        break;
+      }
+      if (isMonitoringActive && !isExecutingJourney) {
+        const elapsed = Date.now() - lastPollTimestamp;
+        if (elapsed >= 3000) {
+          logger.debug('Heartbeat ping detected idle poll interval; triggering cycle', { elapsed });
+          scheduleNextPoll(50);
+        }
+      }
+      break;
+    }
 
     default:
       break;
@@ -1046,11 +1255,8 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage)
   chrome.runtime.onMessage.addListener(
     (message: unknown, _sender: unknown, sendResponse: (res?: unknown) => void) => {
       if (!isExtensionContextValid()) return undefined;
-      if (
-        message &&
-        typeof message === 'object' &&
-        (message as { type?: string }).type === 'REQUEST_DISCOVERY_SCAN'
-      ) {
+      const msg = message as { type?: string } | undefined;
+      if (msg?.type === 'REQUEST_DISCOVERY_SCAN') {
         logger.info('Content script processing REQUEST_DISCOVERY_SCAN');
         performDiscoveryScan()
           .then(() => {
@@ -1061,7 +1267,43 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage)
           });
         return true; // Keep message channel open for async sendResponse
       }
+      if (msg?.type === 'HEARTBEAT_PING') {
+        if (scheduledArmTargetMs && Date.now() >= scheduledArmTargetMs) {
+          triggerScheduledArmInContent();
+        } else if (isMonitoringActive && !isExecutingJourney) {
+          const elapsed = Date.now() - lastPollTimestamp;
+          if (elapsed >= 3000) {
+            scheduleNextPoll(50);
+          }
+        }
+        sendResponse({ success: true, timestamp: new Date().toISOString() });
+        return true;
+      }
       return undefined;
     }
   );
 }
+
+// Periodic watchdog (every 1s) to defend against aggressive background tab throttling
+if (typeof window !== 'undefined') {
+  watchdogInterval = window.setInterval(() => {
+    if (!isExtensionContextValid()) {
+      if (watchdogInterval) clearInterval(watchdogInterval);
+      return;
+    }
+    const now = Date.now();
+    if (scheduledArmTargetMs && now >= scheduledArmTargetMs) {
+      logger.info('Watchdog timer detected scheduled ARM target reached; activating');
+      triggerScheduledArmInContent();
+    }
+    if (isMonitoringActive && !isExecutingJourney) {
+      const elapsed = now - lastPollTimestamp;
+      if (elapsed > 4000) {
+        logger.debug('Watchdog timer detected overdue poll cycle; kicking off poll', { elapsed });
+        lastPollTimestamp = now;
+        runMonitoringCycle();
+      }
+    }
+  }, 1000);
+}
+
