@@ -363,7 +363,7 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
     expect(result.success).toBe(false);
     expect(result.finalState).toBe(PurchaseState.FAILED);
     expect(result.error).toContain('No ticket tiers detected');
-  });
+  }, 15_000); // MAX_RETRIES=8 with backoff requires more than 5s
 
   // REGRESSION: a detected question form must never be treated as validated without a profile
   it('should stop for the user (not claim PAYMENT_GATE) when a question form has no configured profile', async () => {

@@ -97,6 +97,30 @@ describe('Security & Infrastructure Tests', () => {
       })
     ).toBe(true);
 
+    expect(
+      bus.isValidMessage({
+        type: 'HEARTBEAT_PING',
+        timestamp: '2026-09-30T06:35:00Z',
+      })
+    ).toBe(true);
+
+    expect(
+      bus.isValidMessage({
+        type: 'FETCH_SHOWING_REQUEST',
+        timestamp: '2026-09-30T06:35:00Z',
+        showingId: '48573955765118',
+      })
+    ).toBe(true);
+
+    expect(
+      bus.isValidMessage({
+        type: 'FETCH_SHOWING_RESPONSE',
+        timestamp: '2026-09-30T06:35:00Z',
+        showingId: '48573955765118',
+        success: true,
+      })
+    ).toBe(true);
+
     await expect(bus.publish({} as never)).rejects.toThrow('Invalid message format');
   });
 

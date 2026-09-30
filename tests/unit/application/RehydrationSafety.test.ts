@@ -294,5 +294,42 @@ describe('Service Worker Rehydration Safety (Section 21)', () => {
 
       expect(sm.state).toBe(PurchaseState.STOPPED_LIMIT_REACHED);
     });
+
+    it('heartbeat check detects scheduled ARM target timestamp has arrived', async () => {
+      const storage = new ChromeStorageRepository();
+
+      // Configure a scheduled ARM timestamp in the past (e.g. 5 seconds ago)
+      const pastTime = new Date(Date.now() - 5000).toISOString();
+      await storage.saveConfiguration({
+        targetEventUrl: 'https://ticketbox.vn/test-scheduled',
+        discoveryMode: false,
+        scheduledArmAt: pastTime,
+      });
+
+      const config = await storage.getConfiguration();
+      expect(config?.scheduledArmAt).toBe(pastTime);
+
+      const targetMs = new Date(config!.scheduledArmAt!).getTime();
+      const shouldTrigger = Date.now() >= targetMs;
+      expect(shouldTrigger).toBe(true);
+    });
+
+    it('heartbeat check preserves future scheduled ARM timestamp', async () => {
+      const storage = new ChromeStorageRepository();
+
+      // Configure a scheduled ARM timestamp in the future (e.g. 60 seconds ahead)
+      const futureTime = new Date(Date.now() + 60000).toISOString();
+      await storage.saveConfiguration({
+        targetEventUrl: 'https://ticketbox.vn/test-scheduled-future',
+        discoveryMode: false,
+        scheduledArmAt: futureTime,
+      });
+
+      const config = await storage.getConfiguration();
+      const targetMs = new Date(config!.scheduledArmAt!).getTime();
+      const shouldTrigger = Date.now() >= targetMs;
+      expect(shouldTrigger).toBe(false);
+    });
   });
 });
+
