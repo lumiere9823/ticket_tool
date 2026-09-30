@@ -43,6 +43,11 @@ interface KonvaStageLike extends KonvaNodeLike {
   findOne?: (selector: string) => KonvaNodeLike | null;
   getAbsoluteTransform?: () => {
     point: (pos: { x: number; y: number }) => { x: number; y: number };
+    copy?: () => {
+      invert: () => {
+        point: (pos: { x: number; y: number }) => { x: number; y: number };
+      };
+    };
   };
   getIntersection?: (pos: { x: number; y: number }) => KonvaNodeLike | null;
 }
@@ -146,16 +151,22 @@ function dispatchPointerSequence(target: Element, clientX: number, clientY: numb
     pointerType: 'mouse',
     isPrimary: true,
   };
-  target.dispatchEvent(new PointerEvent('pointermove', { ...base, buttons: 0 }));
-  target.dispatchEvent(new PointerEvent('pointerdown', { ...base, buttons: 1 }));
-  target.dispatchEvent(new PointerEvent('pointerup', { ...base, buttons: 0 }));
+  const canvas = target.querySelector('canvas') || target;
+  canvas.dispatchEvent(new PointerEvent('pointermove', { ...base, buttons: 0 }));
+  canvas.dispatchEvent(new PointerEvent('pointerdown', { ...base, buttons: 1 }));
+  canvas.dispatchEvent(new PointerEvent('pointerup', { ...base, buttons: 0 }));
 }
 
 function dispatchMouseSequence(target: Element, clientX: number, clientY: number): void {
   const base: MouseEventInit = { bubbles: true, cancelable: true, view: window, clientX, clientY };
-  target.dispatchEvent(new MouseEvent('mousemove', { ...base, buttons: 0 }));
-  target.dispatchEvent(new MouseEvent('mousedown', { ...base, button: 0, buttons: 1 }));
-  target.dispatchEvent(new MouseEvent('mouseup', { ...base, button: 0, buttons: 0 }));
+  const canvas = target.querySelector('canvas') || target;
+  canvas.dispatchEvent(new MouseEvent('mousemove', { ...base, buttons: 0 }));
+  canvas.dispatchEvent(new MouseEvent('mousedown', { ...base, button: 0, buttons: 1 }));
+  canvas.dispatchEvent(new MouseEvent('mouseup', { ...base, button: 0, buttons: 0 }));
+  canvas.dispatchEvent(new MouseEvent('click', { ...base, button: 0, buttons: 0 }));
+  if (target !== canvas) {
+    target.dispatchEvent(new MouseEvent('click', { ...base, button: 0, buttons: 0 }));
+  }
 }
 
 /**
@@ -375,7 +386,6 @@ async function handleSelectArea(
   return { success: true, transitioned: isSectionViewActive() };
 }
 
-const SEAT_MATCH_TOLERANCE = 15.0;
 const SIGNATURE_POLL_MS = 50;
 const SIGNATURE_POLL_MAX = 10;
 
@@ -415,20 +425,39 @@ async function waitForSignatureChange(node: KonvaNodeLike, before: string): Prom
 function hasDomSelectionIndicator(label?: string): boolean {
   if (typeof document === 'undefined') return false;
   const bar = document.querySelector(
-    '[class*="bottom"], [class*="footer"], .checkout-bar, .booking-bar, [class*="seat-info"], [class*="action-bar"]'
+    '[class*="bottom"], [class*="footer"], .checkout-bar, .booking-bar, [class*="seat-info"], [class*="action-bar"], [class*="summary"]'
   );
   if (!bar) return false;
   const text = (bar.textContent || '').toUpperCase();
-  if (label && text.includes(label.toUpperCase())) return true;
-  if (
-    text.includes('VÉ') ||
-    text.includes('GHẾ') ||
-    text.includes('TIẾP TỤC') ||
-    text.includes('ĐẶT VÉ')
-  ) {
-    return true;
+
+  // If label is specified, it must explicitly appear in the DOM selection container
+  if (label) {
+    const cleanLabel = label.toUpperCase().trim();
+    if (text.includes(cleanLabel)) return true;
+    const tags = Array.from(
+      document.querySelectorAll(
+        '[class*="seat-tag"], [class*="seat-item"], [class*="selected-seat"], [class*="seatTag"], [class*="badge"]'
+      )
+    );
+    for (const tag of tags) {
+      if ((tag.textContent || '').toUpperCase().includes(cleanLabel)) return true;
+    }
+    return false;
   }
-  return false;
+
+  // If no specific label, check for positive count / seat tag indicating at least 1 selected seat
+  if (text.includes('VUI LÒNG') || text.includes('0 VÉ') || text.includes('0 GHẾ')) {
+    return false;
+  }
+
+  const hasPositiveCount = /[1-9]\d*\s*(?:VÉ|GHẾ|SEATS?|TICKETS?)/i.test(text);
+  const hasPrice = /[1-9]\d{2,}(?:[.,]\d{3})*\s*(?:Đ|VND)/i.test(text);
+  const hasSeatTag =
+    document.querySelector(
+      '[class*="seat-tag"], [class*="selected-seat"], [class*="seat-item"]'
+    ) !== null;
+
+  return hasPositiveCount || (hasPrice && !text.includes('CHỌN VÉ')) || hasSeatTag;
 }
 
 /**
@@ -442,68 +471,198 @@ function findSeatCandidates(
   const circles = typeof stage.find === 'function' ? stage.find('Circle') : [];
   const out: { node: KonvaNodeLike; distance: number }[] = [];
 
-  const safeId = seat.id ? String(seat.id).trim() : '';
-  const safeLabel = seat.label ? String(seat.label).trim().toLowerCase() : '';
+  const norm = (val: unknown): string =>
+    String(val ?? '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
 
+  const targetIdNorm = norm(seat.id);
+  const targetLabelNorm = norm(seat.label);
+  const targetRowNorm = norm(seat.row);
+  const targetNum =
+    typeof seat.number === 'number'
+      ? seat.number
+      : parseInt(String(seat.label || '').replace(/^\D+/g, ''), 10) || 0;
+
+  // 1. Direct and normalized attribute matching across all circles
   for (const circle of circles) {
-    // 1. Direct attribute match (id, seatId, label, name)
     const attrs = circle.attrs || {};
-    const cId = String(attrs.id ?? (typeof circle.id === 'function' ? circle.id() : '')).trim();
-    const cSeatId = String(attrs.seatId ?? attrs['data-seat-id'] ?? attrs['data-id'] ?? '').trim();
-    const cName = String(attrs.name ?? (typeof circle.name === 'function' ? circle.name() : ''))
-      .trim()
-      .toLowerCase();
-    const cLabel = String(attrs.label ?? '')
-      .trim()
-      .toLowerCase();
+    const cId = norm(attrs.id ?? (typeof circle.id === 'function' ? circle.id() : ''));
+    const cSeatId = norm(attrs.seatId ?? attrs['data-seat-id'] ?? attrs['data-id'] ?? attrs.seat_id);
+    const cName = norm(attrs.name ?? (typeof circle.name === 'function' ? circle.name() : ''));
+    const cLabel = norm(
+      attrs.label ??
+        attrs.seatLabel ??
+        attrs.seat_label ??
+        attrs.seatCode ??
+        attrs.seat_code ??
+        attrs.code
+    );
+    const cRow = norm(attrs.row ?? attrs.rowName ?? attrs.row_name);
+    const cNum =
+      parseInt(
+        String(attrs.number ?? attrs.seatNumber ?? attrs.seat_number ?? attrs.num ?? ''),
+        10
+      ) || 0;
 
-    if (safeId && (cId === safeId || cSeatId === safeId)) {
+    // Check data sub-object if present
+    const dataObj = (attrs.data && typeof attrs.data === 'object'
+      ? attrs.data
+      : null) as Record<string, unknown> | null;
+    const dId = dataObj ? norm(dataObj.id ?? dataObj.seatId ?? dataObj.seat_id) : '';
+    const dLabel = dataObj
+      ? norm(dataObj.label ?? dataObj.name ?? dataObj.seatCode ?? dataObj.code)
+      : '';
+    const dRow = dataObj ? norm(dataObj.row ?? dataObj.rowName) : '';
+    const dNum = dataObj
+      ? parseInt(String(dataObj.number ?? dataObj.seatNumber ?? ''), 10) || 0
+      : 0;
+
+    // Check parent group attributes (e.g. Group for row 'A2' containing Circle '12')
+    const parent = circle.parent;
+    const pAttrs = parent?.attrs || {};
+    const pName = norm(pAttrs.name ?? (typeof parent?.name === 'function' ? parent.name() : ''));
+    const pRow = norm(pAttrs.row ?? pAttrs.rowName);
+
+    // Exact matches
+    const isIdMatch =
+      targetIdNorm.length > 0 &&
+      (cId === targetIdNorm || cSeatId === targetIdNorm || dId === targetIdNorm);
+
+    const isLabelMatch =
+      targetLabelNorm.length > 0 &&
+      (cLabel === targetLabelNorm ||
+        cName === targetLabelNorm ||
+        dLabel === targetLabelNorm ||
+        (cRow && cNum && `${cRow}${cNum}` === targetLabelNorm) ||
+        (dRow && dNum && `${dRow}${dNum}` === targetLabelNorm) ||
+        (pRow && cNum && `${pRow}${cNum}` === targetLabelNorm) ||
+        (pName && cNum && `${pName}${cNum}` === targetLabelNorm) ||
+        (pName && cName && `${pName}${cName}` === targetLabelNorm));
+
+    const isRowColMatch =
+      targetRowNorm.length > 0 &&
+      targetNum > 0 &&
+      ((cRow === targetRowNorm && cNum === targetNum) ||
+        (dRow === targetRowNorm && dNum === targetNum) ||
+        (pRow === targetRowNorm && cNum === targetNum) ||
+        (pName === targetRowNorm && cNum === targetNum));
+
+    if (isIdMatch || isLabelMatch || isRowColMatch) {
       out.push({ node: circle, distance: 0 });
       continue;
     }
-    if (safeLabel && (cName === safeLabel || cLabel === safeLabel)) {
-      out.push({ node: circle, distance: 0 });
-      continue;
-    }
+  }
 
-    // 2. Coordinate match (local and absolute position)
-    if (typeof seat.x === 'number' && typeof seat.y === 'number') {
-      let minD = Infinity;
+  if (out.length > 0) {
+    return out;
+  }
 
-      // Local coordinates
-      if (typeof circle.x === 'function' && typeof circle.y === 'function') {
-        const localD = Math.hypot(circle.x() - seat.x, circle.y() - seat.y);
-        if (localD < minD) minD = localD;
-      }
+  // 2. Coordinate-based matching with Scale-Invariance
+  if (typeof seat.x === 'number' && typeof seat.y === 'number') {
+    const stageTransform =
+      typeof stage.getAbsoluteTransform === 'function' ? stage.getAbsoluteTransform() : null;
+    const stageScaleX =
+      typeof stage.scaleX === 'function' && stage.scaleX() !== 0 ? Math.abs(stage.scaleX()) : 1;
+    const stageScaleY =
+      typeof stage.scaleY === 'function' && stage.scaleY() !== 0 ? Math.abs(stage.scaleY()) : 1;
 
-      // Absolute coordinates (Stage-relative)
+    // Calculate dynamic tolerance adjusted for stage scaling (large vs small screens)
+    const baseTolerance = 30.0;
+    const dynamicTolerance = Math.max(25.0, baseTolerance * Math.max(stageScaleX, stageScaleY));
+
+    // Calculate stage transformed expected coordinates
+    const expectedAbs = stageTransform ? stageTransform.point({ x: seat.x, y: seat.y }) : null;
+
+    for (const circle of circles) {
+      const lx = typeof circle.x === 'function' ? circle.x() : 0;
+      const ly = typeof circle.y === 'function' ? circle.y() : 0;
+      let ax = lx;
+      let ay = ly;
       if (typeof circle.getAbsolutePosition === 'function') {
         try {
           const abs = circle.getAbsolutePosition();
           if (abs && typeof abs.x === 'number' && typeof abs.y === 'number') {
-            const absD = Math.hypot(abs.x - seat.x, abs.y - seat.y);
-            if (absD < minD) minD = absD;
+            ax = abs.x;
+            ay = abs.y;
           }
         } catch {
           // ignore
         }
       }
 
-      if (minD <= SEAT_MATCH_TOLERANCE) {
+      let minD = Infinity;
+
+      // Check distance in unscaled local coords
+      const localD = Math.hypot(lx - seat.x, ly - seat.y);
+      if (localD < minD) minD = localD;
+
+      // Check distance in stage absolute coords
+      if (expectedAbs) {
+        const stageD = Math.hypot(ax - expectedAbs.x, ay - expectedAbs.y);
+        if (stageD < minD) minD = stageD;
+      }
+
+      // Check direct absolute distance
+      const directAbsD = Math.hypot(ax - seat.x, ay - seat.y);
+      if (directAbsD < minD) minD = directAbsD;
+
+      // Check inverted stage coords
+      if (stageTransform && typeof stageTransform.copy === 'function') {
+        try {
+          const unscaled = stageTransform.copy().invert().point({ x: ax, y: ay });
+          const unscaledD = Math.hypot(unscaled.x - seat.x, unscaled.y - seat.y);
+          if (unscaledD < minD) minD = unscaledD;
+        } catch {
+          // ignore
+        }
+      }
+
+      if (minD <= dynamicTolerance) {
         out.push({ node: circle, distance: minD });
       }
     }
   }
 
-  // Fallback: check other shapes (Shape, Rect, Path) if circles didn't match and ID exists
-  if (out.length === 0 && safeId && typeof stage.find === 'function') {
+  // 3. Fallback: check other shapes (Shape, Rect, Path) if circles didn't match
+  if (out.length === 0 && typeof stage.find === 'function') {
     const allShapes = stage.find('Shape');
     for (const shape of allShapes) {
       const attrs = shape.attrs || {};
-      const sId = String(attrs.id ?? (typeof shape.id === 'function' ? shape.id() : '')).trim();
-      const sSeatId = String(attrs.seatId ?? attrs['data-seat-id'] ?? '').trim();
-      if (sId === safeId || sSeatId === safeId) {
+      const sId = norm(attrs.id ?? (typeof shape.id === 'function' ? shape.id() : ''));
+      const sSeatId = norm(attrs.seatId ?? attrs['data-seat-id'] ?? attrs['data-id'] ?? '');
+      const sName = norm(attrs.name ?? (typeof shape.name === 'function' ? shape.name() : ''));
+      const sLabel = norm(attrs.label ?? '');
+
+      if (targetIdNorm && (sId === targetIdNorm || sSeatId === targetIdNorm)) {
         out.push({ node: shape, distance: 0 });
+        continue;
+      }
+      if (targetLabelNorm && (sName === targetLabelNorm || sLabel === targetLabelNorm)) {
+        out.push({ node: shape, distance: 0 });
+        continue;
+      }
+
+      if (typeof seat.x === 'number' && typeof seat.y === 'number') {
+        let minD = Infinity;
+        if (typeof shape.x === 'function' && typeof shape.y === 'function') {
+          const localD = Math.hypot(shape.x() - seat.x, shape.y() - seat.y);
+          if (localD < minD) minD = localD;
+        }
+        if (typeof shape.getAbsolutePosition === 'function') {
+          try {
+            const abs = shape.getAbsolutePosition();
+            if (abs && typeof abs.x === 'number' && typeof abs.y === 'number') {
+              const absD = Math.hypot(abs.x - seat.x, abs.y - seat.y);
+              if (absD < minD) minD = absD;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (minD <= 35.0) {
+          out.push({ node: shape, distance: minD });
+        }
       }
     }
   }
@@ -513,52 +672,96 @@ function findSeatCandidates(
 
 /**
  * Clicks one seat node and VERIFIES the state change.
+ * Computes CSS client coordinates with stage-to-canvas ratio scaling
+ * to guarantee accurate clicking on any monitor resolution, DPI, or zoom level.
  */
 async function clickSeatNode(
   stage: KonvaStageLike,
-  node: KonvaNodeLike
+  node: KonvaNodeLike,
+  seatLabel?: string
 ): Promise<{ changed: boolean; method: string; before: string; after: string }> {
   const before = nodeSignature(node);
   const target = getStageEventTarget(stage);
   const rect = target.getBoundingClientRect();
   const abs = typeof node.getAbsolutePosition === 'function' ? node.getAbsolutePosition() : null;
 
-  const attempts: { method: string; run: () => void }[] = [];
-  if (abs && typeof abs.x === 'number' && typeof abs.y === 'number') {
-    const clientX = rect.left + abs.x;
-    const clientY = rect.top + abs.y;
-    attempts.push({
-      method: 'native-pointer',
-      run: () => dispatchPointerSequence(target, clientX, clientY),
-    });
-    attempts.push({
-      method: 'native-mouse',
-      run: () => dispatchMouseSequence(target, clientX, clientY),
-    });
-  } else {
-    const lx = typeof node.x === 'function' ? node.x() : 0;
-    const ly = typeof node.y === 'function' ? node.y() : 0;
-    const clientX = rect.left + lx;
-    const clientY = rect.top + ly;
-    attempts.push({
-      method: 'native-pointer',
-      run: () => dispatchPointerSequence(target, clientX, clientY),
-    });
-    attempts.push({
-      method: 'native-mouse',
-      run: () => dispatchMouseSequence(target, clientX, clientY),
-    });
-  }
+  // Scale stage coordinates to actual CSS client pixels on screen
+  const stageW =
+    typeof stage.width === 'function' && stage.width() > 0 ? stage.width() : rect.width;
+  const stageH =
+    typeof stage.height === 'function' && stage.height() > 0 ? stage.height() : rect.height;
+  const ratioX = stageW > 0 ? rect.width / stageW : 1;
+  const ratioY = stageH > 0 ? rect.height / stageH : 1;
 
+  const nodeAbsX =
+    abs && typeof abs.x === 'number'
+      ? abs.x
+      : typeof node.x === 'function'
+        ? node.x()
+        : 0;
+  const nodeAbsY =
+    abs && typeof abs.y === 'number'
+      ? abs.y
+      : typeof node.y === 'function'
+        ? node.y()
+        : 0;
+
+  const clientX = rect.left + nodeAbsX * ratioX;
+  const clientY = rect.top + nodeAbsY * ratioY;
+
+  const attempts: { method: string; run: () => void }[] = [];
+
+  // 1. Native pointer sequence at calculated screen coordinates
+  attempts.push({
+    method: 'native-pointer',
+    run: () => dispatchPointerSequence(target, clientX, clientY),
+  });
+
+  // 2. Native mouse sequence at calculated screen coordinates
+  attempts.push({
+    method: 'native-mouse',
+    run: () => dispatchMouseSequence(target, clientX, clientY),
+  });
+
+  // 3. Konva node & stage fire
   attempts.push({
     method: 'konva-fire',
     run: () => {
-      node.fire(
-        'click',
-        { evt: new MouseEvent('click', { bubbles: true, button: 0 }), target: node },
-        true
-      );
-      node.fire('tap', { evt: { type: 'tap' }, target: node }, true);
+      const mouseEvt = new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY,
+        button: 0,
+      });
+      if (typeof PointerEvent !== 'undefined') {
+        const ptrEvt = new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY,
+          button: 0,
+        });
+        node.fire('pointerdown', { evt: ptrEvt as never, target: node }, true);
+        node.fire('pointerup', { evt: ptrEvt as never, target: node }, true);
+      }
+      node.fire('mousedown', { evt: mouseEvt, target: node }, true);
+      node.fire('mouseup', { evt: mouseEvt, target: node }, true);
+      node.fire('click', { evt: mouseEvt, target: node }, true);
+      node.fire('pointerclick', { evt: mouseEvt, target: node }, true);
+      node.fire('tap', { evt: { type: 'tap', clientX, clientY }, target: node }, true);
+
+      // Also fire on parent group if present
+      if (node.parent && typeof node.parent.fire === 'function') {
+        node.parent.fire('click', { evt: mouseEvt, target: node }, true);
+      }
+
+      // Also fire on stage if stage listener is used by Ticketbox
+      if (typeof stage.fire === 'function') {
+        stage.fire('click', { evt: mouseEvt, target: node }, true);
+      }
     },
   });
 
@@ -573,8 +776,8 @@ async function clickSeatNode(
     }
   }
 
-  // Check if DOM selection indicator changed even if node signature didn't
-  if (hasDomSelectionIndicator()) {
+  // Check if DOM selection indicator changed with seatLabel verification
+  if (hasDomSelectionIndicator(seatLabel)) {
     return {
       changed: true,
       method: attempts[0]?.method || 'native',
@@ -637,22 +840,82 @@ async function handleSelectSeats(payload?: BridgeRequestPayload): Promise<{
       continue;
     }
 
-    const result = await clickSeatNode(stage, best.node);
+    const result = await clickSeatNode(stage, best.node, seat.label);
     report.changed = result.changed;
     report.method = result.method;
     report.before = result.before;
     report.after = result.after;
 
     const domIndicated = hasDomSelectionIndicator(seat.label);
-    if (result.changed || domIndicated || result.method !== 'none') {
+    if (result.changed || domIndicated) {
       selectedCount++;
       await sleep(150);
     } else {
-      report.note = 'Clicked but seat visual state did not change';
+      report.note = 'Clicked but seat visual state and DOM indicator did not change';
     }
   }
 
   return { success: selectedCount > 0, selectedCount, reports };
+}
+
+/**
+ * Handles DESELECT_SEATS:
+ * 1. Closes tags in DOM (bottom bar / sidebar tags matching labels, or all tags if none specified).
+ * 2. Clicks matching candidate Circle/Shape nodes in Konva stage to toggle selection off.
+ */
+async function handleDeselectSeats(payload?: BridgeRequestPayload): Promise<{
+  success: boolean;
+  deselectedCount: number;
+  message?: string;
+}> {
+  let deselectedCount = 0;
+  const seats = payload?.seats || [];
+  const targetLabels = seats
+    .map((s) => (s.label || s.id || '').toUpperCase().trim())
+    .filter(Boolean);
+
+  // 1. Close DOM tags in main world (Ant Design tag close buttons or custom pills)
+  if (typeof document !== 'undefined') {
+    const tags = Array.from(
+      document.querySelectorAll(
+        '.ant-tag, [class*="seat-tag"], [class*="seat-item"], [class*="selected-seat"], [class*="seatTag"], [class*="badge"], [class*="seat-pill"], [class*="ticket-item"], [class*="cart-item"], [class*="seatItem"]'
+      )
+    );
+
+    for (const tag of tags) {
+      const text = (tag.textContent || '').toUpperCase().trim();
+      const isMatch =
+        targetLabels.length === 0 || targetLabels.some((l) => text.includes(l));
+      if (isMatch) {
+        const closeIcon = tag.querySelector(
+          '.ant-tag-close-icon, [aria-label="close"], [class*="close"], [class*="remove"], [class*="delete"], svg'
+        ) as HTMLElement | null;
+        if (closeIcon && typeof closeIcon.click === 'function') {
+          closeIcon.click();
+          deselectedCount++;
+        } else if (typeof (tag as HTMLElement).click === 'function') {
+          (tag as HTMLElement).click();
+          deselectedCount++;
+        }
+      }
+    }
+  }
+
+  // 2. Deselect via Konva stage nodes
+  const stage = getActiveStage();
+  if (stage && seats.length > 0) {
+    for (const seat of seats) {
+      const candidates = findSeatCandidates(stage, seat);
+      const best = candidates[0];
+      if (best) {
+        await clickSeatNode(stage, best.node, seat.label);
+        deselectedCount++;
+        await sleep(100);
+      }
+    }
+  }
+
+  return { success: true, deselectedCount };
 }
 
 /**
@@ -719,6 +982,11 @@ async function dispatchBridgeRequest(
 
     case 'SELECT_SEATS': {
       const result = await handleSelectSeats(payload);
+      return { success: result.success, data: result };
+    }
+
+    case 'DESELECT_SEATS': {
+      const result = await handleDeselectSeats(payload);
       return { success: result.success, data: result };
     }
 
