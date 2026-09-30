@@ -24,15 +24,34 @@ export interface JourneyExecutionResult {
   error?: string | undefined;
 }
 
+interface JourneyRetryContext {
+  failedAreaIds: Set<string>;
+  areaCollisionCounts: Map<string, number>;
+  exhaustedTierNames: Set<string>;
+  currentAreaId?: string | null;
+  currentAreaName?: string | null;
+}
+
+export interface JourneyUseCaseConfig {
+  maxRetries?: number;
+  maxAreaCollisions?: number;
+}
+
 export class ExecuteBookingJourneyUseCase {
-  private readonly MAX_RETRIES = 3;
+  private readonly MAX_RETRIES: number;
+  private readonly MAX_AREA_COLLISIONS: number;
+  private isExecuting = false;
 
   constructor(
     private readonly stateMachine: PurchaseStateMachine,
     private readonly adapter: TicketboxPageAdapter,
     private readonly eventBus: EventBus,
-    private readonly logger: LoggerPort
-  ) {}
+    private readonly logger: LoggerPort,
+    config?: JourneyUseCaseConfig
+  ) {
+    this.MAX_RETRIES = config?.maxRetries ?? 8;
+    this.MAX_AREA_COLLISIONS = config?.maxAreaCollisions ?? 2;
+  }
 
   private getState(): PurchaseState {
     return this.stateMachine.state;
@@ -71,7 +90,7 @@ export class ExecuteBookingJourneyUseCase {
     do {
       const url = typeof window !== 'undefined' ? window.location.href : '';
       if (!url.includes('/question-form')) return true;
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 80));
     } while (Date.now() < deadline);
     return false;
   }
@@ -92,7 +111,20 @@ export class ExecuteBookingJourneyUseCase {
     preferences: BookingPreferences,
     latencyTracker?: LatencyTracker
   ): Promise<JourneyExecutionResult> {
-    this.logger.info('Starting ExecuteBookingJourneyUseCase', {
+    if (this.isExecuting) {
+      this.logger.warn('ExecuteBookingJourneyUseCase is already executing; rejecting concurrent execution', {
+        attemptId: this.stateMachine.attemptId,
+      });
+      return {
+        success: false,
+        finalState: this.getState(),
+        requiresUserAction: false,
+        error: 'Concurrent journey execution rejected',
+      };
+    }
+    this.isExecuting = true;
+    try {
+      this.logger.info('Starting ExecuteBookingJourneyUseCase', {
       attemptId: this.stateMachine.attemptId,
       preferences: {
         priorities: preferences.categoryPriority,
@@ -147,6 +179,11 @@ export class ExecuteBookingJourneyUseCase {
 
     let retries = 0;
     let lastError: unknown;
+    const retryContext: JourneyRetryContext = {
+      failedAreaIds: new Set<string>(),
+      areaCollisionCounts: new Map<string, number>(),
+      exhaustedTierNames: new Set<string>(),
+    };
 
     while (retries <= this.MAX_RETRIES) {
       if (retries > 0) {
@@ -181,7 +218,7 @@ export class ExecuteBookingJourneyUseCase {
         }
       }
       try {
-        return await this.runJourney(preferences, latencyTracker);
+        return await this.runJourney(preferences, latencyTracker, retryContext);
       } catch (err: unknown) {
         retries++;
         lastError = err;
@@ -220,7 +257,7 @@ export class ExecuteBookingJourneyUseCase {
         }
 
         // Delay before retry to allow DOM / React state to settle
-        await new Promise((r) => setTimeout(r, 400 * retries));
+        await new Promise((r) => setTimeout(r, 200 * retries));
 
         // Attempt clean transition to RETRY_TARGET
         if (
@@ -240,17 +277,44 @@ export class ExecuteBookingJourneyUseCase {
       }
     }
 
-    return {
-      success: false,
-      finalState: this.stateMachine.state,
-      requiresUserAction: false,
-      error: 'Max retries exhausted',
-    };
+      return {
+        success: false,
+        finalState: this.stateMachine.state,
+        requiresUserAction: false,
+        error: 'Max retries exhausted',
+      };
+    } finally {
+      this.isExecuting = false;
+    }
+  }
+
+  private recordSeatCollision(
+    retryContext?: JourneyRetryContext,
+    seatLabel?: string | undefined
+  ): void {
+    if (!retryContext) return;
+    if (seatLabel) {
+      this.adapter.blacklistSeat?.(seatLabel);
+    }
+    if (retryContext.currentAreaId) {
+      const count = (retryContext.areaCollisionCounts.get(retryContext.currentAreaId) || 0) + 1;
+      retryContext.areaCollisionCounts.set(retryContext.currentAreaId, count);
+      if (count >= this.MAX_AREA_COLLISIONS) {
+        this.logger.warn(
+          `Area '${retryContext.currentAreaName || retryContext.currentAreaId}' reached collision threshold (${count} retries). Marking area exhausted to try next section.`
+        );
+        retryContext.failedAreaIds.add(retryContext.currentAreaId);
+        if (retryContext.currentAreaName) {
+          retryContext.failedAreaIds.add(retryContext.currentAreaName);
+        }
+      }
+    }
   }
 
   private async runJourney(
     preferences: BookingPreferences,
-    latencyTracker?: LatencyTracker
+    latencyTracker?: LatencyTracker,
+    retryContext?: JourneyRetryContext
   ): Promise<JourneyExecutionResult> {
     const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
     const isOnPayment = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
@@ -268,6 +332,7 @@ export class ExecuteBookingJourneyUseCase {
             seat: modalResult.seatLabel,
           }
         );
+        this.recordSeatCollision(retryContext, modalResult.seatLabel);
         throw new BookingError({
           code: 'SEAT_UNAVAILABLE',
           message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved by another user. Retrying alternative seat.`,
@@ -300,6 +365,7 @@ export class ExecuteBookingJourneyUseCase {
       if (this.adapter.detectAndHandleErrorModal) {
         const modalResult = await this.adapter.detectAndHandleErrorModal();
         if (modalResult.hasError && modalResult.isSeatUnavailable) {
+          this.recordSeatCollision(retryContext, modalResult.seatLabel);
           throw new BookingError({
             code: 'SEAT_UNAVAILABLE',
             message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved. Retrying alternative seat.`,
@@ -370,12 +436,13 @@ export class ExecuteBookingJourneyUseCase {
       if (this.adapter.proceedToNextStep) {
         this.logger.info('Submitting attendee form / proceeding to payment step');
         await this.adapter.proceedToNextStep();
-        await new Promise((r) => setTimeout(r, 600));
+        await new Promise((r) => setTimeout(r, 100));
 
         // Check for error modal right after click
         if (this.adapter.detectAndHandleErrorModal) {
           const modalResult = await this.adapter.detectAndHandleErrorModal();
           if (modalResult.hasError && modalResult.isSeatUnavailable) {
+            this.recordSeatCollision(retryContext, modalResult.seatLabel);
             throw new BookingError({
               code: 'SEAT_UNAVAILABLE',
               message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved. Retrying alternative seat.`,
@@ -391,6 +458,7 @@ export class ExecuteBookingJourneyUseCase {
             if (this.adapter.detectAndHandleErrorModal) {
               const modalResult = await this.adapter.detectAndHandleErrorModal();
               if (modalResult.hasError && modalResult.isSeatUnavailable) {
+                this.recordSeatCollision(retryContext, modalResult.seatLabel);
                 throw new BookingError({
                   code: 'SEAT_UNAVAILABLE',
                   message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved. Retrying alternative seat.`,
@@ -446,7 +514,9 @@ export class ExecuteBookingJourneyUseCase {
     }
 
     // 1. EVENT & SHOWING DETECTION
-    const eventState = await this.adapter.getEventState();
+    const eventState = this.adapter.getEventState
+      ? await this.adapter.getEventState()
+      : { event: null, showing: null, ticketTypes: [] };
 
     if (eventState.event) {
       this.stateMachine.transition({
@@ -508,8 +578,16 @@ export class ExecuteBookingJourneyUseCase {
     const tDecisionStart = Date.now();
     this.stateMachine.transition({ type: 'EVALUATING_TICKETS' });
 
+    const effectiveTickets = retryContext
+      ? tickets.filter(
+          (t) =>
+            !retryContext.exhaustedTierNames.has(t.name) &&
+            (!t.id || !retryContext.exhaustedTierNames.has(t.id))
+        )
+      : tickets;
+
     const decision = PriorityCategoryEngine.evaluate(
-      tickets,
+      effectiveTickets.length > 0 ? effectiveTickets : tickets,
       preferences.categoryPriority,
       preferences.allowFallback,
       preferences.quantity,
@@ -677,7 +755,7 @@ export class ExecuteBookingJourneyUseCase {
         const areas = await this.adapter.discoverAreas();
         if (areas.length > 0) {
           this.stateMachine.transition({ type: 'AREA_SELECTION_REQUIRED' });
-          const matchingArea = areas.find(
+          const matchingAreas = areas.filter(
             (a) =>
               (a.ticketTypeId === chosenTicket.id ||
                 a.id === chosenTicket.id ||
@@ -691,8 +769,39 @@ export class ExecuteBookingJourneyUseCase {
               a.selectable &&
               a.availability === 'AVAILABLE'
           );
-          const targetArea =
-            matchingArea || areas.find((a) => a.selectable && a.availability === 'AVAILABLE');
+
+          // Select first available area that has not failed or been exhausted in this cycle
+          let targetArea = matchingAreas.find(
+            (a) =>
+              !retryContext?.failedAreaIds.has(a.id) &&
+              !retryContext?.failedAreaIds.has(a.name)
+          );
+
+          // If all matching areas for this ticket tier are exhausted, fall back to next ticket tier
+          if (!targetArea && matchingAreas.length > 0) {
+            this.logger.warn(
+              `All areas for ticket tier '${chosenTicket.name}' exhausted (${matchingAreas.map((a) => a.name).join(', ')}). Falling back to next available ticket tier.`
+            );
+            if (retryContext) {
+              retryContext.exhaustedTierNames.add(chosenTicket.name);
+              if (chosenTicket.id) retryContext.exhaustedTierNames.add(chosenTicket.id);
+            }
+            throw new BookingError({
+              code: 'ALL_AREAS_EXHAUSTED',
+              message: `All sections/areas for '${chosenTicket.name}' are exhausted`,
+              state: this.stateMachine.state,
+              recoverable: true,
+            });
+          }
+
+          if (!targetArea) {
+            targetArea = areas.find(
+              (a) =>
+                a.selectable &&
+                a.availability === 'AVAILABLE' &&
+                !retryContext?.failedAreaIds.has(a.id)
+            );
+          }
 
           if (!targetArea) {
             throw new BookingError({
@@ -704,6 +813,10 @@ export class ExecuteBookingJourneyUseCase {
           }
 
           chosenArea = targetArea;
+          if (retryContext) {
+            retryContext.currentAreaId = targetArea.id;
+            retryContext.currentAreaName = targetArea.name;
+          }
           const tAreaStart = Date.now();
           this.stateMachine.transition({
             type: 'SELECTING_AREA',
@@ -800,9 +913,18 @@ export class ExecuteBookingJourneyUseCase {
         );
 
         if (validAvailableSeats.length === 0) {
+          if (retryContext && currentSelection.areaId) {
+            retryContext.failedAreaIds.add(currentSelection.areaId);
+            if (currentSelection.areaName) {
+              retryContext.failedAreaIds.add(currentSelection.areaName);
+            }
+          }
+          this.logger.warn(
+            `No available seats in area '${currentSelection.areaName || currentSelection.areaId}' (all taken or blacklisted). Retrying next area.`
+          );
           throw new BookingError({
             code: 'NO_AVAILABLE_SEATS',
-            message: 'No available seats discovered on seat map (all taken or blacklisted)',
+            message: `No available seats discovered on seat map for '${currentSelection.areaName || currentSelection.areaId}' (all taken or blacklisted)`,
             state: this.stateMachine.state,
             recoverable: true,
           });
@@ -860,6 +982,12 @@ export class ExecuteBookingJourneyUseCase {
         }
 
         if (seatDecision.status !== 'SUCCESS' || seatDecision.selectedSeats.length === 0) {
+          if (retryContext && currentSelection.areaId) {
+            retryContext.failedAreaIds.add(currentSelection.areaId);
+            if (currentSelection.areaName) {
+              retryContext.failedAreaIds.add(currentSelection.areaName);
+            }
+          }
           throw new BookingError({
             code: 'SEAT_SELECTION_FAILED',
             message: seatDecision.reason,
@@ -907,7 +1035,26 @@ export class ExecuteBookingJourneyUseCase {
     if (this.adapter.proceedToNextStep) {
       const proceedOk = await this.adapter.proceedToNextStep();
       if (proceedOk) {
-        await new Promise((r) => setTimeout(r, 400));
+        // Poll for error modal (e.g. -1242 seat collision) that appears immediately after clicking proceed
+        for (let i = 0; i < 4; i++) {
+          await new Promise((r) => setTimeout(r, 300));
+          if (this.adapter.detectAndHandleErrorModal) {
+            const modalResult = await this.adapter.detectAndHandleErrorModal();
+            if (modalResult.hasError && modalResult.isSeatUnavailable) {
+              this.logger.warn(
+                'Seat unavailable error modal detected after proceeding (-1242). Retrying alternative seat...',
+                { seat: modalResult.seatLabel }
+              );
+              this.recordSeatCollision(retryContext, modalResult.seatLabel);
+              throw new BookingError({
+                code: 'SEAT_UNAVAILABLE',
+                message: `Seat ${modalResult.seatLabel ?? 'selected'} was already booked (-1242). Reselecting another seat.`,
+                state: this.stateMachine.state,
+                recoverable: true,
+              });
+            }
+          }
+        }
       } else if (isOnSelectTicket) {
         this.logger.warn('Failed to proceed to next step after seat selection on select-ticket');
         throw new BookingError({
@@ -921,6 +1068,23 @@ export class ExecuteBookingJourneyUseCase {
 
     // If on /select-ticket, clicking proceed navigates to /question-form
     if (isOnSelectTicket) {
+      if (this.adapter.detectAndHandleErrorModal) {
+        const modalResult = await this.adapter.detectAndHandleErrorModal();
+        if (modalResult.hasError && modalResult.isSeatUnavailable) {
+          this.logger.warn(
+            'Seat unavailable error modal detected on select-ticket before yield (-1242). Retrying alternative seat...',
+            { seat: modalResult.seatLabel }
+          );
+          this.recordSeatCollision(retryContext, modalResult.seatLabel);
+          throw new BookingError({
+            code: 'SEAT_UNAVAILABLE',
+            message: `Seat ${modalResult.seatLabel ?? 'selected'} was already booked (-1242). Reselecting another seat.`,
+            state: this.stateMachine.state,
+            recoverable: true,
+          });
+        }
+      }
+
       this.logger.info(
         'Seat selection submitted on select-ticket page. Yielding for question form navigation.'
       );

@@ -102,6 +102,7 @@ export interface TicketboxPageAdapter {
     seatLabel?: string | undefined;
   }>;
   blacklistSeat?(seatIdOrLabel: string): void;
+  deselectSeat?(seatLabel?: string): Promise<boolean>;
   isSeatBlacklisted?(seatIdOrLabel?: string | null): boolean;
   getBlacklistedSeats?(): Set<string>;
 }

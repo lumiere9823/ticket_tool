@@ -22,6 +22,7 @@ export type BookingErrorCode =
   | 'STALE_ELEMENT'
   | 'PROCEED_FAILED'
   | 'SEAT_UNAVAILABLE'
+  | 'ALL_AREAS_EXHAUSTED'
   | 'UNSUPPORTED_FLOW';
 
 export class BookingError extends Error {
