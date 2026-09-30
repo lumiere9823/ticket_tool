@@ -263,6 +263,47 @@ async function checkHeartbeatLimits(): Promise<void> {
 }
 
 
+async function checkScheduledArmWakeup(): Promise<void> {
+  try {
+    const config = await storage.getConfiguration();
+    if (config?.scheduledArmAt) {
+      const schedMs = new Date(config.scheduledArmAt).getTime();
+      if (Date.now() >= schedMs) {
+        logger.info('Heartbeat detected scheduled ARM time has arrived; executing scheduled ARM now');
+        await executeScheduledArm();
+      }
+    }
+  } catch (err) {
+    logger.debug('Error checking scheduled ARM wakeup', { err: String(err) });
+  }
+}
+
+async function broadcastHeartbeatPing(): Promise<void> {
+  if (typeof chrome === 'undefined' || !chrome.tabs) return;
+  try {
+    chrome.tabs.query({ url: '*://*.ticketbox.vn/*' }, (tabs) => {
+      for (const tab of tabs) {
+        if (tab.id) {
+          chrome.tabs.sendMessage(
+            tab.id,
+            {
+              type: 'HEARTBEAT_PING',
+              timestamp: new Date().toISOString(),
+            },
+            () => {
+              if (chrome.runtime.lastError) {
+                // ignore if tab navigating
+              }
+            }
+          );
+        }
+      }
+    });
+  } catch {
+    // ignore
+  }
+}
+
 let isScheduledArmExecuting = false;
 
 async function executeScheduledArm(): Promise<void> {
@@ -371,7 +412,9 @@ async function executeScheduledArm(): Promise<void> {
 if (typeof chrome !== 'undefined' && chrome.alarms && chrome.alarms.onAlarm) {
   chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === 'PERSISTENT_PURCHASE_HEARTBEAT') {
-      checkHeartbeatLimits();
+      await checkHeartbeatLimits();
+      await checkScheduledArmWakeup();
+      await broadcastHeartbeatPing();
     }
 
     if (alarm.name === 'SCHEDULED_ARM_PREWAKE') {
@@ -519,6 +562,9 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
           stateMachine.state !== PurchaseState.IDLE &&
           stateMachine.state !== PurchaseState.INIT
         ) {
+          if (stateMachine.state !== PurchaseState.STOPPED) {
+            stateMachine.transition({ type: 'STOP_REQUESTED', reason: 'SW re-arm reset' });
+          }
           stateMachine.transition({ type: 'RESET_REQUESTED' });
         }
 
@@ -695,6 +741,52 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
       break;
     }
 
+    case 'FETCH_SHOWING_REQUEST': {
+      try {
+        const url = `https://api-v2.ticketbox.vn/gin/api/v2/events/showings/${message.showingId}`;
+        logger.info('Fetching showing from background worker', {
+          showingId: message.showingId,
+          url,
+        });
+        const res = await fetch(url);
+        if (!res.ok) {
+          logger.debug('Showing API returned non-OK status', {
+            showingId: message.showingId,
+            status: res.status,
+          });
+          await eventBus.publish({
+            type: 'FETCH_SHOWING_RESPONSE',
+            timestamp: new Date().toISOString(),
+            showingId: message.showingId,
+            success: false,
+            error: `HTTP ${res.status}: ${res.statusText}`,
+          });
+          break;
+        }
+        const json = await res.json();
+        await eventBus.publish({
+          type: 'FETCH_SHOWING_RESPONSE',
+          timestamp: new Date().toISOString(),
+          showingId: message.showingId,
+          success: true,
+          data: json,
+        });
+      } catch (err: unknown) {
+        logger.debug('Failed to fetch showing in background worker', {
+          showingId: message.showingId,
+          err: String(err),
+        });
+        await eventBus.publish({
+          type: 'FETCH_SHOWING_RESPONSE',
+          timestamp: new Date().toISOString(),
+          showingId: message.showingId,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      break;
+    }
+
     case 'RESET_CONFIG_REQUESTED': {
       logger.info('Reset config requested by user');
       // Stop any active monitoring first
@@ -736,6 +828,13 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
           };
         }
         await storage.saveConfiguration(configWithoutScheduledArm as typeof configForCancel);
+      }
+      const persistentForCancel = await storage.getPersistentState();
+      if (persistentForCancel && persistentForCancel.currentPhase === 'SCHEDULED') {
+        await storage.savePersistentState({
+          ...persistentForCancel,
+          currentPhase: 'IDLE',
+        });
       }
       await updateExtensionBadge(PurchaseState.IDLE, false);
       logger.info('Scheduled ARM cancelled');

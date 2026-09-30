@@ -22,10 +22,13 @@ export type ExtensionMessageType =
   | 'REQUEST_DISCOVERY_SCAN'
   | 'FETCH_SEATMAP_REQUEST'
   | 'FETCH_SEATMAP_RESPONSE'
+  | 'FETCH_SHOWING_REQUEST'
+  | 'FETCH_SHOWING_RESPONSE'
   | 'RESET_CONFIG_REQUESTED'
   | 'RESET_CONFIG_DONE'
   | 'SCHEDULED_ARM_CONFIRMED'
-  | 'CANCEL_SCHEDULED_ARM';
+  | 'CANCEL_SCHEDULED_ARM'
+  | 'HEARTBEAT_PING';
 
 export interface BaseExtensionMessage {
   type: ExtensionMessageType;
@@ -247,6 +250,19 @@ export interface FetchSeatmapResponseMessage extends BaseExtensionMessage {
   error?: string;
 }
 
+export interface FetchShowingRequestMessage extends BaseExtensionMessage {
+  type: 'FETCH_SHOWING_REQUEST';
+  showingId: string;
+}
+
+export interface FetchShowingResponseMessage extends BaseExtensionMessage {
+  type: 'FETCH_SHOWING_RESPONSE';
+  showingId: string;
+  success: boolean;
+  data?: unknown;
+  error?: string;
+}
+
 export interface ResetConfigRequestedMessage extends BaseExtensionMessage {
   type: 'RESET_CONFIG_REQUESTED';
 }
@@ -262,6 +278,10 @@ export interface ScheduledArmConfirmedMessage extends BaseExtensionMessage {
 
 export interface CancelScheduledArmMessage extends BaseExtensionMessage {
   type: 'CANCEL_SCHEDULED_ARM';
+}
+
+export interface HeartbeatPingMessage extends BaseExtensionMessage {
+  type: 'HEARTBEAT_PING';
 }
 
 export type ExtensionMessage =
@@ -284,8 +304,12 @@ export type ExtensionMessage =
   | RequestDiscoveryScanMessage
   | FetchSeatmapRequestMessage
   | FetchSeatmapResponseMessage
+  | FetchShowingRequestMessage
+  | FetchShowingResponseMessage
   | ResetConfigRequestedMessage
   | ResetConfigDoneMessage
   | ScheduledArmConfirmedMessage
-  | CancelScheduledArmMessage;
+  | CancelScheduledArmMessage
+  | HeartbeatPingMessage;
+
 

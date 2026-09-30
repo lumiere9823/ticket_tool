@@ -118,6 +118,7 @@ const btnResetConfig = document.getElementById('btn-reset-config') as HTMLButton
 const scheduledArmTimeInput = document.getElementById('scheduled-arm-time') as HTMLInputElement;
 const scheduledArmStatus = document.getElementById('scheduled-arm-status') as HTMLElement;
 const scheduledArmTimeDisplay = document.getElementById('scheduled-arm-time-display') as HTMLElement;
+const scheduledArmCountdown = document.getElementById('scheduled-arm-countdown') as HTMLElement | null;
 const btnCancelScheduledArm = document.getElementById('btn-cancel-scheduled-arm') as HTMLButtonElement;
 
 // Mode Switcher DOM references
@@ -134,6 +135,7 @@ const basicQuantityInput = document.getElementById('basic-quantity') as HTMLInpu
 const basicScheduledArmTime = document.getElementById('basic-scheduled-arm-time') as HTMLInputElement | null;
 const basicScheduledStatus = document.getElementById('basic-scheduled-status') as HTMLElement | null;
 const basicScheduledTimeDisplay = document.getElementById('basic-scheduled-time-display') as HTMLElement | null;
+const basicScheduledCountdown = document.getElementById('basic-scheduled-countdown') as HTMLElement | null;
 const btnCancelBasicScheduled = document.getElementById('btn-cancel-basic-scheduled') as HTMLButtonElement | null;
 const basicProfileName = document.getElementById('basic-profile-name') as HTMLInputElement | null;
 const basicProfilePhone = document.getElementById('basic-profile-phone') as HTMLInputElement | null;
@@ -1256,11 +1258,17 @@ async function handleBasicArm(): Promise<void> {
     const startMs = new Date(scheduledVal).getTime();
     if (startMs > Date.now()) {
       isScheduled = true;
+      activeScheduledTargetMs = startMs;
       const startAtIso = new Date(startMs).toISOString();
       plan.persistence.startAt = startAtIso;
       if (basicScheduledStatus && basicScheduledTimeDisplay) {
         basicScheduledStatus.style.display = 'flex';
         basicScheduledTimeDisplay.textContent = new Date(startMs).toLocaleString('vi-VN');
+        if (basicScheduledCountdown) {
+          const remainingMs = Math.max(0, startMs - Date.now());
+          basicScheduledCountdown.textContent = `(Còn lại ${formatCountdown(remainingMs)})`;
+          basicScheduledCountdown.style.display = 'inline-flex';
+        }
       }
     } else {
       alert('Thời gian hẹn giờ mở bán phải ở thời điểm tương lai!');
@@ -1532,16 +1540,24 @@ async function updatePersistentMonitoringDisplay(
   }
 
   const durationCapStr = maxDuration > 0 ? `${maxDuration}m` : '∞';
+
+  // Clear the live timer when monitoring is stopped/completed — even if startedAt still exists in storage.
+  const stoppedPhases = new Set(['STOPPED', 'STOPPED_LIMIT_REACHED', 'CONFIRMED', 'FAILED']);
+  if (pState?.startedAt && !stoppedPhases.has(pState?.currentPhase ?? '')) {
+    activeStartedAtMs =
+      typeof pState.startedAt === 'number'
+        ? pState.startedAt
+        : new Date(pState.startedAt).getTime();
+  } else {
+    activeStartedAtMs = null;
+  }
+
   if (persistentElapsedDisplay) {
-    if (pState?.startedAt) {
-      const startedAtMs =
-        typeof pState.startedAt === 'number'
-          ? pState.startedAt
-          : new Date(pState.startedAt).getTime();
-      const elapsedMin = Math.floor((Date.now() - startedAtMs) / 60000);
-      persistentElapsedDisplay.textContent = `${elapsedMin}m / ${durationCapStr}`;
+    if (activeStartedAtMs) {
+      const elapsedMs = Math.max(0, Date.now() - activeStartedAtMs);
+      persistentElapsedDisplay.textContent = `${formatElapsed(elapsedMs)} / ${durationCapStr}`;
     } else {
-      persistentElapsedDisplay.textContent = `0m / ${durationCapStr}`;
+      persistentElapsedDisplay.textContent = `00:00 / ${durationCapStr}`;
     }
   }
 
@@ -1730,6 +1746,78 @@ async function requestDiscoveryFromTab(manual = false): Promise<void> {
 
 // ─── Scheduled ARM Helpers ────────────────────────────────────────────────────
 
+function formatElapsed(elapsedMs: number): string {
+  const totalSec = Math.max(0, Math.floor(elapsedMs / 1000));
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (min >= 60) {
+    const hr = Math.floor(min / 60);
+    const remMin = min % 60;
+    return `${pad(hr)}:${pad(remMin)}:${pad(sec)}`;
+  }
+  return `${pad(min)}:${pad(sec)}`;
+}
+
+function formatCountdown(remainingMs: number): string {
+  if (remainingMs <= 0) return '00:00:00';
+  const totalSec = Math.floor(remainingMs / 1000);
+  const hr = Math.floor(totalSec / 3600);
+  const min = Math.floor((totalSec % 3600) / 60);
+  const sec = totalSec % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(hr)}:${pad(min)}:${pad(sec)}`;
+}
+
+let activeStartedAtMs: number | null = null;
+let activeScheduledTargetMs: number | null = null;
+let liveTimerInterval: number | null = null;
+
+function updateLiveTimes(): void {
+  const maxDuration = currentScopedPlan?.persistence?.maxDurationMinutes ?? 30;
+  const durationCapStr = maxDuration > 0 ? `${maxDuration}m` : '∞';
+
+  // 1. Live elapsed time ticker
+  if (persistentElapsedDisplay && activeStartedAtMs) {
+    const elapsedMs = Math.max(0, Date.now() - activeStartedAtMs);
+    persistentElapsedDisplay.textContent = `${formatElapsed(elapsedMs)} / ${durationCapStr}`;
+  }
+
+  // 2. Live scheduled countdown ticker
+  if (activeScheduledTargetMs) {
+    const remainingMs = activeScheduledTargetMs - Date.now();
+    if (remainingMs > 0) {
+      const cdStr = `(Còn lại ${formatCountdown(remainingMs)})`;
+      if (scheduledArmCountdown) {
+        scheduledArmCountdown.textContent = cdStr;
+        scheduledArmCountdown.style.display = 'inline-flex';
+      }
+      if (basicScheduledCountdown) {
+        basicScheduledCountdown.textContent = cdStr;
+        basicScheduledCountdown.style.display = 'inline-flex';
+      }
+    } else {
+      const activatingStr = '(Đang kích hoạt...)';
+      if (scheduledArmCountdown) {
+        scheduledArmCountdown.textContent = activatingStr;
+        scheduledArmCountdown.style.display = 'inline-flex';
+      }
+      if (basicScheduledCountdown) {
+        basicScheduledCountdown.textContent = activatingStr;
+        basicScheduledCountdown.style.display = 'inline-flex';
+      }
+      activeScheduledTargetMs = null;
+      messageBus.publish({
+        type: 'SYNC_STATE_REQUEST',
+        timestamp: new Date().toISOString(),
+      }).catch(() => {});
+    }
+  } else {
+    if (scheduledArmCountdown) scheduledArmCountdown.style.display = 'none';
+    if (basicScheduledCountdown) basicScheduledCountdown.style.display = 'none';
+  }
+}
+
 /**
  * Converts an ISO timestamp string into a datetime-local input value (local time).
  */
@@ -1743,9 +1831,17 @@ function toDatetimeLocalValue(isoString: string): string {
 }
 
 function showScheduledArmStatus(isoString: string): void {
+  const targetMs = new Date(isoString).getTime();
+  activeScheduledTargetMs = targetMs > Date.now() ? targetMs : null;
+
   if (scheduledArmStatus) scheduledArmStatus.style.display = 'flex';
   if (scheduledArmTimeDisplay) {
     scheduledArmTimeDisplay.textContent = new Date(isoString).toLocaleString('vi-VN');
+  }
+  if (activeScheduledTargetMs && scheduledArmCountdown) {
+    const remainingMs = Math.max(0, activeScheduledTargetMs - Date.now());
+    scheduledArmCountdown.textContent = `(Còn lại ${formatCountdown(remainingMs)})`;
+    scheduledArmCountdown.style.display = 'inline-flex';
   }
   // Open the details panel so user sees the status
   const details = document.getElementById('scheduled-arm-details') as HTMLDetailsElement | null;
@@ -1753,8 +1849,13 @@ function showScheduledArmStatus(isoString: string): void {
 }
 
 function hideScheduledArmStatus(): void {
+  activeScheduledTargetMs = null;
   if (scheduledArmStatus) scheduledArmStatus.style.display = 'none';
   if (scheduledArmTimeInput) scheduledArmTimeInput.value = '';
+  if (scheduledArmCountdown) scheduledArmCountdown.style.display = 'none';
+  if (basicScheduledStatus) basicScheduledStatus.style.display = 'none';
+  if (basicScheduledArmTime) basicScheduledArmTime.value = '';
+  if (basicScheduledCountdown) basicScheduledCountdown.style.display = 'none';
 }
 
 // ─── Reset Popup to Blank ─────────────────────────────────────────────────────
@@ -1965,6 +2066,12 @@ async function loadInitialData(): Promise<void> {
     if (basicScheduledStatus && basicScheduledTimeDisplay) {
       basicScheduledStatus.style.display = 'flex';
       basicScheduledTimeDisplay.textContent = new Date(config.scheduledArmAt).toLocaleString('vi-VN');
+      const startAtMs = new Date(config.scheduledArmAt).getTime();
+      if (startAtMs > Date.now() && basicScheduledCountdown) {
+        const rem = Math.max(0, startAtMs - Date.now());
+        basicScheduledCountdown.textContent = `(Còn lại ${formatCountdown(rem)})`;
+        basicScheduledCountdown.style.display = 'inline-flex';
+      }
     }
   } else if (
     (persistentState?.currentPhase === 'ARMED' || persistentState?.currentPhase === 'MONITORING') &&
@@ -2031,6 +2138,19 @@ async function loadInitialData(): Promise<void> {
     type: 'SYNC_STATE_REQUEST',
     timestamp: new Date().toISOString(),
   });
+
+  // Start 1-second live ticker for elapsed time and scheduled countdown
+  updateLiveTimes();
+  if (typeof window !== 'undefined' && !liveTimerInterval) {
+    liveTimerInterval = window.setInterval(updateLiveTimes, 1000);
+    // Cleanup on popup unload to prevent memory leaks across popup re-opens
+    window.addEventListener('unload', () => {
+      if (liveTimerInterval !== null) {
+        window.clearInterval(liveTimerInterval);
+        liveTimerInterval = null;
+      }
+    }, { once: true });
+  }
 }
 
 // ─── Message Handler ──────────────────────────────────────────────────────────
@@ -2325,6 +2445,13 @@ btnArm.addEventListener('click', async () => {
 btnStop.addEventListener('click', async () => {
   addLog('Đã dừng trợ lý theo yêu cầu.');
   updateStateBadge(PurchaseState.STOPPED, 'Đã dừng theo yêu cầu của bạn');
+  // Immediately halt the live elapsed timer — don't wait for async storage update.
+  activeStartedAtMs = null;
+  if (persistentElapsedDisplay) {
+    const maxDuration = currentScopedPlan?.persistence?.maxDurationMinutes ?? 30;
+    const durationCapStr = maxDuration > 0 ? `${maxDuration}m` : '∞';
+    persistentElapsedDisplay.textContent = `00:00 / ${durationCapStr}`;
+  }
   await messageBus.publish({
     type: 'STOP_REQUESTED',
     timestamp: new Date().toISOString(),
@@ -2501,15 +2628,25 @@ if (basicScheduledArmTime) {
     if (val) {
       const ms = new Date(val).getTime();
       if (ms > Date.now()) {
+        activeScheduledTargetMs = ms;
         if (basicScheduledStatus && basicScheduledTimeDisplay) {
           basicScheduledStatus.style.display = 'flex';
           basicScheduledTimeDisplay.textContent = new Date(ms).toLocaleString('vi-VN');
+          if (basicScheduledCountdown) {
+            const rem = Math.max(0, ms - Date.now());
+            basicScheduledCountdown.textContent = `(Còn lại ${formatCountdown(rem)})`;
+            basicScheduledCountdown.style.display = 'inline-flex';
+          }
         }
       } else {
+        activeScheduledTargetMs = null;
         if (basicScheduledStatus) basicScheduledStatus.style.display = 'none';
+        if (basicScheduledCountdown) basicScheduledCountdown.style.display = 'none';
       }
     } else {
+      activeScheduledTargetMs = null;
       if (basicScheduledStatus) basicScheduledStatus.style.display = 'none';
+      if (basicScheduledCountdown) basicScheduledCountdown.style.display = 'none';
     }
     syncBasicChecklistToScopedPlan();
     savePlan();
