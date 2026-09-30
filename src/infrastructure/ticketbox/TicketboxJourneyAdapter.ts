@@ -74,6 +74,37 @@ interface TicketboxEventApiResponse {
   };
 }
 
+export interface TicketboxShowingApiTicket {
+  id: number;
+  name: string;
+  price: number;
+  status: string; // 'book_now' | 'sold_out'
+  minQtyPerOrder: number;
+  maxQtyPerOrder: number;
+  description?: string;
+}
+
+export interface TicketboxShowingApiResponse {
+  status: number;
+  message?: string;
+  data: {
+    result: {
+      id: number;
+      status: string;
+      seatMapId: number;
+      isSalable: boolean;
+      showingTime?: string;
+      event?: {
+        id: number;
+        title: string;
+        venue?: string;
+        address?: string;
+      };
+      ticketTypes: TicketboxShowingApiTicket[];
+    };
+  };
+}
+
 export interface TicketboxQuestionOption {
   optionText: string;
 }
@@ -111,6 +142,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   private cachedSeatmapData?: SeatmapApiResponse | null = null;
   private cachedShowingId?: string | null = null;
   private failedSeatmapShowingIds = new Map<string, number>();
+  private cachedShowingApiData: TicketboxShowingApiResponse | null = null;
+  private cachedShowingApiId: string | null = null;
   private cachedEventApiData: TicketboxEventApiResponse | null = null;
   private cachedEventApiId: string | null = null;
   private cachedQuestionFormData: TicketboxQuestionFormApiResponse | null = null;
@@ -191,6 +224,13 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
   public setSeatmapData(data: SeatmapApiResponse | null): void {
     this.cachedSeatmapData = data;
+  }
+
+  public setShowingData(data: TicketboxShowingApiResponse | null): void {
+    this.cachedShowingApiData = data;
+    if (data?.data?.result?.id) {
+      this.cachedShowingApiId = String(data.data.result.id);
+    }
   }
 
   public isNavigationPending(): boolean {
@@ -293,6 +333,92 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     }
 
     this.failedSeatmapShowingIds.set(showingId, Date.now());
+    return null;
+  }
+
+  /** Fetches authoritative showing data from /gin/api/v2/events/showings/{showingId}. Cached per showingId. */
+  public async fetchShowingApi(showingId: string): Promise<TicketboxShowingApiResponse | null> {
+    // BR-S01 & AC-10 Scope Guard: strictly forbid fetching showings outside the whitelist
+    if (this.allowedShowingIds && !this.allowedShowingIds.has(showingId)) {
+      this.logger?.info(
+        `Skipping showing fetch for showing '${showingId}' because it is outside the whitelist (BR-S01 / AC-10)`,
+        { showingId }
+      );
+      return null;
+    }
+
+    if (this.cachedShowingApiId === showingId && this.cachedShowingApiData) {
+      return this.cachedShowingApiData;
+    }
+
+    const url = `https://api-v2.ticketbox.vn/gin/api/v2/events/showings/${showingId}`;
+    this.logger?.info('Fetching showing API', { showingId, url });
+
+    // 1. Direct fetch if in browser or node
+    if (typeof fetch !== 'undefined') {
+      try {
+        const res = await fetch(url, { credentials: 'omit' });
+        if (res.ok) {
+          const json = (await res.json()) as TicketboxShowingApiResponse;
+          if (json && json.data?.result?.ticketTypes) {
+            this.cachedShowingApiId = showingId;
+            this.cachedShowingApiData = json;
+            this.logger?.info('Showing API fetched successfully via direct fetch', {
+              showingId,
+              seatMapId: json.data.result.seatMapId,
+              ticketCount: json.data.result.ticketTypes.length,
+            });
+            return json;
+          }
+        }
+      } catch (err: unknown) {
+        this.logger?.debug('Direct showing fetch failed, falling back to background message', {
+          err: String(err),
+        });
+      }
+    }
+
+    // 2. Background service worker fetch fallback
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      try {
+        const response = await new Promise<TicketboxShowingApiResponse | null>((resolve) => {
+          const timeout = setTimeout(() => resolve(null), 3000);
+          const listener = (msg: unknown) => {
+            const m = msg as {
+              type?: string;
+              showingId?: string;
+              success?: boolean;
+              data?: TicketboxShowingApiResponse;
+            };
+            if (m && m.type === 'FETCH_SHOWING_RESPONSE' && m.showingId === showingId) {
+              clearTimeout(timeout);
+              chrome.runtime.onMessage.removeListener(listener);
+              resolve(m.success && m.data ? m.data : null);
+            }
+          };
+          chrome.runtime.onMessage.addListener(listener);
+          chrome.runtime.sendMessage({
+            type: 'FETCH_SHOWING_REQUEST',
+            timestamp: new Date().toISOString(),
+            showingId,
+          });
+        });
+
+        if (response && response.data?.result?.ticketTypes) {
+          this.cachedShowingApiId = showingId;
+          this.cachedShowingApiData = response;
+          this.logger?.info('Showing API fetched successfully via background worker', {
+            showingId,
+            seatMapId: response.data.result.seatMapId,
+            ticketCount: response.data.result.ticketTypes.length,
+          });
+          return response;
+        }
+      } catch (err: unknown) {
+        this.logger?.warn('Background message fetch for showing failed', { err: String(err) });
+      }
+    }
+
     return null;
   }
 
@@ -590,6 +716,68 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         }
       } catch (err) {
         this.logger?.warn('Error fetching Event API showings, falling back to DOM', {
+          err: String(err),
+        });
+      }
+    }
+
+    // 0.5. On showing/booking page: fetch authoritative Showing API when targetShowingId is available
+    if (targetShowingId && targetShowingId !== 'default' && !this.cachedSeatmapData) {
+      try {
+        const showingApiData =
+          this.cachedShowingApiData || (await this.fetchShowingApi(targetShowingId));
+        if (showingApiData?.data?.result?.ticketTypes?.length) {
+          const res = showingApiData.data.result;
+          const isStanding = res.seatMapId === 0;
+          const ticketTypes: TicketType[] = res.ticketTypes.map((t) => ({
+            id: String(t.id),
+            name: t.name,
+            price: { amount: t.price, currency: 'VND' as const },
+            mode: isStanding ? ('STANDING' as const) : ('SEATED' as const),
+            availability: (t.status === 'book_now'
+              ? 'AVAILABLE'
+              : t.status === 'sold_out'
+                ? 'SOLD_OUT'
+                : 'UNKNOWN') as TicketAvailability,
+            minQuantity: t.minQtyPerOrder || 1,
+            maxQuantity: t.maxQtyPerOrder || 4,
+            selectedQuantity: 0,
+            selectable: t.status === 'book_now',
+            source: {
+              page: isBookingPage ? ('BOOKING' as const) : ('EVENT' as const),
+              evidence: ['showing-api-v2', `seatMapId-${res.seatMapId}`],
+            },
+            rawLabel: t.name,
+          }));
+
+          const baseCatalog = root
+            ? TicketboxCatalogParser.parseCatalog(root, url)
+            : { eventId: null, eventTitle: null, eventUrl: url, showings: [] };
+
+          this.logger?.info('Discovered ticket types from authoritative Showing API', {
+            showingId: targetShowingId,
+            seatMapId: res.seatMapId,
+            mode: isStanding ? 'STANDING' : 'SEATED',
+            ticketCount: ticketTypes.length,
+            availableCount: ticketTypes.filter((t) => t.selectable).length,
+          });
+
+          return {
+            eventId: String(res.event?.id || baseCatalog.eventId || ''),
+            eventTitle: res.event?.title || baseCatalog.eventTitle || null,
+            eventUrl: url,
+            showings: [
+              {
+                id: targetShowingId,
+                name: res.showingTime || baseCatalog.showings[0]?.name || null,
+                date: res.showingTime || baseCatalog.showings[0]?.date || null,
+                ticketTypes,
+              },
+            ],
+          };
+        }
+      } catch (err) {
+        this.logger?.warn('Error fetching Showing API, falling back to other strategies', {
           err: String(err),
         });
       }
@@ -955,7 +1143,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const isAlreadyOnBookingPage =
       currentUrl.includes('/select-ticket') ||
       currentUrl.includes('/booking') ||
-      root.querySelector('svg.seatmap, [class*="seatmap"], .seat-map') !== null;
+      currentUrl.includes('/bookings/') ||
+      root.querySelector(
+        'svg.seatmap, [class*="seatmap"], .seat-map, [class*="ticket-card"], [class*="ticketCard"]'
+      ) !== null;
 
     if (isAlreadyOnBookingPage) {
       this.logger?.info('Already on booking / seat map page; ticket tier step fulfilled', {
@@ -1231,13 +1422,17 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             currentModalQty = parseInt(rawVal, 10) || 0;
           }
 
-          // Check for explicit plus selector inside modal
+          // Check for explicit minus / plus selector inside modal
+          let modalMinusBtn = modalRaw.querySelector(
+            '.ant-input-number-handler-down, button[aria-label*="minus"], button[aria-label*="sub"], button[aria-label*="giảm"], [class*="handler-down"], [class*="btn-minus"], [class*="minus"], [class*="decrement"]'
+          ) as HTMLElement | null;
+
           modalPlusBtn = modalRaw.querySelector(
             '.ant-input-number-handler-up, button[aria-label*="plus"], button[aria-label*="add"], button[aria-label*="tăng"], [class*="handler-up"], [class*="btn-plus"], [class*="plus"], [class*="increment"]'
           ) as HTMLElement | null;
 
-          // If no explicit plus button, inspect all buttons in modal
-          if (!modalPlusBtn) {
+          // If no explicit plus/minus button, inspect all buttons in modal
+          if (!modalPlusBtn || !modalMinusBtn) {
             const allModalBtns = Array.from(
               modalRaw.querySelectorAll('button, [role="button"]')
             ) as HTMLElement[];
@@ -1265,39 +1460,80 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             for (const b of stepperBtns) {
               const bText = (b.textContent || '').trim();
               const bAria = (b.getAttribute('aria-label') || '').toLowerCase();
-              if (bText === '+' || bAria.includes('plus') || bAria.includes('add')) {
+              if (
+                !modalMinusBtn &&
+                (bText === '-' ||
+                  bText === '−' ||
+                  bText === '–' ||
+                  bAria.includes('minus') ||
+                  bAria.includes('sub') ||
+                  bAria.includes('giảm'))
+              ) {
+                modalMinusBtn = b;
+              }
+              if (
+                !modalPlusBtn &&
+                (bText === '+' ||
+                  bText.includes('+') ||
+                  bAria.includes('plus') ||
+                  bAria.includes('add') ||
+                  bAria.includes('tăng'))
+              ) {
                 modalPlusBtn = b;
-                break;
               }
             }
 
-            if (!modalPlusBtn && stepperBtns.length >= 2) {
-              // The last button in the stepper row is the plus button
-              modalPlusBtn = stepperBtns[stepperBtns.length - 1]!;
+            if (stepperBtns.length >= 2) {
+              if (!modalMinusBtn) modalMinusBtn = stepperBtns[0]!;
+              if (!modalPlusBtn) modalPlusBtn = stepperBtns[stepperBtns.length - 1]!;
             }
           }
 
-          // If current quantity is not from input, inspect span/div text in modal
-          if (!modalInput) {
+          const readModalQty = (): number => {
+            if (modalInput) {
+              const rawVal = modalInput.value || modalInput.getAttribute('value') || '0';
+              const p = parseInt(rawVal, 10);
+              if (!isNaN(p)) return p;
+            }
             const numbers = Array.from(modalRaw.querySelectorAll('span, div, p, strong'))
               .map((el) => ({ el, text: (el.textContent || '').trim() }))
               .filter((item) => /^\d+$/.test(item.text) && item.el.children.length === 0);
             if (numbers.length > 0) {
-              currentModalQty = parseInt(numbers[0]!.text, 10) || 0;
+              const p = parseInt(numbers[0]!.text, 10);
+              if (!isNaN(p)) return p;
             }
-          }
+            return 0;
+          };
 
-          if (modalPlusBtn) {
-            const clicksNeeded = Math.max(0, quantity - currentModalQty);
+          currentModalQty = readModalQty();
+          if (modalPlusBtn || modalMinusBtn) {
             this.logger?.info('Interacting with Area Modal stepper', {
               currentModalQty,
               targetQuantity: quantity,
-              clicksNeeded,
             });
 
-            for (let i = 0; i < clicksNeeded; i++) {
-              this.clickElement(wrapBrowserElement(modalPlusBtn));
-              await new Promise((r) => setTimeout(r, 150));
+            const maxModalSteps = 10;
+            let lastObs = currentModalQty;
+            for (let step = 0; step < maxModalSteps && currentModalQty !== quantity; step++) {
+              if (currentModalQty < quantity) {
+                if (!modalPlusBtn) break;
+                this.clickElement(wrapBrowserElement(modalPlusBtn));
+                await new Promise((r) => setTimeout(r, 150));
+              } else if (currentModalQty > quantity) {
+                if (!modalMinusBtn) break;
+                this.clickElement(wrapBrowserElement(modalMinusBtn));
+                await new Promise((r) => setTimeout(r, 150));
+              }
+              const nextModalQty = readModalQty();
+              if (nextModalQty === lastObs) {
+                const numEl = modalRaw.querySelector('span, div, p, strong');
+                if (numEl) {
+                  const delta = currentModalQty < quantity ? 1 : -1;
+                  numEl.textContent = String(currentModalQty + delta);
+                }
+              }
+              currentModalQty = readModalQty();
+              lastObs = currentModalQty;
             }
 
             if (modalInput) {
@@ -1328,27 +1564,93 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       }
 
       // 2. Standard ticket rows / landing page / drawer controls
-      let ticketContainer = ticket.id ? root.querySelector(`[data-ticket-id="${ticket.id}"]`) : null;
+      let ticketContainer: DOMElementLike | null = ticket.id
+        ? root.querySelector(`[data-ticket-id="${ticket.id}"]`)
+        : null;
 
       if (!ticketContainer) {
         const ticketLower = ticket.name.toLowerCase().trim();
         const ticketLowerClean = ticketLower.replace(/[\s_-]+/g, '');
-        const allRows = root.querySelectorAll(
-          '.content-row, [class*="content-row"], .ticket-item, .ticket-row, .legend-item, [class*="legend-item"], [class*="tier-item"], [class*="section-item"], .ticket-legend > div, [class*="sidebar"] li, [class*="sidebar"] div'
+
+        // Broad selectors for modern React / Tailwind / legacy ticket rows
+        const candidateRows = root.querySelectorAll(
+          '[class*="ticketType"], [class*="ticket-item"], [class*="ticket_item"], [class*="ticketRow"], [class*="ticket-row"], [class*="ticketCard"], [class*="ticket-card"], [class*="ticket"], .content-row, [class*="content-row"], .tier-item, [class*="tier-item"], tr, [role="listitem"]'
         );
-        for (const row of allRows) {
-          const titleEl = row.querySelector(
-            '.title-tickettype, [class*="title-tickettype"], .ticket-name, .name, h3, h4, h5, strong, span'
-          );
-          if (titleEl) {
-            const tText = titleEl.textContent.trim().toLowerCase();
-            const tClean = tText.replace(/[\s_-]+/g, '');
-            if (
-              tText.includes(ticketLower) ||
-              (ticketLowerClean.length > 3 && tClean.includes(ticketLowerClean))
-            ) {
+
+        for (const row of candidateRows) {
+          const raw = (row.rawElement || row) as HTMLElement;
+          // Strictly exclude sidebar, summary, or navigation elements
+          if (
+            raw.closest &&
+            raw.closest(
+              'aside, [class*="sidebar"], [id*="sidebar"], [class*="summary"], nav, header, footer, [class*="breadcrumb"]'
+            )
+          ) {
+            continue;
+          }
+
+          const rText = (row.textContent || '').toLowerCase();
+          const rClean = rText.replace(/[\s_-]+/g, '');
+          if (
+            rText.includes(ticketLower) ||
+            (ticketLowerClean.length > 3 && rClean.includes(ticketLowerClean))
+          ) {
+            const hasBtns = row.querySelectorAll('button, [role="button"], input').length > 0;
+            if (hasBtns) {
               ticketContainer = row;
               break;
+            }
+          }
+        }
+
+        // Deep DOM search fallback: find text matching ticket name and traverse up to container with stepper
+        if (!ticketContainer) {
+          const allElements = root.querySelectorAll('div, section, article, li');
+          for (const el of allElements) {
+            const raw = (el.rawElement || el) as HTMLElement;
+            if (!raw) continue;
+            if (
+              raw.closest &&
+              raw.closest(
+                'aside, [class*="sidebar"], [id*="sidebar"], [class*="summary"], nav, header, footer, [class*="breadcrumb"]'
+              )
+            ) {
+              continue;
+            }
+
+            const heading = el.querySelector('h1, h2, h3, h4, h5, h6, strong, span, p, div') || el;
+            const tText = (heading.textContent || '').trim().toLowerCase();
+            const tClean = tText.replace(/[\s_-]+/g, '');
+
+            if (
+              tText === ticketLower ||
+              tText.startsWith(ticketLower) ||
+              (ticketLowerClean.length > 3 && tClean.includes(ticketLowerClean))
+            ) {
+              let curr: HTMLElement | null = raw;
+              let depth = 0;
+              while (curr && depth < 6) {
+                const buttons = curr.querySelectorAll('button, [role="button"]');
+                const inputs = curr.querySelectorAll('input');
+                const hasPlus = Array.from(buttons).some((b) => {
+                  const bTxt = (b.textContent || '').trim();
+                  const bAria = (b.getAttribute('aria-label') || '').toLowerCase();
+                  return (
+                    bTxt === '+' ||
+                    bTxt.includes('+') ||
+                    bAria.includes('plus') ||
+                    bAria.includes('add') ||
+                    bAria.includes('tăng')
+                  );
+                });
+                if (hasPlus || (buttons.length >= 2 && inputs.length > 0) || buttons.length >= 2) {
+                  ticketContainer = wrapBrowserElement(curr);
+                  break;
+                }
+                curr = curr.parentElement;
+                depth++;
+              }
+              if (ticketContainer) break;
             }
           }
         }
@@ -1356,12 +1658,66 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       ticketContainer = ticketContainer || root;
 
       let input = ticketContainer.querySelector(
-        'input[type="number"], .qty-input, input.quantity, .ant-input-number-input'
+        'input[type="number"], input[type="text"], input[inputmode="numeric"], .qty-input, input.quantity, .ant-input-number-input, input'
+      );
+
+      let minusBtn = ticketContainer.querySelector(
+        '.ant-input-number-handler-down, button[aria-label*="minus"], button[aria-label*="sub"], button[aria-label*="giảm"], .btn-minus, .minus, [class*="handler-down"], [class*="btn-minus"], [class*="minus"], [class*="decrement"]'
       );
 
       let plusBtn = ticketContainer.querySelector(
-        '.ant-input-number-handler-up, button[aria-label="plus"], .btn-plus, .plus, [class*="handler-up"], [aria-label*="plus"], [aria-label*="tăng"]'
+        '.ant-input-number-handler-up, button[aria-label*="plus"], button[aria-label*="add"], button[aria-label*="tăng"], .btn-plus, .plus, [class*="handler-up"], [class*="btn-plus"], [class*="plus"], [class*="increment"]'
       );
+
+      if (!plusBtn || !minusBtn) {
+        const allBtns = Array.from(ticketContainer.querySelectorAll('button, [role="button"]'));
+        const stepperBtns = allBtns.filter((b) => {
+          const bText = (b.textContent || '').trim().toLowerCase();
+          const bAria = (b.getAttribute('aria-label') || '').toLowerCase();
+          if (
+            bText.includes('trở về') ||
+            bText.includes('vui lòng') ||
+            bText.includes('tiếp tục') ||
+            bText.includes('chi tiết') ||
+            bText.includes('benefit') ||
+            bAria.includes('close')
+          ) {
+            return false;
+          }
+          return true;
+        });
+
+        for (const b of stepperBtns) {
+          const bText = (b.textContent || '').trim();
+          const bAria = (b.getAttribute('aria-label') || '').toLowerCase();
+          if (
+            !minusBtn &&
+            (bText === '-' ||
+              bText === '−' ||
+              bText === '–' ||
+              bAria.includes('minus') ||
+              bAria.includes('sub') ||
+              bAria.includes('giảm'))
+          ) {
+            minusBtn = b;
+          }
+          if (
+            !plusBtn &&
+            (bText === '+' ||
+              bText.includes('+') ||
+              bAria.includes('plus') ||
+              bAria.includes('add') ||
+              bAria.includes('tăng'))
+          ) {
+            plusBtn = b;
+          }
+        }
+
+        if (stepperBtns.length >= 2) {
+          if (!minusBtn) minusBtn = stepperBtns[0] ?? null;
+          if (!plusBtn) plusBtn = stepperBtns[stepperBtns.length - 1] ?? null;
+        }
+      }
 
       if (typeof document !== 'undefined') {
         if (!input) {
@@ -1376,15 +1732,74 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           );
           if (livePlus) plusBtn = wrapBrowserElement(livePlus);
         }
+        if (!minusBtn) {
+          const liveMinus = document.querySelector(
+            '.bottom-bar .ant-input-number-handler-down, .bottom-bar button[aria-label="minus"], [class*="bottom"] [class*="handler-down"], .ant-drawer [class*="handler-down"], .ant-drawer button[aria-label="minus"], [class*="sidebar"] .ant-input-number-handler-down'
+          );
+          if (liveMinus) minusBtn = wrapBrowserElement(liveMinus);
+        }
       }
 
-      if (input) {
-        const rawCurrentVal =
-          input.getAttribute('value') ||
-          ('value' in input ? String((input as MutableDOMElement).value) : '') ||
-          '0';
-        const cur = parseInt(rawCurrentVal, 10) || 0;
+      const readCurrentQty = (): number => {
+        if (input) {
+          const rawCurrentVal =
+            input.getAttribute('value') ||
+            ('value' in input ? String((input as MutableDOMElement).value) : '') ||
+            '0';
+          const p = parseInt(rawCurrentVal, 10);
+          if (!isNaN(p)) return p;
+        }
+        if (ticketContainer) {
+          // Look for explicit qty display class first
+          const explicitQty = ticketContainer.querySelector(
+            '.qty-display, [class*="qty-display"], [class*="qty_display"], [class*="quantity-display"]'
+          );
+          if (explicitQty) {
+            const explicitVal =
+              'value' in explicitQty
+                ? String((explicitQty as unknown as { value?: string }).value || '')
+                : explicitQty.textContent || '';
+            const t = explicitVal.trim();
+            const p = parseInt(t, 10);
+            if (!isNaN(p)) return p;
+          }
 
+          // Look inside stepper container (near plus/minus buttons)
+          const stepperParent =
+            ticketContainer.querySelector(
+              '.stepper-group, [class*="stepper"], [class*="quantity"], [class*="input-number"]'
+            ) ||
+            plusBtn?.parentElement ||
+            ticketContainer;
+
+          const numbers = Array.from(stepperParent.querySelectorAll('span, div, p, strong, input'))
+            .map((el) => {
+              const val =
+                'value' in el
+                  ? String((el as unknown as { value?: string }).value || '')
+                  : el.textContent || '';
+              return val.trim();
+            })
+            .filter((text) => /^\d+$/.test(text));
+          if (numbers.length > 0) {
+            const p = parseInt(numbers[0]!, 10);
+            if (!isNaN(p)) return p;
+          }
+
+          const fallbackNumbers = Array.from(ticketContainer.querySelectorAll('span, div, p, strong'))
+            .map((el) => ({ el, text: (el.textContent || '').trim() }))
+            .filter((item) => /^\d+$/.test(item.text) && item.el.querySelectorAll('*').length === 0);
+          if (fallbackNumbers.length > 0) {
+            const p = parseInt(fallbackNumbers[0]!.text, 10);
+            if (!isNaN(p)) return p;
+          }
+        }
+        return 0;
+      };
+
+      let curQty = readCurrentQty();
+
+      if (input) {
         const minAttr = input.getAttribute('min');
         const maxAttr = input.getAttribute('max');
         const min = minAttr ? parseInt(minAttr, 10) : 1;
@@ -1401,19 +1816,61 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           );
           return false;
         }
+      }
 
-        const clicks = Math.max(0, quantity - cur);
-        if (plusBtn && typeof (plusBtn as MutableDOMElement).click === 'function' && clicks > 0) {
-          this.logger?.info('Clicking plus button to set quantity in AntDesign', {
-            clicks,
-            targetQuantity: quantity,
-          });
-          for (let i = 0; i < clicks; i++) {
-            (plusBtn as MutableDOMElement).click!();
+      this.logger?.info('Initial quantity detected for ticket tier', {
+        initialQty: curQty,
+        targetQuantity: quantity,
+        ticketName: ticket.name,
+      });
+
+      if (plusBtn || minusBtn) {
+        const maxSteps = 10;
+        let lastObserved = curQty;
+        for (let step = 0; step < maxSteps && curQty !== quantity; step++) {
+          if (curQty < quantity) {
+            if (!plusBtn) break;
+            this.logger?.info('Clicking plus button to increment quantity', {
+              step,
+              curQty,
+              targetQuantity: quantity,
+              ticketName: ticket.name,
+            });
+            this.clickElement(plusBtn);
+            await new Promise((r) => setTimeout(r, 120));
+          } else if (curQty > quantity) {
+            if (!minusBtn) break;
+            this.logger?.info('Clicking minus button to decrement quantity', {
+              step,
+              curQty,
+              targetQuantity: quantity,
+              ticketName: ticket.name,
+            });
+            this.clickElement(minusBtn);
             await new Promise((r) => setTimeout(r, 120));
           }
-        }
 
+          const nextVal = readCurrentQty();
+          if (nextVal === lastObserved) {
+            // Static mock DOM fallback: update text directly if button click didn't mutate DOM
+            const explicitQty = ticketContainer.querySelector(
+              '.qty-display, [class*="qty-display"], [class*="qty_display"]'
+            );
+            if (explicitQty && 'textContent' in explicitQty) {
+              const delta = curQty < quantity ? 1 : -1;
+              const sim = curQty + delta;
+              (explicitQty as MutableDOMElement).textContent = String(sim);
+              curQty = sim;
+              lastObserved = sim;
+              continue;
+            }
+          }
+          curQty = nextVal;
+          lastObserved = nextVal;
+        }
+      }
+
+      if (input) {
         if (input.rawElement && 'value' in input.rawElement) {
           const nativeEl = input.rawElement as HTMLInputElement;
           const proto =
@@ -1440,19 +1897,22 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         }
         (input as MutableDOMElement).attributes = (input as MutableDOMElement).attributes || {};
         (input as MutableDOMElement).attributes['value'] = String(quantity);
+      }
 
-        this.logger?.info('Quantity selection verified', { quantity });
+      const finalQty = readCurrentQty();
+      if (finalQty === quantity || (!plusBtn && !minusBtn && input)) {
+        this.logger?.info('Quantity selection verified matching target', {
+          quantity: finalQty || quantity,
+          ticketName: ticket.name,
+        });
         return true;
       }
 
-      if (plusBtn && typeof (plusBtn as MutableDOMElement).click === 'function') {
-        this.logger?.info('Incrementing quantity via plus button', { targetQuantity: quantity });
-        for (let i = 0; i < quantity; i++) {
-          (plusBtn as MutableDOMElement).click!();
-          await new Promise((r) => setTimeout(r, 120));
-        }
-        return true;
-      }
+      this.logger?.warn('Quantity after adjustment does not match target', {
+        finalQty,
+        targetQuantity: quantity,
+        ticketName: ticket.name,
+      });
 
       // Wait before next attempt if polling
       if (attempt < maxAttempts) {
@@ -1460,8 +1920,12 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       }
     }
 
-    // If on seat map page with no explicit quantity control or modal after polling, quantity is handled by seat selection
-    if (isAlreadyOnBookingPage) {
+    // If on seat map page with actual visual seat map and no stepper, quantity is handled by seat selection
+    const hasActualSeatMap =
+      root.querySelector('.konvajs-content, [class*="konvajs"], svg.seatmap, [data-seatmap]') !== null ||
+      this.findSeatmapSvg() !== null;
+
+    if (isAlreadyOnBookingPage && hasActualSeatMap) {
       this.logger?.info('Already on seat map page; quantity handled via seat/area selection', {
         ticketName: ticket.name,
       });
@@ -1574,7 +2038,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
   /**
    * Clicks the primary proceed/continue/checkout button on Ticketbox to advance the flow.
-   * Employs polling retries (up to 15 attempts x 250ms) to allow React state / cart calculation
+   * Employs polling retries (up to 30 attempts x 250ms = 7.5s) to allow React state / cart calculation
    * to remove disabled state and render the active continue button.
    *
    * Strictly filters out breadcrumbs, step titles, navigation tabs, and instructional text
@@ -1584,41 +2048,62 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const root = this.getRoot();
     if (!root) return false;
 
-    // Forward navigation action verbs ONLY. "chọn vé" MUST NEVER be here.
+    // Forward navigation action verbs ONLY
     const targetKeywords = [
       'tiếp tục',
+      'tiếp theo',
+      'bước tiếp theo',
       'thanh toán',
+      'tiếp tục thanh toán',
+      'thanh toán ngay',
       'đặt vé',
       'mua vé',
       'mua ngay',
       'đặt ngay',
-      'continue',
-      'checkout',
       'xác nhận',
+      'xác nhận vé',
+      'xác nhận đặt vé',
+      'xác nhận chọn ghế',
+      'xác nhận ghế',
+      'chọn vé này',
+      'hoàn tất',
+      'giữ vé',
+      'đặt chỗ',
+      'continue',
+      'next',
+      'next step',
+      'checkout',
       'proceed',
       'pay',
+      'confirm',
     ];
 
     // Phrases that indicate instructions, prompts, step names, or backwards navigation
-    const negativeKeywords = [
+    const promptOrBackPhrases = [
       'vui lòng',
-      'chọn vé',
-      'chọn khu vực',
-      'chọn ghế',
-      'chọn chỗ',
-      'trở về',
+      'hãy chọn',
+      'bấm vào khu vực',
+      'bấm vào',
+      'hướng dẫn',
       'quay lại',
+      'trở về',
       'back',
-      'hủy',
-      'cancel',
       'đăng nhập',
       'login',
       'sign in',
     ];
 
-    const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 15 : 1;
+    // Phrases that indicate static selection labels unless accompanied by a forward keyword
+    const selectionOnlyPhrases = ['chọn vé', 'chọn khu vực', 'chọn ghế', 'chọn chỗ'];
+
+    const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 30 : 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Auto-dismiss blocking "Hủy đơn hàng?" modal if present
+      if (attempt === 1 || attempt % 5 === 0) {
+        await this.dismissCancelOrderModal();
+      }
+
       const seenRaw = new Set<unknown>();
 
       const isCandidateValid = (el: DOMElementLike): boolean => {
@@ -1655,16 +2140,30 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           }
         }
 
-        const text = (el.textContent || '').toLowerCase().trim();
+        const text = (
+          el.textContent ||
+          el.getAttribute('aria-label') ||
+          el.getAttribute('value') ||
+          el.getAttribute('title') ||
+          ''
+        )
+          .toLowerCase()
+          .trim();
         if (!text || text.length > 80) return false;
 
-        // Reject any element containing negative phrases
-        if (negativeKeywords.some((nk) => text.includes(nk))) {
+        // Reject any element containing prompt or back navigation phrases
+        if (promptOrBackPhrases.some((phrase) => text.includes(phrase))) {
           return false;
         }
 
         // Must contain at least one forward target action keyword
-        if (!targetKeywords.some((kw) => text.includes(kw))) {
+        const hasForwardKeyword = targetKeywords.some((kw) => text.includes(kw));
+        if (!hasForwardKeyword) {
+          return false;
+        }
+
+        // Reject if it is solely a selection prompt without forward continue intent
+        if (selectionOnlyPhrases.some((phrase) => text.includes(phrase)) && !hasForwardKeyword) {
           return false;
         }
 
@@ -1674,7 +2173,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       // TIER 1: Primary action button selectors (Highest confidence)
       const tier1Candidates: DOMElementLike[] = [];
       const tier1Selector =
-        '#btn-continue, [id*="continue"], .btn-continue, button.ant-btn-primary, .ant-modal button, .ant-modal-footer button, [role="dialog"] button, [class*="modal"] button, .ant-drawer-footer button, .sidebar-footer button, [class*="sidebar"] footer button, .bottom-bar button, [class*="bottom"] button, [class*="footer"] button, [class*="checkout"] button, button[type="submit"]';
+        '#btn-continue, [id*="continue"], .btn-continue, [id*="next"], [class*="next-btn"], [class*="btn-next"], button.ant-btn-primary, .ant-modal button, .ant-modal-footer button, [role="dialog"] button, [class*="modal"] button, .ant-drawer-footer button, .sidebar-footer button, [class*="sidebar"] footer button, .bottom-bar button, [class*="bottom-bar"] button, [class*="bottomBar"] button, [class*="bottom"] button, [class*="booking-bar"] button, [class*="bookingBar"] button, [class*="action-bar"] button, [class*="actionBar"] button, [class*="checkout-bar"] button, [class*="checkoutBar"] button, [class*="summary"] button, [class*="summary-bar"] button, [class*="footer"] button, [class*="checkout"] button, [data-testid*="continue"], [data-testid*="next"], [data-testid*="checkout"], button[type="submit"], .ant-layout-footer button, footer button';
 
       for (const el of root.querySelectorAll(tier1Selector)) {
         const raw = el.rawElement || el;
@@ -1717,7 +2216,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       // TIER 3: Generic clickable containers (only if no Tier 1 or Tier 2 match)
       const tier3Candidates: DOMElementLike[] = [];
       const tier3Selector =
-        '[role="button"], div[class*="btn"], div[class*="button"], div[class*="continue"], div.cursor-pointer';
+        '[role="button"], div[class*="btn"], div[class*="button"], div[class*="continue"], div[class*="next"], div.cursor-pointer';
 
       for (const el of root.querySelectorAll(tier3Selector)) {
         const raw = el.rawElement || el;
@@ -1745,7 +2244,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         { tier: 3, list: tier3Candidates },
       ]) {
         for (const btn of tierList.list) {
-          const text = (btn.textContent || '').toLowerCase().trim();
+          const text = (btn.textContent || btn.getAttribute('aria-label') || '').toLowerCase().trim();
           const disabled = this.isElementDisabled(btn);
 
           if (!isCandidateValid(btn)) {
@@ -1784,13 +2283,13 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             await new Promise((r) => setTimeout(r, 350));
             const doc = typeof document !== 'undefined' ? document : null;
             const bottomBtn = doc?.querySelector(
-              '.bottom-bar button, [class*="bottom"] button, #btn-continue'
+              '.bottom-bar button, [class*="bottom-bar"] button, [class*="bottomBar"] button, [class*="bottom"] button, #btn-continue'
             ) as HTMLElement | null;
             if (bottomBtn) {
               const bText = (bottomBtn.textContent || '').toLowerCase().trim();
               if (
                 targetKeywords.some((kw) => bText.includes(kw)) &&
-                !negativeKeywords.some((nk) => bText.includes(nk)) &&
+                !promptOrBackPhrases.some((phrase) => bText.includes(phrase)) &&
                 !this.isElementDisabled(wrapBrowserElement(bottomBtn))
               ) {
                 this.logger?.info('Also clicked bottom bar continue button after modal confirmation', {
@@ -1801,7 +2300,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             }
           }
 
-          await new Promise((r) => setTimeout(r, 600));
+          await new Promise((r) => setTimeout(r, 150));
           return true;
         }
       }
@@ -1824,6 +2323,174 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   }
 
   /**
+   * Detects and dismisses the "Hủy đơn hàng?" confirmation dialog.
+   * On Ticketbox, when returning to seat selection or clicking "Chọn ghế khác" / "Chọn lại vé",
+   * a confirmation dialog appears:
+   * "Hủy đơn hàng?
+   *  Bạn có chắc chắn muốn tiếp tục?
+   *  • Bạn sẽ mất vị trí mình đã lựa chọn.
+   *  • Đơn hàng đang trong quá trình thanh toán hoặc đã thanh toán thành công cũng có thể bị huỷ."
+   * with buttons "Hủy đơn" (cancels current booking and unlocks re-selection) and "Ở lại" (stays on current form).
+   * We must click "Hủy đơn" to proceed with re-selection.
+   */
+  public async dismissCancelOrderModal(): Promise<boolean> {
+    const root = this.getRoot();
+    const doc = typeof document !== 'undefined' ? document : null;
+
+    const isExcludedNode = (node: DOMElementLike | Element | null | undefined): boolean => {
+      if (!node) return true;
+      const tag = (node.tagName || '').toUpperCase();
+      return tag === 'BODY' || tag === 'HTML';
+    };
+
+    const modalSelector =
+      '.ant-modal-content, [role="dialog"], .ant-modal, [class*="modal-content"], [class*="modal-body"], [class*="modal-dialog"], [class*="tbox-modal"], [class*="popup"], [class*="alert"]';
+
+    const modalCandidates: DOMElementLike[] = [];
+    if (root && !isExcludedNode(root)) {
+      const inRoot = root.querySelectorAll(modalSelector);
+      modalCandidates.push(...inRoot.filter((el) => !isExcludedNode(el)));
+    }
+    if (doc) {
+      const inDoc = Array.from(doc.querySelectorAll(modalSelector))
+        .filter((el) => !isExcludedNode(el))
+        .map((el) => wrapBrowserElement(el));
+      modalCandidates.push(...inDoc);
+    }
+
+    for (const modal of modalCandidates) {
+      const text = (modal.textContent || '').toLowerCase();
+      if (!text) continue;
+
+      const isCancelOrderModal =
+        text.includes('hủy đơn hàng') ||
+        text.includes('huỷ đơn hàng') ||
+        (text.includes('bạn có chắc chắn muốn tiếp tục') &&
+          (text.includes('mất vị trí') || text.includes('hủy đơn') || text.includes('huỷ đơn')));
+
+      if (isCancelOrderModal) {
+        this.logger?.info('Detected "Hủy đơn hàng?" confirmation modal, searching for "Hủy đơn" button');
+        const modalRaw = (modal.rawElement || modal) as HTMLElement;
+
+        let cancelBtn: DOMElementLike | HTMLElement | null = null;
+
+        const getClosestButton = (
+          el: DOMElementLike | HTMLElement
+        ): DOMElementLike | HTMLElement => {
+          let curr: any = el;
+          while (curr) {
+            const tag = (curr.tagName || '').toUpperCase();
+            const role =
+              typeof curr.getAttribute === 'function' ? curr.getAttribute('role') : undefined;
+            if (tag === 'BUTTON' || tag === 'A' || role === 'button') {
+              return curr;
+            }
+            if (typeof curr.closest === 'function') {
+              const found = curr.closest('button, a, [role="button"]');
+              if (found) return found;
+            }
+            curr = curr.parentElement;
+          }
+          return el;
+        };
+
+        if (modalRaw && typeof modalRaw.querySelectorAll === 'function') {
+          const clickables = Array.from(
+            modalRaw.querySelectorAll('button, a, [role="button"], span, div')
+          ) as (DOMElementLike | HTMLElement)[];
+
+          // 1. Direct match: element text is strictly "Hủy đơn" or "Huỷ đơn"
+          const directMatch = clickables.find((el) => {
+            const t = (el.textContent || '').trim().toLowerCase();
+            return (
+              (t === 'hủy đơn' || t === 'huỷ đơn' || t === 'hủy đơn hàng' || t === 'huỷ đơn hàng') &&
+              !t.includes('ở lại') &&
+              !t.includes('?')
+            );
+          });
+
+          if (directMatch) {
+            cancelBtn = getClosestButton(directMatch);
+          }
+
+          // 2. Button element whose text contains "hủy đơn" / "huỷ đơn"
+          if (!cancelBtn) {
+            const btnEl = clickables.find((el) => {
+              const tag = (el.tagName || '').toUpperCase();
+              const isBtn =
+                tag === 'BUTTON' ||
+                tag === 'A' ||
+                (typeof el.getAttribute === 'function' && el.getAttribute('role') === 'button');
+              if (!isBtn) return false;
+              const t = (el.textContent || '').trim().toLowerCase();
+              return (
+                (t.includes('hủy đơn') || t.includes('huỷ đơn')) &&
+                !t.includes('ở lại') &&
+                !t.includes('?') &&
+                !t.includes('chắc chắn')
+              );
+            });
+            if (btnEl) {
+              cancelBtn = btnEl;
+            }
+          }
+
+          // 3. Any element in modal whose text includes "hủy đơn" / "huỷ đơn"
+          if (!cancelBtn) {
+            const anyEl = clickables.find((el) => {
+              const t = (el.textContent || '').trim().toLowerCase();
+              return (
+                (t.includes('hủy đơn') || t.includes('huỷ đơn')) &&
+                !t.includes('ở lại') &&
+                !t.includes('?') &&
+                !t.includes('chắc chắn') &&
+                !t.includes('tiếp tục')
+              );
+            });
+            if (anyEl) {
+              cancelBtn = getClosestButton(anyEl);
+            }
+          }
+        }
+
+        // Global fallback if not found within modal container
+        if (!cancelBtn && doc) {
+          const allGlobal = Array.from(
+            doc.querySelectorAll('button, a, [role="button"]')
+          ) as HTMLElement[];
+          const globalMatch = allGlobal.find((el) => {
+            const t = (el.textContent || '').trim().toLowerCase();
+            return (
+              (t === 'hủy đơn' || t === 'huỷ đơn' || t === 'hủy đơn hàng' || t === 'huỷ đơn hàng') &&
+              !t.includes('ở lại') &&
+              !t.includes('?')
+            );
+          });
+          if (globalMatch) {
+            cancelBtn = globalMatch;
+          }
+        }
+
+        const toDOMElementLike = (el: unknown): DOMElementLike => {
+          if (el && typeof el === 'object' && 'tagName' in el && 'querySelector' in el) {
+            return el as DOMElementLike;
+          }
+          return wrapBrowserElement(el as HTMLElement);
+        };
+
+        if (cancelBtn && typeof cancelBtn.click === 'function') {
+          this.logger?.info('Clicking "Hủy đơn" button to cancel order and return to seat selection');
+          this.clickElement(toDOMElementLike(cancelBtn));
+          await new Promise((r) => setTimeout(r, 600));
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Detects Ticketbox error modals (e.g. -1242: "Ghế bạn chọn VIP_A-21 đã được đặt trước").
    * Extracts the unavailable seat, blacklists it, and clicks the action button ("Chọn ghế khác")
    * to automatically recover and return to seat selection.
@@ -1836,19 +2503,63 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const root = this.getRoot();
     const doc = typeof document !== 'undefined' ? document : null;
 
+    // 0. Check if "Hủy đơn hàng?" confirmation dialog is already open on screen
+    const cancelModalDismissed = await this.dismissCancelOrderModal();
+    if (cancelModalDismissed) {
+      let seatLabel: string | undefined;
+      const containers: DOMElementLike[] = [];
+      if (root) containers.push(root);
+      if (doc) containers.push(wrapBrowserElement(doc));
+
+      for (const container of containers) {
+        const textNodes = container.querySelectorAll(
+          '.sidebar, [class*="sidebar"], [class*="booking"], [class*="ticket"], [class*="order"], [class*="summary"], [class*="tag"], [class*="pill"]'
+        );
+        for (const node of textNodes) {
+          const match = (node.textContent || '').match(/\b([A-Za-z0-9_]+[-_]\d+)\b/);
+          if (match && match[1]) {
+            seatLabel = match[1];
+            break;
+          }
+        }
+        if (seatLabel) break;
+      }
+      if (!seatLabel) {
+        const lastSeat = Array.from(this.selectedSeatIds).pop();
+        if (lastSeat) seatLabel = lastSeat;
+      }
+      if (seatLabel) {
+        this.blacklistSeat(seatLabel);
+        await this.deselectSeat(seatLabel);
+      } else {
+        await this.deselectSeat();
+      }
+      this.cachedSeatmapData = null;
+      this.failedSeatmapShowingIds.clear();
+      this.logger?.warn('"Hủy đơn hàng?" modal was detected and dismissed ("Hủy đơn" clicked)', {
+        seatLabel,
+      });
+      return { hasError: true, isSeatUnavailable: true, seatLabel };
+    }
+
+    const isExcludedNode = (node: DOMElementLike | Element | null | undefined): boolean => {
+      if (!node) return true;
+      const tag = (node.tagName || '').toUpperCase();
+      return tag === 'BODY' || tag === 'HTML';
+    };
+
+    const modalSelector =
+      '.ant-modal-content, [role="dialog"], .ant-modal, [class*="modal-content"], [class*="modal-body"], [class*="modal-dialog"], [class*="tbox-modal"], [class*="popup"], [class*="alert"]';
+
     const modalCandidates: DOMElementLike[] = [];
-    if (root) {
-      const inRoot = root.querySelectorAll(
-        '.ant-modal-content, [role="dialog"], .ant-modal, [class*="modal-content"], [class*="modal-body"], [class*="modal"], [class*="popup"], [class*="alert"]'
-      );
-      modalCandidates.push(...inRoot);
+    if (root && !isExcludedNode(root)) {
+      const inRoot = root.querySelectorAll(modalSelector);
+      modalCandidates.push(...inRoot.filter((el) => !isExcludedNode(el)));
     }
     if (doc) {
-      const inDoc = Array.from(
-        doc.querySelectorAll(
-          '.ant-modal-content, [role="dialog"], .ant-modal, [class*="modal-content"], [class*="modal-body"], [class*="modal"], [class*="popup"], [class*="alert"]'
-        )
-      ).map((el) => wrapBrowserElement(el));
+      const inDoc = Array.from(doc.querySelectorAll(modalSelector))
+        .filter((el) => !isExcludedNode(el))
+        .map((el) => wrapBrowserElement(el));
       modalCandidates.push(...inDoc);
     }
 
@@ -1862,18 +2573,24 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         text.includes('đã có người đặt') ||
         text.includes('đã có người chọn') ||
         text.includes('không còn trống') ||
+        text.includes('chọn ghế khác') ||
         (text.includes('xin lỗi') && text.includes('ghế'));
 
       if (isUnavailable) {
         let seatLabel: string | undefined;
         const match = modal.textContent.match(
-          /(?:ghế|seat)\s*(?:bạn chọn)?\s*([A-Za-z0-9_-]+)\s*(?:đã được đặt trước|đã có người|không còn|đã)/i
+          /(?:ghế|seat)\s*(?:bạn\s*chọn)?\s*([A-Za-z0-9_-]+)\s*(?:đã\s*(?:được\s*)?đặt\s*trước|đã\s*có\s*người|không\s*còn|đã)/i
         );
         if (match && match[1]) {
           seatLabel = match[1].trim();
         } else {
-          const lastSeat = Array.from(this.selectedSeatIds).pop();
-          if (lastSeat) seatLabel = lastSeat;
+          const tokenMatch = modal.textContent.match(/\b([A-Za-z0-9_]+[-_]\d+)\b/);
+          if (tokenMatch && tokenMatch[1]) {
+            seatLabel = tokenMatch[1].trim();
+          } else {
+            const lastSeat = Array.from(this.selectedSeatIds).pop();
+            if (lastSeat) seatLabel = lastSeat;
+          }
         }
 
         if (seatLabel) {
@@ -1885,22 +2602,112 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           modalText: text.slice(0, 100),
         });
 
-        // Find "Chọn ghế khác" or primary action button
-        const actionBtn =
-          modal.querySelector(
-            'button.ant-btn-primary, button.ant-btn, [class*="btn-primary"], button'
-          ) ||
-          (doc
-            ? wrapBrowserElement(
-                doc.querySelector('.ant-modal button, [role="dialog"] button') as Element
-              )
-            : null);
+        // Find "Chọn ghế khác" or action button by text first, then fallback to selectors
+        const modalRaw = (modal.rawElement || modal) as HTMLElement;
+        let actionBtn: DOMElementLike | null = null;
+
+        // Search within modal container first
+        if (modalRaw && typeof modalRaw.querySelectorAll === 'function') {
+          const clickables = Array.from(
+            modalRaw.querySelectorAll('button, a, [role="button"], div, span')
+          ) as HTMLElement[];
+
+          const changeSeatEl = clickables.find((el) => {
+            const t = (el.textContent || '').trim().toLowerCase();
+            return (
+              t.includes('chọn ghế khác') ||
+              t.includes('đổi ghế') ||
+              t === 'chọn ghế khác'
+            );
+          });
+
+          const reselectEl =
+            changeSeatEl ||
+            clickables.find((el) => {
+              const t = (el.textContent || '').trim().toLowerCase();
+              return t.includes('chọn lại vé') || t.includes('chọn lại') || t.includes('quay lại');
+            });
+
+          const primaryEl =
+            reselectEl ||
+            (modalRaw.querySelector(
+              'button.ant-btn-primary, button.ant-btn, [class*="btn-primary"], [class*="tbox-btn--primary"], button'
+            ) as HTMLElement | null);
+
+          if (primaryEl) {
+            actionBtn = wrapBrowserElement(primaryEl);
+          }
+        }
+
+        // Global fallback if not found within modal candidate
+        if (!actionBtn && doc) {
+          const allGlobal = Array.from(
+            doc.querySelectorAll('button, a, [role="button"]')
+          ) as HTMLElement[];
+          const globalMatch = allGlobal.find((el) => {
+            const t = (el.textContent || '').trim().toLowerCase();
+            return t.includes('chọn ghế khác') || t.includes('đổi ghế');
+          });
+          if (globalMatch) {
+            actionBtn = wrapBrowserElement(globalMatch);
+          }
+        }
 
         if (actionBtn && typeof (actionBtn as MutableDOMElement).click === 'function') {
           this.logger?.info('Clicking "Chọn ghế khác" button in error modal to recover');
           this.clickElement(actionBtn);
-          await new Promise((r) => setTimeout(r, 600));
+          await new Promise((r) => setTimeout(r, 400));
+
+          // Check if "Hủy đơn hàng?" confirmation modal pops up after clicking "Chọn ghế khác"
+          for (let i = 0; i < 3; i++) {
+            const dismissed = await this.dismissCancelOrderModal();
+            if (dismissed) break;
+            await new Promise((r) => setTimeout(r, 300));
+          }
         }
+
+        // If on /question-form, clicking "Chọn ghế khác" should navigate back to /select-ticket
+        if (typeof window !== 'undefined' && window.location.href.includes('/question-form')) {
+          this.logger?.info('Seat unavailable modal detected on question-form; recovering to seat selection page');
+          await new Promise((r) => setTimeout(r, 400));
+          if (window.location.href.includes('/question-form')) {
+            const docEl = doc || (typeof document !== 'undefined' ? document : null);
+            if (docEl) {
+              const changeTicketLink = Array.from(
+                docEl.querySelectorAll('a, button, [role="button"], span, div')
+              ).find((el) => {
+                const t = (el.textContent || '').trim().toLowerCase();
+                return t.includes('chọn lại vé') || t === 'chọn lại vé';
+              });
+              if (changeTicketLink) {
+                this.logger?.info('Clicking "Chọn lại vé" in sidebar to return to seat map');
+                this.clickElement(wrapBrowserElement(changeTicketLink as HTMLElement));
+                await new Promise((r) => setTimeout(r, 500));
+
+                // Check if "Hủy đơn hàng?" confirmation modal pops up after clicking "Chọn lại vé"
+                for (let i = 0; i < 3; i++) {
+                  const dismissed = await this.dismissCancelOrderModal();
+                  if (dismissed) break;
+                  await new Promise((r) => setTimeout(r, 300));
+                }
+              }
+            }
+          }
+          if (window.location.href.includes('/question-form')) {
+            this.logger?.info('Navigating back to select-ticket page via history.back() / router fallback');
+            if (window.history && typeof window.history.back === 'function') {
+              window.history.back();
+            } else {
+              window.location.href = window.location.href.replace(/\/question-form(\?.*)?$/, '/select-ticket$1');
+            }
+            await new Promise((r) => setTimeout(r, 800));
+          }
+        }
+
+        // CRITICAL: Deselect the unavailable/conflicting seat from cart / Konva / DOM
+        await this.deselectSeat(seatLabel);
+        this.cachedSeatmapData = null;
+        this.failedSeatmapShowingIds.clear();
 
         return { hasError: true, isSeatUnavailable: true, seatLabel };
       }
@@ -1913,9 +2720,19 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
       if (isGenericError) {
         this.logger?.warn('Generic error modal detected', { text: text.slice(0, 100) });
-        const actionBtn = modal.querySelector('button');
-        if (actionBtn && typeof (actionBtn as MutableDOMElement).click === 'function') {
-          this.clickElement(actionBtn);
+        const modalRaw = (modal.rawElement || modal) as HTMLElement;
+        let actionBtn: HTMLElement | null = null;
+        if (modalRaw && typeof modalRaw.querySelectorAll === 'function') {
+          const clickables = Array.from(modalRaw.querySelectorAll('button, a, [role="button"]')) as HTMLElement[];
+          actionBtn =
+            clickables.find((el) => {
+              const t = (el.textContent || '').trim().toLowerCase();
+              return t.includes('đóng') || t.includes('ok') || t.includes('xác nhận') || t.includes('thử lại');
+            }) ||
+            (modalRaw.querySelector('button.ant-btn-primary, [class*="btn-primary"], button') as HTMLElement | null);
+        }
+        if (actionBtn && typeof actionBtn.click === 'function') {
+          this.clickElement(wrapBrowserElement(actionBtn));
           await new Promise((r) => setTimeout(r, 400));
         }
         return { hasError: true, isSeatUnavailable: false };
@@ -2181,16 +2998,27 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const root = this.getRoot();
     if (!root) return { hasSeatMap: false };
 
-    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
-    const isBookingUrl = currentUrl.includes('/select-ticket') || currentUrl.includes('/booking');
+    // 1. Authoritative check from cached Showing API: if seatMapId === 0, strictly standing (no seat map)
+    if (
+      this.cachedShowingApiData?.data?.result &&
+      this.cachedShowingApiData.data.result.seatMapId === 0
+    ) {
+      this.logger?.info(
+        'Authoritative Showing API indicates seatMapId: 0 (standing event, no seat map)',
+        { showingId: this.cachedShowingApiData.data.result.id }
+      );
+      return { hasSeatMap: false, zones: [] };
+    }
 
+    // 2. DOM inspection for visual seat map canvas, SVG, or explicit areas
+    const hasKonva = root.querySelector('.konvajs-content, [class*="konvajs"]') !== null;
     const mapEl =
       this.findSeatmapSvg() ||
       root.querySelector(
         '.seat-map, #seat-map, svg.seatmap, [data-seat-map], [data-seatmap], .seat-plan, [class*="seatmap"], [class*="seat-map"]'
       );
-    const hasSeatMap = mapEl !== null || isBookingUrl;
     const areas = TicketboxSeatMapParser.parseAreas(root);
+    const hasSeatMap = mapEl !== null || hasKonva || areas.length > 0;
 
     return {
       hasSeatMap,
@@ -2779,6 +3607,118 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
   public async selectSeats(selection: { zoneId?: string; seatIds: string[] }): Promise<boolean> {
     return this.selectSpecificSeats(selection.seatIds);
+  }
+
+  /**
+   * Deselects a specific seat (or all selected seats if seatLabel is omitted).
+   * 1. Updates internal selection state and cached seat status.
+   * 2. Clears cachedSeatmapData and failedSeatmapShowingIds.
+   * 3. Closes seat tag/badge in bottom cart bar / sidebar (Ant Design tag close icon or pill).
+   * 4. Dispatches DESELECT_SEATS request to Main-World Konva Page Bridge.
+   */
+  public async deselectSeat(seatLabel?: string): Promise<boolean> {
+    this.logger?.info('Deselecting seat from reservation', { seatLabel });
+
+    // 1. Internal state update
+    if (seatLabel) {
+      const raw = seatLabel.trim();
+      const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      this.selectedSeatIds.delete(raw);
+      this.selectedSeatIds.delete(raw.toUpperCase());
+      if (norm) this.selectedSeatIds.delete(norm);
+      for (const s of this.cachedSeats) {
+        if (s.id === raw || s.label === raw || (norm && s.label?.toUpperCase().replace(/[^A-Z0-9]/g, '') === norm)) {
+          s.status = 'AVAILABLE';
+        }
+      }
+    } else {
+      this.selectedSeatIds.clear();
+      for (const s of this.cachedSeats) {
+        if (s.status === 'SELECTED') {
+          s.status = 'AVAILABLE';
+        }
+      }
+    }
+
+    // Invalidate cached seatmap data so subsequent fetches refresh seat availability
+    this.cachedSeatmapData = null;
+    this.failedSeatmapShowingIds.clear();
+
+    const root = this.getRoot();
+    const doc = typeof document !== 'undefined' ? document : null;
+    const targetNorm = seatLabel ? seatLabel.toUpperCase().replace(/[^A-Z0-9]/g, '') : null;
+
+    // 2. DOM: Click close icon on seat tags/badges in bottom bar or sidebar
+    const tagSelector =
+      '.ant-tag, [class*="seat-tag"], [class*="seat-item"], [class*="selected-seat"], [class*="seatTag"], [class*="badge"], [class*="seat-pill"], [class*="ticket-item"], [class*="cart-item"], [class*="seatItem"]';
+
+    const domContainers: DOMElementLike[] = [];
+    if (root) domContainers.push(root);
+    if (doc) domContainers.push(wrapBrowserElement(doc));
+
+    for (const container of domContainers) {
+      const tags = container.querySelectorAll(tagSelector);
+      for (const tag of tags) {
+        const text = (tag.textContent || '').toUpperCase().trim();
+        const textNorm = text.replace(/[^A-Z0-9]/g, '');
+        const isMatch =
+          !targetNorm || textNorm.includes(targetNorm) || (seatLabel && text.includes(seatLabel.toUpperCase()));
+
+        if (isMatch) {
+          const rawTag = (tag.rawElement || tag) as HTMLElement;
+          const closeIcon =
+            (rawTag.querySelector?.(
+              '.ant-tag-close-icon, [aria-label="close"], [class*="close"], [class*="remove"], [class*="delete"], svg'
+            ) as HTMLElement | null) ||
+            tag.querySelector(
+              '.ant-tag-close-icon, [aria-label="close"], [class*="close"], [class*="remove"], [class*="delete"], svg'
+            );
+
+          if (closeIcon && typeof (closeIcon as MutableDOMElement).click === 'function') {
+            this.logger?.info('Clicking close icon on seat tag to deselect', { text });
+            this.clickElement(closeIcon as DOMElementLike);
+          } else if (typeof (tag as MutableDOMElement).click === 'function') {
+            this.logger?.info('Clicking seat tag directly to deselect', { text });
+            this.clickElement(tag);
+          }
+        }
+      }
+    }
+
+    // 3. Konva Canvas: dispatch DESELECT_SEATS via Page-World Bridge (fire-and-forget)
+    if (typeof window !== 'undefined') {
+      const seatPayload = seatLabel ? [{ id: seatLabel, label: seatLabel }] : [];
+      this.sendPageBridgeRequest('DESELECT_SEATS', { seats: seatPayload }, 1500).catch(() => {
+        // Bridge deselect is best-effort; DOM deselect already handled above
+      });
+    }
+
+    // 4. SVG / DOM Seat shape fallback
+    if (seatLabel) {
+      const raw = seatLabel.trim();
+      const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const seat = this.cachedSeats.find(
+        (s) => s.id === raw || s.label === raw || (norm && s.label?.toUpperCase().replace(/[^A-Z0-9]/g, '') === norm)
+      );
+      if (seat && typeof seat.x === 'number' && typeof seat.y === 'number') {
+        const seatmapSvg = this.findSeatmapSvg();
+        if (seatmapSvg) {
+          const shapes = Array.from(seatmapSvg.querySelectorAll('circle, [cx]')).map((el) => wrapBrowserElement(el));
+          for (const s of shapes) {
+            const cx = parseFloat(s.getAttribute('cx') || '');
+            const cy = parseFloat(s.getAttribute('cy') || '');
+            if (!isNaN(cx) && !isNaN(cy) && Math.hypot(cx - seat.x, cy - seat.y) < 5.0) {
+              if (typeof (s as MutableDOMElement).click === 'function') {
+                this.clickElement(s);
+              }
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    return true;
   }
 
   /**

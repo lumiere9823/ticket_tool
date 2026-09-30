@@ -145,11 +145,19 @@ class SimpleDOMNode implements DOMElementLike {
   }
 
   public setAttribute(name: string, value: string): void {
-    this.attributes[name.toLowerCase()] = value;
+    const lowerName = name.toLowerCase();
+    this.attributes[lowerName] = value;
+    if (lowerName === 'class') {
+      this.className = value;
+    }
   }
 
   public removeAttribute(name: string): void {
-    delete this.attributes[name.toLowerCase()];
+    const lowerName = name.toLowerCase();
+    delete this.attributes[lowerName];
+    if (lowerName === 'class') {
+      this.className = '';
+    }
   }
 
   public click(): void {

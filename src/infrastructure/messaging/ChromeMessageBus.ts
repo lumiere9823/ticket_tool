@@ -22,10 +22,13 @@ const VALID_MESSAGE_TYPES = new Set<string>([
   'REQUEST_DISCOVERY_SCAN',
   'FETCH_SEATMAP_REQUEST',
   'FETCH_SEATMAP_RESPONSE',
+  'FETCH_SHOWING_REQUEST',
+  'FETCH_SHOWING_RESPONSE',
   'RESET_CONFIG_REQUESTED',
   'RESET_CONFIG_DONE',
   'SCHEDULED_ARM_CONFIRMED',
   'CANCEL_SCHEDULED_ARM',
+  'HEARTBEAT_PING',
 ]);
 
 export class ChromeMessageBus implements EventBus {
@@ -200,7 +203,8 @@ export class ChromeMessageBus implements EventBus {
       case 'PAGE_DISCOVERY_SNAPSHOT':
         return (
           typeof msg['url'] === 'string' &&
-          typeof msg['domSummary'] === 'object' &&
+          (msg['domSummary'] === undefined ||
+            (typeof msg['domSummary'] === 'object' && msg['domSummary'] !== null)) &&
           typeof msg['timingMs'] === 'number'
         );
       case 'JOURNEY_UPDATE':
@@ -210,12 +214,17 @@ export class ChromeMessageBus implements EventBus {
       case 'RESET_CONFIG_REQUESTED':
       case 'RESET_CONFIG_DONE':
       case 'CANCEL_SCHEDULED_ARM':
+      case 'HEARTBEAT_PING':
         return true;
       case 'SCHEDULED_ARM_CONFIRMED':
         return typeof msg['scheduledAt'] === 'string';
       case 'FETCH_SEATMAP_REQUEST':
         return typeof msg['showingId'] === 'string';
       case 'FETCH_SEATMAP_RESPONSE':
+        return typeof msg['showingId'] === 'string' && typeof msg['success'] === 'boolean';
+      case 'FETCH_SHOWING_REQUEST':
+        return typeof msg['showingId'] === 'string';
+      case 'FETCH_SHOWING_RESPONSE':
         return typeof msg['showingId'] === 'string' && typeof msg['success'] === 'boolean';
       default:
         return false;
