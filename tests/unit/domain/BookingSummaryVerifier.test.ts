@@ -181,4 +181,179 @@ describe('BookingSummaryVerifier', () => {
     const result = BookingSummaryVerifier.verify(summaryWithoutDiacritics, vnSelection);
     expect(result.isValid).toBe(true);
   });
+
+  it('should reject when summary ticket name is a compound or superset of expected name (e.g. VIP PLUS vs VIP)', () => {
+    const vipSelection: CurrentSelection = {
+      ticketId: 't-vip',
+      name: 'VIP',
+      quantity: 1,
+      price: 2000000,
+      currency: 'VND',
+      mode: 'STANDING',
+      seats: [],
+      selectedAt: '2026-10-18T10:00:00Z',
+    };
+
+    const vipPlusSummary: BookingSummary = {
+      items: [{ ticket: 'VIP PLUS', quantity: 1, price: 2000000 }],
+      subtotal: 2000000,
+      fees: 0,
+      currency: 'VND',
+      total: 2000000,
+    };
+
+    const result = BookingSummaryVerifier.verify(vipPlusSummary, vipSelection);
+    expect(result.isValid).toBe(false);
+    expect(result.errors[0]).toContain("Expected ticket 'VIP' not found");
+  });
+
+  it('should reject when summary ticket name has compound prefix like SUPER VIP for VIP', () => {
+    const vipSelection: CurrentSelection = {
+      ticketId: 't-vip',
+      name: 'VIP',
+      quantity: 1,
+      price: 2000000,
+      currency: 'VND',
+      mode: 'STANDING',
+      seats: [],
+      selectedAt: '2026-10-18T10:00:00Z',
+    };
+
+    const superVipSummary: BookingSummary = {
+      items: [{ ticket: 'SUPER VIP', quantity: 1, price: 2000000 }],
+      subtotal: 2000000,
+      fees: 0,
+      currency: 'VND',
+      total: 2000000,
+    };
+
+    const result = BookingSummaryVerifier.verify(superVipSummary, vipSelection);
+    expect(result.isValid).toBe(false);
+    expect(result.errors[0]).toContain("Expected ticket 'VIP' not found");
+  });
+
+  it('should fail-closed when subtotal is <= 0 for paid tickets', () => {
+    const zeroSubtotalSummary: BookingSummary = {
+      items: [{ ticket: 'CAT 1 Standing', quantity: 2, price: 1500000 }],
+      subtotal: 0,
+      fees: 0,
+      currency: 'VND',
+      total: 0,
+    };
+
+    const result = BookingSummaryVerifier.verify(zeroSubtotalSummary, validSelection);
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some((e) => e.includes('subtotal') && e.includes('greater than 0'))).toBe(true);
+  });
+
+  it('should fail-closed when item price is <= 0 or missing for paid tickets', () => {
+    const zeroPriceSummary: BookingSummary = {
+      items: [{ ticket: 'CAT 1 Standing', quantity: 2, price: 0 }],
+      subtotal: 3000000,
+      fees: 0,
+      currency: 'VND',
+      total: 3000000,
+    };
+
+    const result = BookingSummaryVerifier.verify(zeroPriceSummary, validSelection);
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some((e) => e.includes('price') && e.includes('greater than 0'))).toBe(true);
+  });
+
+  it('should reject when summary currency does not match expected currency', () => {
+    const wrongCurrencySummary: BookingSummary = {
+      items: [{ ticket: 'CAT 1 Standing', quantity: 2, price: 1500000 }],
+      subtotal: 3000000,
+      fees: 0,
+      currency: 'USD',
+      total: 3000000,
+    };
+
+    const result = BookingSummaryVerifier.verify(wrongCurrencySummary, validSelection);
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some((e) => e.includes('currency mismatch'))).toBe(true);
+  });
+
+  it('should reject seated mode when summary has missing or empty seat list', () => {
+    const seatedSelection: CurrentSelection = {
+      ticketId: 't-vip-seated',
+      name: 'VIP Seated',
+      quantity: 2,
+      price: 2500000,
+      currency: 'VND',
+      mode: 'SEATED',
+      areaId: 'Zone A',
+      seats: ['A01', 'A02'],
+      selectedAt: '2026-10-18T10:00:00Z',
+    };
+
+    const noSeatsSummary: BookingSummary = {
+      items: [
+        {
+          ticket: 'VIP Seated',
+          quantity: 2,
+          price: 2500000,
+          seats: [],
+        },
+      ],
+      subtotal: 5000000,
+      fees: 0,
+      currency: 'VND',
+      total: 5000000,
+    };
+
+    const result = BookingSummaryVerifier.verify(noSeatsSummary, seatedSelection);
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some((e) => e.includes('missing seat list'))).toBe(true);
+  });
+
+  it('should reject seated mode when summary seat count does not match expected quantity', () => {
+    const seatedSelection: CurrentSelection = {
+      ticketId: 't-vip-seated',
+      name: 'VIP Seated',
+      quantity: 2,
+      price: 2500000,
+      currency: 'VND',
+      mode: 'SEATED',
+      areaId: 'Zone A',
+      seats: ['A01', 'A02'],
+      selectedAt: '2026-10-18T10:00:00Z',
+    };
+
+    const partialSeatsSummary: BookingSummary = {
+      items: [
+        {
+          ticket: 'VIP Seated',
+          quantity: 2,
+          price: 2500000,
+          seats: ['A01'],
+        },
+      ],
+      subtotal: 5000000,
+      fees: 0,
+      currency: 'VND',
+      total: 5000000,
+    };
+
+    const result = BookingSummaryVerifier.verify(partialSeatsSummary, seatedSelection);
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some((e) => e.includes('seats count'))).toBe(true);
+  });
+
+  it('should reject when summary contains unexpected extra items', () => {
+    const extraItemSummary: BookingSummary = {
+      items: [
+        { ticket: 'CAT 1 Standing', quantity: 2, price: 1500000 },
+        { ticket: 'VIP Lounge Pass', quantity: 1, price: 500000 },
+      ],
+      subtotal: 3500000,
+      fees: 0,
+      currency: 'VND',
+      total: 3500000,
+    };
+
+    const result = BookingSummaryVerifier.verify(extraItemSummary, validSelection);
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some((e) => e.includes('Unexpected item') || e.includes('extra items'))).toBe(true);
+  });
 });

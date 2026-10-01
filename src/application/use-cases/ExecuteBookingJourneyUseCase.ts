@@ -1306,6 +1306,31 @@ export class ExecuteBookingJourneyUseCase {
       };
     }
 
+    // Re-verify booking summary if not detected at earlier step
+    if (!summary && this.adapter.getBookingSummary) {
+      const paymentSummary = await this.adapter.getBookingSummary();
+      if (paymentSummary) {
+        this.stateMachine.transition({
+          type: 'BOOKING_SUMMARY_DETECTED',
+          summary: paymentSummary as unknown as Record<string, unknown>,
+        });
+
+        const verification = BookingSummaryVerifier.verify(paymentSummary, currentSelection);
+        if (!verification.isValid) {
+          this.logger.error('Booking summary mismatch before payment gate', {
+            errors: verification.errors,
+          });
+          throw new BookingError({
+            code: 'SUMMARY_MISMATCH',
+            message: `Summary mismatch: ${verification.errors.join('; ')}`,
+            state: this.stateMachine.state,
+            recoverable: false,
+          });
+        }
+        this.logger.info('Booking summary verified successfully before payment gate');
+      }
+    }
+
     this.stateMachine.transition({ type: 'PAYMENT_GATE' });
     this.logger.info('Payment step reached — user action required.');
 
