@@ -56,42 +56,13 @@ interface KonvaGlobalLike {
   stages?: KonvaStageLike[];
 }
 
-interface BridgeSeatPayload {
-  id: string;
-  label?: string;
-  x?: number;
-  y?: number;
-  row?: string;
-  number?: number;
-}
-
-interface BridgeRequestPayload {
-  areaId?: string;
-  areaName?: string;
-  ticketTypeId?: string;
-  quantity?: number;
-  ticketName?: string;
-  selector?: string;
-  text?: string;
-  coords?: { x?: number; y?: number; width?: number; height?: number };
-  seats?: BridgeSeatPayload[];
-}
-
-interface BridgeRequestMessage {
-  source: 'TICKETBOX_ASSISTANT_CONTENT';
-  type: string;
-  requestId: string;
-  payload?: BridgeRequestPayload;
-}
-
-interface BridgeResponseMessage {
-  source: 'TICKETBOX_ASSISTANT_PAGE';
-  type: string;
-  requestId: string;
-  success: boolean;
-  data?: unknown | undefined;
-  error?: string | undefined;
-}
+import {
+  BridgeSeatPayload,
+  BridgeRequestPayload,
+  BridgeResponseMessage,
+  isValidBridgeRequest,
+  getSafeBridgeTargetOrigin,
+} from '../shared/BridgeProtocol';
 
 function getKonva(): KonvaGlobalLike | null {
   const g = window as unknown as Record<string, unknown>;
@@ -1332,6 +1303,20 @@ async function dispatchBridgeRequest(
   }
 }
 
+let activeBridgeNonce: string | null = null;
+
+function getActiveBridgeNonce(): string | null {
+  if (activeBridgeNonce) return activeBridgeNonce;
+  if (typeof document !== 'undefined' && document.documentElement) {
+    const nonce = document.documentElement.getAttribute('data-tb-bridge-nonce');
+    if (nonce) {
+      activeBridgeNonce = nonce;
+      document.documentElement.removeAttribute('data-tb-bridge-nonce');
+    }
+  }
+  return activeBridgeNonce;
+}
+
 /**
  * Setup listeners on window.
  */
@@ -1339,53 +1324,51 @@ function initializePageBridge(): void {
   // Flag page bridge as loaded
   (window as unknown as Record<string, unknown>).__TICKETBOX_PAGE_BRIDGE_LOADED__ = true;
 
-  // 1. window.postMessage listener
+  // Single secure window.postMessage listener
   window.addEventListener('message', async (event: MessageEvent) => {
     if (event.source !== window || !event.data) return;
-    const msg = event.data as BridgeRequestMessage;
-    if (msg.source !== 'TICKETBOX_ASSISTANT_CONTENT' || !msg.type || !msg.requestId) return;
-    if (!claimRequest(msg.requestId)) return;
+    if (!isValidBridgeRequest(event.data)) return;
 
-    const result = await processBridgeRequest(msg.type, msg.payload);
+    // Reject message if origin is present and does not match
+    if (
+      typeof window !== 'undefined' &&
+      window.location?.origin &&
+      window.location.origin !== 'null' &&
+      event.origin &&
+      event.origin !== window.location.origin
+    ) {
+      return;
+    }
+
+    const currentNonce = getActiveBridgeNonce();
+    if (currentNonce && event.data.nonce !== currentNonce) {
+      return; // Reject messages with invalid/mismatched nonce
+    }
+    if (!currentNonce) {
+      // First handshake request adopts the content script's nonce
+      activeBridgeNonce = event.data.nonce;
+    }
+
+    if (!claimRequest(event.data.requestId)) return;
+
+    const result = await processBridgeRequest(event.data.type, event.data.payload);
     const response: BridgeResponseMessage = {
       source: 'TICKETBOX_ASSISTANT_PAGE',
-      type: `${msg.type}_RESPONSE`,
-      requestId: msg.requestId,
+      type: `${event.data.type}_RESPONSE`,
+      requestId: event.data.requestId,
+      nonce: activeBridgeNonce || event.data.nonce,
       success: result.success,
       data: result.data,
       error: result.error,
     };
 
-    window.postMessage(response, '*');
+    window.postMessage(response, getSafeBridgeTargetOrigin());
   });
 
-  // 2. CustomEvent listener
-  window.addEventListener('TICKETBOX_ASSISTANT_REQUEST', async (event: Event) => {
-    const detail = (event as CustomEvent<BridgeRequestMessage>).detail;
-    if (!detail || !detail.type || !detail.requestId) return;
-    if (!claimRequest(detail.requestId)) return;
-
-    const result = await processBridgeRequest(detail.type, detail.payload);
-    const response: BridgeResponseMessage = {
-      source: 'TICKETBOX_ASSISTANT_PAGE',
-      type: `${detail.type}_RESPONSE`,
-      requestId: detail.requestId,
-      success: result.success,
-      data: result.data,
-      error: result.error,
-    };
-
-    window.dispatchEvent(
-      new CustomEvent('TICKETBOX_ASSISTANT_RESPONSE', {
-        detail: response,
-      })
-    );
-  });
-
-  // 3. Monitor Konva stage scale for anti-bot zoom thrash detection
+  // 2. Monitor Konva stage scale for anti-bot zoom thrash detection
   startStageScaleMonitor();
 
-  // 4. Intercept history pushState/replaceState for instantaneous SPA route detection
+  // 3. Intercept history pushState/replaceState for instantaneous SPA route detection
   installRouteInterceptors();
 }
 
@@ -1410,8 +1393,9 @@ function startStageScaleMonitor(): void {
               source: 'TICKETBOX_ASSISTANT_PAGE',
               type: 'ZOOM_SAMPLE',
               scale: s,
+              nonce: activeBridgeNonce ?? undefined,
             },
-            '*'
+            getSafeBridgeTargetOrigin()
           );
         }
       }
@@ -1434,8 +1418,9 @@ function installRouteInterceptors(): void {
           source: 'TICKETBOX_ASSISTANT_PAGE',
           type: 'ROUTE_CHANGE',
           url: window.location.href,
+          nonce: activeBridgeNonce ?? undefined,
         },
-        '*'
+        getSafeBridgeTargetOrigin()
       );
     };
 

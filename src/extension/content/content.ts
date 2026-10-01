@@ -188,6 +188,9 @@ function ensurePageBridgeInjected(): void {
   const isLoaded = (window as unknown as Record<string, unknown>).__TICKETBOX_PAGE_BRIDGE_LOADED__;
   if (!isLoaded && typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
     try {
+      if (document.documentElement) {
+        document.documentElement.setAttribute('data-tb-bridge-nonce', adapter.getBridgeNonce());
+      }
       const script = document.createElement('script');
       script.src = chrome.runtime.getURL('content-main.js');
       script.onload = () => script.remove();
@@ -562,8 +565,20 @@ function startZoomThrashDetector(): void {
   // Strategy 4: window.postMessage from MAIN world (page-bridge.ts)
   window.addEventListener('message', (event: MessageEvent) => {
     if (event.source !== window || !event.data) return;
+    if (
+      typeof window !== 'undefined' &&
+      window.location?.origin &&
+      window.location.origin !== 'null' &&
+      event.origin &&
+      event.origin !== window.location.origin
+    ) {
+      return;
+    }
     const msg = event.data;
     if (msg.source === 'TICKETBOX_ASSISTANT_PAGE') {
+      if (msg.nonce && msg.nonce !== adapter.getBridgeNonce()) {
+        return;
+      }
       if (msg.type === 'ZOOM_SAMPLE' && typeof msg.scale === 'number') {
         onZoomSampleObserved(msg.scale);
       } else if (msg.type === 'ROUTE_CHANGE') {

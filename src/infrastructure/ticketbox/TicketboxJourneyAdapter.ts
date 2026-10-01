@@ -37,6 +37,13 @@ import { TicketboxSummaryParser } from './parsing/TicketboxSummaryParser';
 import { TicketboxFormParser } from './parsing/TicketboxFormParser';
 import { FormAutofillPolicy } from '../../domain/policies/FormAutofillPolicy';
 import { PurchaseState } from '../../domain/states/PurchaseState';
+import {
+  generateBridgeNonce,
+  generateBridgeRequestId,
+  getSafeBridgeTargetOrigin,
+  isValidBridgeResponse,
+  BridgeRequestMessage,
+} from '../../extension/shared/BridgeProtocol';
 
 export type CancelOrderConfirmationResult =
   { status: 'confirmed' } | { status: 'blocked'; reason: string } | { status: 'not_found' };
@@ -171,6 +178,16 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
   public setCustomUrl(url: string): void {
     this.customUrl = url;
+  }
+
+  private bridgeNonce: string = generateBridgeNonce();
+
+  public getBridgeNonce(): string {
+    return this.bridgeNonce;
+  }
+
+  public setBridgeNonce(nonce: string): void {
+    this.bridgeNonce = nonce;
   }
 
   public setCurrentStateProvider(provider: () => PurchaseState): void {
@@ -519,14 +536,14 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       return { success: false, error: 'NO_WINDOW' };
     }
 
-    const requestId = `tb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const requestId = generateBridgeRequestId();
+    const targetOrigin = getSafeBridgeTargetOrigin();
 
     return new Promise((resolve) => {
       let resolved = false;
 
       const cleanup = () => {
         window.removeEventListener('message', onMessage);
-        window.removeEventListener('TICKETBOX_ASSISTANT_RESPONSE', onCustomEvent as EventListener);
       };
 
       const timer = setTimeout(() => {
@@ -540,10 +557,25 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       const onMessage = (event: MessageEvent) => {
         if (
           event.source === window &&
-          event.data &&
-          event.data.source === 'TICKETBOX_ASSISTANT_PAGE' &&
-          event.data.requestId === requestId
+          isValidBridgeResponse(event.data) &&
+          event.data.requestId === requestId &&
+          event.data.nonce === this.bridgeNonce
         ) {
+          // Reject if origin is specified and does not match
+          if (
+            typeof window !== 'undefined' &&
+            window.location?.origin &&
+            window.location.origin !== 'null' &&
+            event.origin &&
+            event.origin !== window.location.origin
+          ) {
+            this.logger?.warn('Bridge response ignored due to origin mismatch', {
+              expectedOrigin: window.location.origin,
+              receivedOrigin: event.origin,
+            });
+            return;
+          }
+
           if (!resolved) {
             resolved = true;
             clearTimeout(timer);
@@ -553,49 +585,17 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         }
       };
 
-      const onCustomEvent = (event: unknown) => {
-        const detail = (
-          event as {
-            detail?: {
-              requestId?: string;
-              success?: boolean;
-              data?: T;
-              error?: string;
-            };
-          }
-        ).detail;
-        if (detail && detail.requestId === requestId) {
-          if (!resolved) {
-            resolved = true;
-            clearTimeout(timer);
-            cleanup();
-            resolve(detail as { success: boolean; data?: T; error?: string });
-          }
-        }
+      window.addEventListener('message', onMessage);
+
+      const message: BridgeRequestMessage = {
+        source: 'TICKETBOX_ASSISTANT_CONTENT',
+        type: action,
+        requestId,
+        nonce: this.bridgeNonce,
+        payload,
       };
 
-      window.addEventListener('message', onMessage);
-      window.addEventListener('TICKETBOX_ASSISTANT_RESPONSE', onCustomEvent as EventListener);
-
-      window.postMessage(
-        {
-          source: 'TICKETBOX_ASSISTANT_CONTENT',
-          type: action,
-          requestId,
-          payload,
-        },
-        '*'
-      );
-
-      try {
-        window.dispatchEvent(
-          new CustomEvent('TICKETBOX_ASSISTANT_REQUEST', {
-            detail: { type: action, requestId, payload },
-          })
-        );
-      } catch {
-        // ignore
-      }
+      window.postMessage(message, targetOrigin);
     });
   }
 
@@ -3163,6 +3163,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
         // Check if page is already in section view
         const isAlreadySection =
+          typeof document !== 'undefined' &&
           document.querySelector('.seat_status, [class*="seat_status"]') !== null;
         if (isAlreadySection) {
           this.logger?.info('Page already in section view; area selection fulfilled', { areaId });
@@ -3170,7 +3171,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         }
 
         // Fallback: If Konva canvas exists, simulate click on canvas container at coordinates
-        const konvaContent = document.querySelector('.konvajs-content') as HTMLElement | null;
+        const konvaContent =
+          typeof document !== 'undefined'
+            ? (document.querySelector('.konvajs-content') as HTMLElement | null)
+            : null;
         if (konvaContent) {
           this.logger?.info('Dispatching simulated click to Konva canvas container', {
             areaId,
