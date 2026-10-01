@@ -502,6 +502,46 @@ async function handleServiceWorkerMessage(
 ): Promise<void> {
   logger.debug('Received extension message in Service Worker', { type: message.type });
 
+  if (sender) {
+    if (typeof chrome !== 'undefined' && chrome.runtime?.id) {
+      if (sender.id && sender.id !== chrome.runtime.id) {
+        logger.warn('Rejected message from untrusted sender id', {
+          type: message.type,
+          senderId: sender.id,
+        });
+        return;
+      }
+    }
+
+    const CONTROL_TYPES = new Set([
+      'ARM_REQUESTED',
+      'STOP_REQUESTED',
+      'RESET_CONFIG_REQUESTED',
+      'START_MONITORING',
+    ]);
+
+    if (CONTROL_TYPES.has(message.type)) {
+      if (sender.tabId !== undefined) {
+        logger.warn('Rejected control message originating from content script tab', {
+          type: message.type,
+          senderTabId: sender.tabId,
+        });
+        return;
+      }
+      const extPrefix =
+        typeof chrome !== 'undefined' && chrome.runtime?.getURL
+          ? chrome.runtime.getURL('')
+          : 'chrome-extension://';
+      if (sender.url && !sender.url.startsWith(extPrefix)) {
+        logger.warn('Rejected control message from non-extension URL', {
+          type: message.type,
+          senderUrl: sender.url,
+        });
+        return;
+      }
+    }
+  }
+
   switch (message.type) {
     case 'STATE_CHANGED': {
       if (sender) {
@@ -862,7 +902,7 @@ async function handleServiceWorkerMessage(
           showingId: message.showingId,
           url,
         });
-        const res = await fetch(url);
+        const res = await fetch(url, { credentials: 'omit' });
         if (!res.ok) {
           failedSeatmapShowings.set(message.showingId, Date.now());
           logger.debug('Seatmap API returned non-OK status', {
@@ -905,12 +945,32 @@ async function handleServiceWorkerMessage(
 
     case 'FETCH_SHOWING_REQUEST': {
       try {
+        const config = await storage.getConfiguration();
+        if (config?.scopedPurchasePlan?.targets && config.scopedPurchasePlan.targets.length > 0) {
+          const allowedShowings = new Set(
+            config.scopedPurchasePlan.targets.map((t) => t.showingId)
+          );
+          if (!allowedShowings.has(message.showingId)) {
+            logger.info('FETCH_SHOWING_REQUEST blocked by Scope Guard (outside whitelist)', {
+              showingId: message.showingId,
+            });
+            await eventBus.publish({
+              type: 'FETCH_SHOWING_RESPONSE',
+              timestamp: new Date().toISOString(),
+              showingId: message.showingId,
+              success: false,
+              error: `Showing ${message.showingId} outside scoped whitelist`,
+            });
+            break;
+          }
+        }
+
         const url = `https://api-v2.ticketbox.vn/gin/api/v2/events/showings/${message.showingId}`;
         logger.info('Fetching showing from background worker', {
           showingId: message.showingId,
           url,
         });
-        const res = await fetch(url);
+        const res = await fetch(url, { credentials: 'omit' });
         if (!res.ok) {
           logger.debug('Showing API returned non-OK status', {
             showingId: message.showingId,

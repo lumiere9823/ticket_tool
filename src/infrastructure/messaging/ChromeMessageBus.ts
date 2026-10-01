@@ -95,6 +95,61 @@ export class ChromeMessageBus implements EventBus {
     }
   }
 
+  private static readonly CONTROL_MESSAGE_TYPES = new Set<string>([
+    'ARM_REQUESTED',
+    'STOP_REQUESTED',
+    'RESET_CONFIG_REQUESTED',
+    'START_MONITORING',
+  ]);
+
+  /**
+   * Checks whether a message type is a privileged control command.
+   */
+  public isControlMessage(type: string): boolean {
+    return ChromeMessageBus.CONTROL_MESSAGE_TYPES.has(type);
+  }
+
+  /**
+   * Validates sender authenticity:
+   * Rejects if sender.id does not match this extension's runtime.id.
+   */
+  public isValidSender(sender?: MessageSenderInfo): boolean {
+    if (!sender) return true; // Internal in-memory message
+    if (typeof chrome !== 'undefined' && chrome.runtime?.id) {
+      if (sender.id && sender.id !== chrome.runtime.id) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Verifies that a control message originates from an extension page (popup / background),
+   * NEVER from a content script tab or web page.
+   */
+  public isAuthorizedControlSender(sender?: MessageSenderInfo): boolean {
+    if (!sender) return true; // Internal in-memory dispatch
+    if (!this.isValidSender(sender)) return false;
+
+    // Reject if originated from a browser tab / content script
+    if (sender.tabId !== undefined) {
+      return false;
+    }
+
+    // Verify URL belongs to extension
+    if (sender.url) {
+      const extPrefix =
+        typeof chrome !== 'undefined' && chrome.runtime?.getURL
+          ? chrome.runtime.getURL('')
+          : 'chrome-extension://';
+      if (!sender.url.startsWith(extPrefix)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   public subscribe(handler: MessageHandler): () => void {
     this.inMemoryListeners.add(handler);
 
@@ -102,17 +157,38 @@ export class ChromeMessageBus implements EventBus {
     if (this.isChromeRuntimeAvailable() && !this.chromeListenerAttached) {
       this.chromeListenerAttached = true;
       chrome.runtime.onMessage.addListener(
-        (message: unknown, sender?: chrome.runtime.MessageSender) => {
+        (message: unknown, sender?: chrome.runtime.MessageSender, sendResponse?: (res?: unknown) => void) => {
+          const senderInfo: MessageSenderInfo | undefined = sender
+            ? {
+                tabId: sender.tab?.id,
+                frameId: sender.frameId,
+                id: sender.id,
+                url: sender.url,
+                origin: sender.origin,
+              }
+            : undefined;
+
+          // Reject untrusted sender
+          if (!this.isValidSender(senderInfo)) {
+            this.logger?.warn('ChromeMessageBus rejected message from untrusted sender id', {
+              senderId: sender?.id,
+            });
+            sendResponse?.({ success: false, error: 'UNTRUSTED_SENDER_ID' });
+            return;
+          }
+
           if (this.isValidMessage(message)) {
-            const senderInfo: MessageSenderInfo | undefined = sender
-              ? {
-                  tabId: sender.tab?.id,
-                  frameId: sender.frameId,
-                  id: sender.id,
-                  url: sender.url,
-                  origin: sender.origin,
-                }
-              : undefined;
+            // Reject control messages from unauthorized senders (e.g. content scripts)
+            if (this.isControlMessage(message.type) && !this.isAuthorizedControlSender(senderInfo)) {
+              this.logger?.warn('ChromeMessageBus rejected control message from unauthorized sender', {
+                type: message.type,
+                senderTabId: senderInfo?.tabId,
+                senderUrl: senderInfo?.url,
+              });
+              sendResponse?.({ success: false, error: 'UNAUTHORIZED_CONTROL_ORIGIN' });
+              return;
+            }
+
             for (const listener of this.inMemoryListeners) {
               try {
                 listener(message as ExtensionMessage, senderInfo);

@@ -1890,8 +1890,16 @@ messageBus.subscribe((message: ExtensionMessage) => {
 // Direct runtime listener fallback for tab messages
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener(
-    (message: unknown, _sender: unknown, sendResponse: (res?: unknown) => void) => {
+    (message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (res?: unknown) => void) => {
       if (!isExtensionContextValid()) return undefined;
+      if (sender && typeof chrome !== 'undefined' && chrome.runtime?.id) {
+        if (sender.id && sender.id !== chrome.runtime.id) {
+          logger.warn('Content script rejected message from untrusted sender id', {
+            senderId: sender.id,
+          });
+          return undefined;
+        }
+      }
       const msg = message as { type?: string } | undefined;
       if (msg?.type === 'REQUEST_DISCOVERY_SCAN') {
         logger.info('Content script processing REQUEST_DISCOVERY_SCAN');
