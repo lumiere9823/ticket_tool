@@ -454,7 +454,7 @@ function startZoomThrashDetector(): void {
           return Math.sqrt(a * a + b * b);
         }
       }
-      const scaleMatch = transform.match(/scale\(([^,\)]+)/);
+      const scaleMatch = transform.match(/scale\(([^,)]+)/);
       if (scaleMatch && scaleMatch[1]) {
         const s = parseFloat(scaleMatch[1]);
         if (!isNaN(s)) return s;

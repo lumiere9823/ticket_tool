@@ -331,7 +331,6 @@ async function executeScheduledArm(): Promise<void> {
     });
 
     // Clear scheduledArmAt so it does not remain pending
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { scheduledArmAt: _clearedSchedule, ...activeConfig } = config;
     await storage.saveConfiguration(activeConfig as typeof config);
 
@@ -816,10 +815,8 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
       // Remove scheduledArmAt from config by omitting the key entirely
       const configForCancel = await storage.getConfiguration();
       if (configForCancel) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { scheduledArmAt: _omitScheduledArmAt, ...configWithoutScheduledArm } = configForCancel;
         if (configWithoutScheduledArm.scopedPurchasePlan?.persistence) {
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const { startAt: _omitStartAt, ...persistenceWithoutStartAt } =
             configWithoutScheduledArm.scopedPurchasePlan.persistence;
           configWithoutScheduledArm.scopedPurchasePlan = {

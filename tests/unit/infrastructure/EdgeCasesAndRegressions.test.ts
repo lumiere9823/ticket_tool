@@ -25,6 +25,10 @@ import { ChromeMessageBus } from '../../../src/infrastructure/messaging/ChromeMe
 import { SeatmapApiResponse } from '../../../src/infrastructure/ticketbox/parsing/TicketboxSeatMapParser';
 import { BOOKING_JOURNEY_FIXTURES } from '../../fixtures/booking/bookingFixtures';
 
+type AdapterWithBridge = TicketboxJourneyAdapter & {
+  sendPageBridgeRequest: (action: string, payload?: unknown) => Promise<unknown>;
+};
+
 // ─── Shared Fixtures ──────────────────────────────────────────────────────────
 
 /** Minimal seatmap API response with VIP zone */
@@ -505,7 +509,7 @@ describe('Seatmap cache cleared after deselectSeat', () => {
     adapterPrivate['cachedSeatmapData'] = MOCK_SEATMAP_VIP;
 
     // Mock the page bridge to resolve instantly (no DOM/window postMessage in test)
-    vi.spyOn(adapter as any, 'sendPageBridgeRequest').mockResolvedValue({
+    vi.spyOn(adapter as unknown as AdapterWithBridge, 'sendPageBridgeRequest').mockResolvedValue({
       success: true,
     } as never);
 
@@ -522,7 +526,7 @@ describe('Seatmap cache cleared after deselectSeat', () => {
     const adapterPrivate = adapter as unknown as Record<string, unknown>;
 
     // Mock the page bridge to resolve instantly
-    vi.spyOn(adapter as any, 'sendPageBridgeRequest').mockResolvedValue({
+    vi.spyOn(adapter as unknown as AdapterWithBridge, 'sendPageBridgeRequest').mockResolvedValue({
       success: true,
     } as never);
 
@@ -1034,7 +1038,7 @@ describe('failedSeatmapShowingIds — TTL cache behavior', () => {
       failedSet.add('showing-xyz');
       expect(failedSet.size).toBe(2);
 
-      vi.spyOn(adapter as any, 'sendPageBridgeRequest').mockResolvedValue({
+      vi.spyOn(adapter as unknown as AdapterWithBridge, 'sendPageBridgeRequest').mockResolvedValue({
         success: true,
       } as never);
 

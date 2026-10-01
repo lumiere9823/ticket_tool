@@ -2462,7 +2462,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         const getClosestButton = (
           el: DOMElementLike | HTMLElement
         ): DOMElementLike | HTMLElement => {
-          let curr: any = el;
+          let curr: DOMElementLike | HTMLElement | null = el;
           while (curr) {
             const tag = (curr.tagName || '').toUpperCase();
             const role =
@@ -2470,11 +2470,11 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             if (tag === 'BUTTON' || tag === 'A' || role === 'button') {
               return curr;
             }
-            if (typeof curr.closest === 'function') {
-              const found = curr.closest('button, a, [role="button"]');
-              if (found) return found;
+            if ('closest' in curr && typeof (curr as HTMLElement).closest === 'function') {
+              const found = (curr as HTMLElement).closest('button, a, [role="button"]');
+              if (found instanceof HTMLElement) return found;
             }
-            curr = curr.parentElement;
+            curr = (curr.parentElement as DOMElementLike | HTMLElement | null) ?? null;
           }
           return el;
         };
