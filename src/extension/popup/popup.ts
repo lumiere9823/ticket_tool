@@ -21,6 +21,7 @@ import {
 } from '../../domain/entities/ScopedPurchasePlan';
 import { ScopedPurchasePlanValidator } from '../../domain/policies/ScopedPurchasePlanValidator';
 import { PersistentExecutionState } from '../../application/ports/StorageRepository';
+import { buildUserProfileFromInputs } from './profile-builder';
 
 // ─── Infrastructure ──────────────────────────────────────────────────────────
 
@@ -163,6 +164,9 @@ const basicProfilePhone = document.getElementById('basic-profile-phone') as HTML
 const basicProfileEmail = document.getElementById('basic-profile-email') as HTMLInputElement | null;
 const basicProfileIdCard = document.getElementById(
   'basic-profile-id-card'
+) as HTMLInputElement | null;
+const basicProfileAgreeTerms = document.getElementById(
+  'basic-profile-agree-terms'
 ) as HTMLInputElement | null;
 const btnBasicArm = document.getElementById('btn-basic-arm') as HTMLButtonElement | null;
 const btnBasicStop = document.getElementById('btn-basic-stop') as HTMLButtonElement | null;
@@ -1045,6 +1049,9 @@ function syncProfileFields(toMode: 'basic' | 'hardcore'): void {
     if (basicProfileIdCard && profileIdCardInput && profileIdCardInput.value) {
       basicProfileIdCard.value = profileIdCardInput.value;
     }
+    if (basicProfileAgreeTerms && profileAgreeTermsCheckbox) {
+      basicProfileAgreeTerms.checked = profileAgreeTermsCheckbox.checked;
+    }
   } else {
     if (basicProfileName && profileNameInput && basicProfileName.value) {
       profileNameInput.value = basicProfileName.value;
@@ -1057,6 +1064,9 @@ function syncProfileFields(toMode: 'basic' | 'hardcore'): void {
     }
     if (basicProfileIdCard && profileIdCardInput && basicProfileIdCard.value) {
       profileIdCardInput.value = basicProfileIdCard.value;
+    }
+    if (basicProfileAgreeTerms && profileAgreeTermsCheckbox) {
+      profileAgreeTermsCheckbox.checked = basicProfileAgreeTerms.checked;
     }
   }
 }
@@ -1312,13 +1322,22 @@ async function handleBasicArm(): Promise<void> {
   syncProfileFields('hardcore');
   await savePlan();
 
-  const userProfile = {
-    fullName: basicProfileName?.value.trim() || profileNameInput.value.trim(),
-    phone: basicProfilePhone?.value.trim() || profilePhoneInput.value.trim(),
-    email: basicProfileEmail?.value.trim() || profileEmailInput.value.trim(),
-    idCard: basicProfileIdCard?.value.trim() || profileIdCardInput?.value.trim() || undefined,
-    agreeToTerms: true,
-  };
+  const userProfile = buildUserProfileFromInputs(
+    {
+      nameInput: basicProfileName,
+      phoneInput: basicProfilePhone,
+      emailInput: basicProfileEmail,
+      idCardInput: basicProfileIdCard,
+      agreeTermsCheckbox: basicProfileAgreeTerms,
+    },
+    {
+      nameInput: profileNameInput,
+      phoneInput: profilePhoneInput,
+      emailInput: profileEmailInput,
+      idCardInput: profileIdCardInput,
+      agreeTermsCheckbox: profileAgreeTermsCheckbox,
+    }
+  );
 
   if (isScheduled) {
     addLog(
@@ -1926,6 +1945,7 @@ function resetPopupToBlank(): void {
   if (basicProfilePhone) basicProfilePhone.value = '';
   if (basicProfileEmail) basicProfileEmail.value = '';
   if (basicProfileIdCard) basicProfileIdCard.value = '';
+  if (basicProfileAgreeTerms) basicProfileAgreeTerms.checked = false;
 
   // Scoped plan & Basic quantity
   if (scopedQuantityInput) scopedQuantityInput.value = '1';
@@ -2004,6 +2024,9 @@ async function loadInitialData(): Promise<void> {
       if (basicProfilePhone) basicProfilePhone.value = config.userProfile.phone ?? '';
       if (basicProfileEmail) basicProfileEmail.value = config.userProfile.email ?? '';
       if (basicProfileIdCard) basicProfileIdCard.value = config.userProfile.idCard ?? '';
+      if (basicProfileAgreeTerms) {
+        basicProfileAgreeTerms.checked = config.userProfile.agreeToTerms ?? false;
+      }
     }
 
     // Restore purchase plan
