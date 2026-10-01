@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ActionGuard } from '../../../src/domain/policies/ActionGuard';
+import { ActionGuard, PurchaseActionType } from '../../../src/domain/policies/ActionGuard';
 import { PurchaseState } from '../../../src/domain/states/PurchaseState';
 
 describe('ActionGuard Policy Tests', () => {
@@ -147,5 +147,116 @@ describe('ActionGuard Policy Tests', () => {
       action: 'USER_ACTION',
     });
     expect(userActionEval.allowed).toBe(true);
+  });
+
+  describe('P2-5: Per-state Action Allowlist Hardening', () => {
+    it('CONFIRMED state should block ALL actions including SELECT_SEATS, PROCEED, FILL_FORM', () => {
+      const actionsToTest: PurchaseActionType[] = [
+        'SELECT_SEATS',
+        'PROCEED',
+        'FILL_FORM',
+        'SELECT',
+        'RESERVE',
+        'PAYMENT',
+        'USER_ACTION',
+      ];
+
+      for (const action of actionsToTest) {
+        const evalResult = ActionGuard.canExecuteAction({
+          currentState: PurchaseState.CONFIRMED,
+          action,
+        });
+        expect(evalResult.allowed).toBe(false);
+        expect(evalResult.reason).toContain('CONFIRMED');
+      }
+    });
+
+    it('FAILED state should ONLY allow RESET or DISMISS', () => {
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.FAILED,
+          action: 'RESET',
+        }).allowed
+      ).toBe(true);
+
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.FAILED,
+          action: 'DISMISS',
+        }).allowed
+      ).toBe(true);
+
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.FAILED,
+          action: 'SELECT_SEATS',
+        }).allowed
+      ).toBe(false);
+
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.FAILED,
+          action: 'PROCEED',
+        }).allowed
+      ).toBe(false);
+
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.FAILED,
+          action: 'FILL_FORM',
+        }).allowed
+      ).toBe(false);
+    });
+
+    it('TICKET_SELECTED should allow PROCEED, SELECT_AREA, SELECT_SEATS, DESELECT but block SELECT_TICKET, RESERVE, PAYMENT', () => {
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.TICKET_SELECTED,
+          action: 'PROCEED',
+        }).allowed
+      ).toBe(true);
+
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.TICKET_SELECTED,
+          action: 'SELECT_AREA',
+        }).allowed
+      ).toBe(true);
+
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.TICKET_SELECTED,
+          action: 'SELECT_SEATS',
+        }).allowed
+      ).toBe(true);
+
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.TICKET_SELECTED,
+          action: 'DESELECT',
+        }).allowed
+      ).toBe(true);
+
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.TICKET_SELECTED,
+          action: 'SELECT_TICKET',
+        }).allowed
+      ).toBe(false);
+
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.TICKET_SELECTED,
+          action: 'RESERVE',
+        }).allowed
+      ).toBe(false);
+
+      expect(
+        ActionGuard.canExecuteAction({
+          currentState: PurchaseState.TICKET_SELECTED,
+          action: 'PAYMENT',
+        }).allowed
+      ).toBe(false);
+    });
   });
 });

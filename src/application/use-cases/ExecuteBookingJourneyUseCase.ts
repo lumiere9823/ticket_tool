@@ -14,6 +14,7 @@ import {
 import { PriorityCategoryEngine } from '../../domain/policies/PriorityCategoryEngine';
 import { AdjacentSeatStrategy } from '../../domain/policies/AdjacentSeatStrategy';
 import { BookingSummaryVerifier } from '../../domain/policies/BookingSummaryVerifier';
+import { ActionGuard } from '../../domain/policies/ActionGuard';
 import { BookingError } from '../../domain/errors/BookingErrors';
 
 export interface JourneyExecutionResult {
@@ -488,6 +489,19 @@ export class ExecuteBookingJourneyUseCase {
         if (blocked) return blocked;
 
         if (this.adapter.fillAttendeeForm && preferences.userProfile) {
+          const formGuard = ActionGuard.canExecuteAction({
+            currentState: this.stateMachine.state,
+            action: 'FILL_FORM',
+          });
+          if (!formGuard.allowed) {
+            throw new BookingError({
+              code: 'REQUIRED_FIELD_MISSING',
+              message: formGuard.reason ?? 'ActionGuard rejected filling attendee form',
+              state: this.stateMachine.state,
+              recoverable: false,
+            });
+          }
+
           const fillResult = await this.adapter.fillAttendeeForm(preferences.userProfile);
 
           if (fillResult.isConsentBlocked) {
@@ -530,6 +544,19 @@ export class ExecuteBookingJourneyUseCase {
 
       // Submit question form by clicking "Tiếp tục"
       if (this.adapter.proceedToNextStep) {
+        const proceedGuard = ActionGuard.canExecuteAction({
+          currentState: this.stateMachine.state,
+          action: 'PROCEED',
+        });
+        if (!proceedGuard.allowed) {
+          throw new BookingError({
+            code: 'PROCEED_FAILED',
+            message: proceedGuard.reason ?? 'ActionGuard rejected proceeding to next step',
+            state: this.stateMachine.state,
+            recoverable: false,
+          });
+        }
+
         this.logger.info('Submitting attendee form / proceeding to payment step');
         await this.adapter.proceedToNextStep();
         await new Promise((r) => setTimeout(r, 100));
@@ -717,6 +744,19 @@ export class ExecuteBookingJourneyUseCase {
     });
 
     // 4. TICKET SELECTION & VERIFICATION (Section 7)
+    const ticketGuard = ActionGuard.canExecuteAction({
+      currentState: this.stateMachine.state,
+      action: 'SELECT_TICKET',
+    });
+    if (!ticketGuard.allowed) {
+      throw new BookingError({
+        code: 'TICKET_SELECTION_FAILED',
+        message: ticketGuard.reason ?? 'ActionGuard rejected ticket selection',
+        state: this.stateMachine.state,
+        recoverable: false,
+      });
+    }
+
     const tSelectionStart = Date.now();
     const ticketId = chosenTicket.id ?? chosenTicket.name;
     const targetShowingId = chosenTicket.showingId ?? preferences.preferredShowingId ?? null;
@@ -909,6 +949,19 @@ export class ExecuteBookingJourneyUseCase {
           });
 
           if (this.adapter.selectArea) {
+            const areaGuard = ActionGuard.canExecuteAction({
+              currentState: this.stateMachine.state,
+              action: 'SELECT_AREA',
+            });
+            if (!areaGuard.allowed) {
+              throw new BookingError({
+                code: 'AREA_SELECTION_FAILED',
+                message: areaGuard.reason ?? 'ActionGuard rejected area selection',
+                state: this.stateMachine.state,
+                recoverable: false,
+              });
+            }
+
             await this.adapter.selectArea(
               targetArea.id,
               targetArea.name,
@@ -1104,6 +1157,19 @@ export class ExecuteBookingJourneyUseCase {
           const seatLabels = seatDecision.selectedSeats.map((s) => s.label);
 
           if (this.adapter.selectSpecificSeats) {
+            const seatsGuard = ActionGuard.canExecuteAction({
+              currentState: this.stateMachine.state,
+              action: 'SELECT_SEATS',
+            });
+            if (!seatsGuard.allowed) {
+              throw new BookingError({
+                code: 'SEAT_SELECTION_FAILED',
+                message: seatsGuard.reason ?? 'ActionGuard rejected seat selection',
+                state: this.stateMachine.state,
+                recoverable: false,
+              });
+            }
+
             const seatsOk = await this.adapter.selectSpecificSeats(seatIds);
             if (!seatsOk) {
               throw new BookingError({
@@ -1137,6 +1203,19 @@ export class ExecuteBookingJourneyUseCase {
 
     // Advance to next step if applicable (e.g. click "Tiếp tục" / "Đặt vé")
     if (this.adapter.proceedToNextStep) {
+      const proceedGuard = ActionGuard.canExecuteAction({
+        currentState: this.stateMachine.state,
+        action: 'PROCEED',
+      });
+      if (!proceedGuard.allowed) {
+        throw new BookingError({
+          code: 'PROCEED_FAILED',
+          message: proceedGuard.reason ?? 'ActionGuard rejected proceeding to next step',
+          state: this.stateMachine.state,
+          recoverable: false,
+        });
+      }
+
       const proceedOk = await this.adapter.proceedToNextStep();
       if (proceedOk) {
         // Fast-poll for error modal (e.g. -1242 seat collision) that appears immediately after clicking proceed
@@ -1243,6 +1322,19 @@ export class ExecuteBookingJourneyUseCase {
       if (blocked) return blocked;
 
       if (this.adapter.fillAttendeeForm && preferences.userProfile) {
+        const formGuard = ActionGuard.canExecuteAction({
+          currentState: this.stateMachine.state,
+          action: 'FILL_FORM',
+        });
+        if (!formGuard.allowed) {
+          throw new BookingError({
+            code: 'REQUIRED_FIELD_MISSING',
+            message: formGuard.reason ?? 'ActionGuard rejected filling attendee form',
+            state: this.stateMachine.state,
+            recoverable: false,
+          });
+        }
+
         const fillResult = await this.adapter.fillAttendeeForm(preferences.userProfile);
 
         if (fillResult.isConsentBlocked) {
