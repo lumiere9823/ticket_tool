@@ -26,8 +26,6 @@ export * from './entities/EventCatalog';
 export * from './policies/SelectionStrategy';
 export * from './policies/RetryPolicy';
 export * from './policies/ErrorClassifier';
-export * from './policies/ExecutionPolicy';
-export * from './policies/GlobalStopPolicy';
 export * from './policies/ActionGuard';
 export * from './policies/DiscoverySanitizer';
 export * from './policies/AvailabilityEvaluator';
