@@ -69,6 +69,10 @@ interface BridgeRequestPayload {
   areaId?: string;
   areaName?: string;
   ticketTypeId?: string;
+  quantity?: number;
+  ticketName?: string;
+  selector?: string;
+  text?: string;
   coords?: { x?: number; y?: number; width?: number; height?: number };
   seats?: BridgeSeatPayload[];
 }
@@ -214,6 +218,266 @@ function isSectionViewActive(): boolean {
   return false;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Triggers a click on a DOM element in the MAIN execution world.
+ * Directly invokes React synthetic event handlers (__reactProps$* / __reactEventHandlers$*)
+ * if present to ensure React component state updates immediately, followed by native
+ * MouseEvents and el.click().
+ */
+function triggerClick(el: HTMLElement): void {
+  // 1. React Fiber props invocation (Main World direct access)
+  try {
+    const reactKey = Object.keys(el).find(
+      (k) => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$')
+    );
+    if (reactKey) {
+      const props = (el as unknown as Record<string, unknown>)[reactKey] as Record<string, unknown> | undefined;
+      if (typeof props?.onClick === 'function') {
+        props.onClick({
+          type: 'click',
+          target: el,
+          currentTarget: el,
+          preventDefault: () => {},
+          stopPropagation: () => {},
+          persist: () => {},
+          bubbles: true,
+        });
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2. Full native mouse/pointer sequence
+  try {
+    const opts: MouseEventInit = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+  } catch {
+    // ignore
+  }
+
+  // 3. Fallback standard .click()
+  try {
+    el.click();
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Finds the currently visible area modal element on page.
+ */
+function findAreaModal(): HTMLElement | null {
+  if (typeof document === 'undefined') return null;
+  const modals = document.querySelectorAll(
+    '.ant-modal, [role="dialog"], [class*="modal"]'
+  );
+  for (const m of Array.from(modals)) {
+    const el = m as HTMLElement;
+    if (el.offsetParent !== null || window.getComputedStyle(el).display !== 'none') {
+      const text = el.innerText || el.textContent || '';
+      if (
+        text.includes('Khu') ||
+        text.includes('Số lượng') ||
+        text.includes('Tiếp tục') ||
+        text.includes('Chọn vé') ||
+        text.includes('Tối đa')
+      ) {
+        return el;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Checks whether an Area Selection Modal is visible on screen.
+ */
+function hasAreaModal(): boolean {
+  return findAreaModal() !== null;
+}
+
+/**
+ * Reads the current quantity shown inside a modal.
+ */
+function readModalCurrentQuantity(modal: HTMLElement): number {
+  const input = modal.querySelector('input') as HTMLInputElement | null;
+  if (input) {
+    if (input.value && input.value.trim() !== '') {
+      const p = parseInt(input.value, 10);
+      if (!isNaN(p)) return p;
+    }
+    const ariaVal = input.getAttribute('aria-valuenow');
+    if (ariaVal) {
+      const p = parseInt(ariaVal, 10);
+      if (!isNaN(p)) return p;
+    }
+  }
+  const numbers = Array.from(modal.querySelectorAll('span, div, p, strong'))
+    .map((el) => ({ el, text: (el.textContent || '').trim() }))
+    .filter((item) => /^\d+$/.test(item.text) && item.el.children.length === 0);
+  if (numbers.length > 0) {
+    const p = parseInt(numbers[0]!.text, 10);
+    if (!isNaN(p)) return p;
+  }
+  return 0;
+}
+
+/**
+ * Finds stepper button (plus or minus) inside a modal.
+ */
+function findModalStepperButton(modal: HTMLElement, type: 'plus' | 'minus'): HTMLElement | null {
+  const buttons = Array.from(modal.querySelectorAll('button, [role="button"], span, div'));
+  for (const btn of buttons) {
+    const text = (btn.textContent || '').trim();
+    const aria = btn.getAttribute('aria-label') || '';
+    const cls = btn.className && typeof btn.className === 'string' ? btn.className.toLowerCase() : '';
+    if (type === 'plus') {
+      if (
+        text === '+' ||
+        aria.toLowerCase().includes('plus') ||
+        aria.toLowerCase().includes('increase') ||
+        cls.includes('plus') ||
+        cls.includes('increase') ||
+        cls.includes('up')
+      ) {
+        return btn as HTMLElement;
+      }
+    } else {
+      if (
+        text === '-' ||
+        text === '–' ||
+        aria.toLowerCase().includes('minus') ||
+        aria.toLowerCase().includes('decrease') ||
+        cls.includes('minus') ||
+        cls.includes('decrease') ||
+        cls.includes('down')
+      ) {
+        return btn as HTMLElement;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Finds continue button inside a modal.
+ */
+function findModalContinueButton(modal: HTMLElement): HTMLElement | null {
+  const candidates = Array.from(
+    modal.querySelectorAll('button, [role="button"], a.ant-btn')
+  );
+  for (const c of candidates) {
+    const text = (c.textContent || '').toLowerCase().trim();
+    if (
+      (text.includes('tiếp tục') || text.includes('xác nhận') || text.includes('continue') || text.includes('đồng ý')) &&
+      !c.hasAttribute('disabled') &&
+      !c.classList.contains('ant-btn-disabled') &&
+      !c.classList.contains('disabled')
+    ) {
+      return c as HTMLElement;
+    }
+  }
+  return null;
+}
+
+/**
+ * Handles CONFIRM_AREA_MODAL from content script in MAIN world.
+ * Adjusts quantity stepper and clicks the modal's continue button synchronously.
+ */
+async function handleConfirmAreaModal(
+  payload?: BridgeRequestPayload
+): Promise<{ success: boolean; message?: string }> {
+  const targetQty = payload?.quantity ?? 1;
+  const modal = findAreaModal();
+  if (!modal) {
+    return { success: false, message: 'Area modal not found in DOM' };
+  }
+
+  const plusBtn = findModalStepperButton(modal, 'plus');
+  const minusBtn = findModalStepperButton(modal, 'minus');
+  let currentQty = readModalCurrentQuantity(modal);
+
+  const maxSteps = Math.min(10, Math.abs(targetQty - currentQty) || 1);
+  for (let i = 0; i < maxSteps && currentQty !== targetQty; i++) {
+    if (currentQty < targetQty && plusBtn) {
+      triggerClick(plusBtn);
+      await sleep(50);
+    } else if (currentQty > targetQty && minusBtn) {
+      triggerClick(minusBtn);
+      await sleep(50);
+    }
+    currentQty = readModalCurrentQuantity(modal);
+  }
+
+  // Also update input value if present
+  const input = modal.querySelector('input') as HTMLInputElement | null;
+  if (input) {
+    try {
+      const proto = window.HTMLInputElement?.prototype;
+      const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+      if (descriptor && descriptor.set) {
+        descriptor.set.call(input, String(targetQty));
+      } else {
+        input.value = String(targetQty);
+      }
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch {
+      // ignore
+    }
+  }
+
+  // Allow React state setter to complete and enable the continue button
+  await sleep(80);
+
+  // Find and click the continue button in modal
+  const continueBtn = findModalContinueButton(modal);
+  if (continueBtn) {
+    triggerClick(continueBtn);
+    return { success: true, message: 'Modal stepper adjusted and continue clicked' };
+  }
+
+  return { success: true, message: `Modal quantity set to ${currentQty}` };
+}
+
+/**
+ * Handles CLICK_ELEMENT from content script in MAIN world.
+ */
+function handleClickElement(
+  payload?: BridgeRequestPayload
+): { success: boolean; message?: string } {
+  if (typeof document === 'undefined') return { success: false, message: 'No document' };
+  let el: HTMLElement | null = null;
+  if (payload?.selector) {
+    el = document.querySelector(payload.selector) as HTMLElement | null;
+  }
+  if (!el && payload?.text) {
+    const search = payload.text.toLowerCase().trim();
+    const all = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'));
+    for (const item of all) {
+      const t = (item.textContent || '').toLowerCase().trim();
+      if (t === search || t.includes(search)) {
+        el = item as HTMLElement;
+        break;
+      }
+    }
+  }
+  if (el) {
+    triggerClick(el);
+    return { success: true };
+  }
+  return { success: false, message: 'Element not found' };
+}
+
 /**
  * Handles SELECT_AREA in Konva.
  */
@@ -229,9 +493,39 @@ async function handleSelectArea(
     return { success: false, transitioned: false, message: 'Missing areaId, areaName, or ticketTypeId' };
   }
 
-  // If already in section view, view transition is already fulfilled
-  if (isSectionViewActive()) {
-    return { success: true, transitioned: true, message: 'Already in section view' };
+  // If already in section view or area modal is already open, view transition is already fulfilled
+  if (isSectionViewActive() || hasAreaModal()) {
+    return { success: true, transitioned: true, message: 'Already in section view or modal open' };
+  }
+
+  const safeName = areaName ? areaName.toLowerCase().trim() : '';
+  const safeNameClean = safeName.replace(/[\s-]+/g, '_');
+  const safeNameSpaced = safeName.replace(/[\s_-]+/g, ' ');
+  const safeNameCompact = safeName.replace(/[\s_-]+/g, '');
+
+  // Check if an area card can be clicked directly in DOM (e.g. right sidebar or ticket legend)
+  if (typeof document !== 'undefined' && safeName) {
+    const tierCandidates = Array.from(
+      document.querySelectorAll(
+        '.legend-item, [class*="legend-item"], [class*="tier-item"], [class*="ticket-item"], [class*="section-item"], .ticket-legend > div, aside div[role="button"], .sidebar div[role="button"]'
+      )
+    );
+    for (const tc of tierCandidates) {
+      const txt = (tc.textContent || '').toLowerCase();
+      const cleanTxt = txt.replace(/[\s_-]+/g, ' ');
+      const compactTxt = txt.replace(/[\s_-]+/g, '');
+      const matchesName =
+        txt.includes(safeName) ||
+        cleanTxt.includes(safeNameSpaced) ||
+        compactTxt.includes(safeNameCompact);
+      if (matchesName) {
+        triggerClick(tc as HTMLElement);
+        await sleep(60);
+        if (isSectionViewActive() || hasAreaModal()) {
+          return { success: true, transitioned: true, message: 'Clicked DOM area item directly' };
+        }
+      }
+    }
   }
 
   const stage = getActiveStage();
@@ -270,19 +564,22 @@ async function handleSelectArea(
   }
 
   // 3. Match by areaName (normalized with underscores and spaces)
-  if (!targetGroup && areaName) {
-    const safeName = areaName.toLowerCase().trim();
-    const safeNameClean = safeName.replace(/[\s-]+/g, '_');
+  if (!targetGroup && safeName) {
     for (const g of groups) {
       const gName = String(g.attrs?.name ?? '').toLowerCase();
       const gId = String(g.attrs?.id ?? '').toLowerCase();
       if (
         gName === safeName ||
         gName === safeNameClean ||
+        gName === safeNameSpaced ||
+        gName === safeNameCompact ||
         gId === safeName ||
         gId === safeNameClean ||
+        gId === safeNameSpaced ||
+        gId === safeNameCompact ||
         (safeName.length > 3 && (gName.includes(safeName) || safeName.includes(gName))) ||
-        (safeNameClean.length > 3 && (gName.includes(safeNameClean) || safeNameClean.includes(gName)))
+        (safeNameClean.length > 3 && (gName.includes(safeNameClean) || safeNameClean.includes(gName))) ||
+        (safeNameSpaced.length > 3 && (gName.includes(safeNameSpaced) || safeNameSpaced.includes(gName)))
       ) {
         targetGroup = g;
         break;
@@ -292,7 +589,20 @@ async function handleSelectArea(
         const children = g.getChildren();
         const hasMatchingText = children.some((c) => {
           const txt = typeof c.text === 'function' ? c.text().toLowerCase() : String(c.attrs?.text ?? '').toLowerCase();
-          return txt && (txt === safeName || safeName.includes(txt) || txt.includes(safeName));
+          const cleanTxt = txt.replace(/[\s_-]+/g, ' ');
+          const compactTxt = txt.replace(/[\s_-]+/g, '');
+          return (
+            txt &&
+            (txt === safeName ||
+              txt === safeNameClean ||
+              txt === safeNameSpaced ||
+              cleanTxt === safeNameSpaced ||
+              compactTxt === safeNameCompact ||
+              safeName.includes(txt) ||
+              txt.includes(safeName) ||
+              cleanTxt.includes(safeNameSpaced) ||
+              safeNameSpaced.includes(cleanTxt))
+          );
         });
         if (hasMatchingText) {
           targetGroup = g;
@@ -374,16 +684,19 @@ async function handleSelectArea(
     }
   }
 
-  // Poll for view transition (up to 800ms)
-  const maxWait = 8;
+  // Check view transition immediately or poll (up to 300ms)
+  if (isSectionViewActive() || hasAreaModal()) {
+    return { success: true, transitioned: true };
+  }
+  const maxWait = 6;
   for (let i = 0; i < maxWait; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    if (isSectionViewActive()) {
+    await sleep(50);
+    if (isSectionViewActive() || hasAreaModal()) {
       return { success: true, transitioned: true };
     }
   }
 
-  return { success: true, transitioned: isSectionViewActive() };
+  return { success: true, transitioned: isSectionViewActive() || hasAreaModal() };
 }
 
 const SIGNATURE_POLL_MS = 50;
@@ -401,10 +714,6 @@ interface SeatAttemptReport {
   note?: string | undefined;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /** Visual signature of a seat node: legend colours (white / green / red) live in fill + stroke. */
 function nodeSignature(node: KonvaNodeLike): string {
   const fill = typeof node.fill === 'function' ? String(node.fill() ?? '') : '';
@@ -412,14 +721,20 @@ function nodeSignature(node: KonvaNodeLike): string {
   return `${fill}|${stroke}`;
 }
 
-/** Waits until the node's visual state differs from `before` (React/Redux re-render is async). */
-async function waitForSignatureChange(node: KonvaNodeLike, before: string): Promise<boolean> {
+/** Waits until the node's visual state differs from `before` (React/Redux re-render is async) or DOM confirms selection. */
+async function waitForSignatureOrDomChange(
+  node: KonvaNodeLike,
+  before: string,
+  seatLabel?: string
+): Promise<boolean> {
   for (let i = 0; i < SIGNATURE_POLL_MAX; i++) {
     await sleep(SIGNATURE_POLL_MS);
     if (nodeSignature(node) !== before) return true;
+    if (hasDomSelectionIndicator(seatLabel)) return true;
   }
   return false;
 }
+
 
 /** Checks if the DOM footer, checkout bar, or summary reflects seat selection. */
 function hasDomSelectionIndicator(label?: string): boolean {
@@ -771,7 +1086,7 @@ async function clickSeatNode(
     } catch {
       continue;
     }
-    if (await waitForSignatureChange(node, before)) {
+    if (await waitForSignatureOrDomChange(node, before, seatLabel)) {
       return { changed: true, method: attempt.method, before, after: nodeSignature(node) };
     }
   }
@@ -990,6 +1305,16 @@ async function dispatchBridgeRequest(
       return { success: result.success, data: result };
     }
 
+    case 'CONFIRM_AREA_MODAL': {
+      const result = await handleConfirmAreaModal(payload);
+      return { success: result.success, data: result };
+    }
+
+    case 'CLICK_ELEMENT': {
+      const result = handleClickElement(payload);
+      return { success: result.success, data: result };
+    }
+
     default:
       return { success: false, error: `Unknown bridge action: ${type}` };
   }
@@ -1044,6 +1369,84 @@ function initializePageBridge(): void {
       })
     );
   });
+
+  // 3. Monitor Konva stage scale for anti-bot zoom thrash detection
+  startStageScaleMonitor();
+
+  // 4. Intercept history pushState/replaceState for instantaneous SPA route detection
+  installRouteInterceptors();
+}
+
+/**
+ * Monitors active Konva Stage scale changes and broadcasts ZOOM_SAMPLE messages
+ * to the content script for anti-bot zoom thrash detection.
+ */
+function startStageScaleMonitor(): void {
+  if (typeof window === 'undefined') return;
+  let lastScale = 1;
+  setInterval(() => {
+    try {
+      const stage = getActiveStage();
+      if (stage) {
+        const sx = typeof stage.scaleX === 'function' ? stage.scaleX() : 1;
+        const sy = typeof stage.scaleY === 'function' ? stage.scaleY() : 1;
+        const s = (sx + sy) / 2;
+        if (Math.abs(s - lastScale) > 0.02) {
+          lastScale = s;
+          window.postMessage(
+            {
+              source: 'TICKETBOX_ASSISTANT_PAGE',
+              type: 'ZOOM_SAMPLE',
+              scale: s,
+            },
+            '*'
+          );
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, 100);
+}
+
+/**
+ * Intercepts history.pushState and history.replaceState to immediately notify the content
+ * script of SPA route transitions (e.g. Next.js router transitions from /select-ticket to /question-form).
+ */
+function installRouteInterceptors(): void {
+  if (typeof window === 'undefined' || !window.history) return;
+  try {
+    const notifyRouteChange = () => {
+      window.postMessage(
+        {
+          source: 'TICKETBOX_ASSISTANT_PAGE',
+          type: 'ROUTE_CHANGE',
+          url: window.location.href,
+        },
+        '*'
+      );
+    };
+
+    const origPushState = window.history.pushState;
+    if (typeof origPushState === 'function') {
+      window.history.pushState = function (...args) {
+        const ret = origPushState.apply(this, args);
+        notifyRouteChange();
+        return ret;
+      };
+    }
+
+    const origReplaceState = window.history.replaceState;
+    if (typeof origReplaceState === 'function') {
+      window.history.replaceState = function (...args) {
+        const ret = origReplaceState.apply(this, args);
+        notifyRouteChange();
+        return ret;
+      };
+    }
+  } catch {
+    // ignore
+  }
 }
 
 initializePageBridge();

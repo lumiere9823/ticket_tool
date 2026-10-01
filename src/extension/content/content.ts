@@ -65,6 +65,31 @@ let scheduledArmTargetMs: number | null = null;
 let scheduledArmTimer: number | null = null;
 let watchdogInterval: number | null = null;
 
+// ── Anti-bot zoom-thrash detection ───────────────────────────────────────────
+// Ticketbox occasionally applies rapid zoom-in / zoom-out CSS transforms on the
+// seatmap canvas as a bot-detection technique that causes the canvas to become
+// unresponsive. We detect ≥ 3 direction-reversals within a 3-second window and
+// reload the page to recover a clean state.
+const ZOOM_REVERSAL_WINDOW_MS = 4000;
+const ZOOM_REVERSAL_THRESHOLD = 2;
+/** Timestamps (ms) of each observed DPR / scale direction-reversal. */
+const zoomReversalTimestamps: number[] = [];
+/** Last observed devicePixelRatio — used to detect direction changes. */
+let lastDpr: number = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
+/** Previous direction: +1 = zooming-in, -1 = zooming-out, 0 = none. */
+let lastZoomDirection: -1 | 0 | 1 = 0;
+/** Epoch ms when the last zoom-triggered reload was fired (cooldown guard). */
+let lastZoomReloadMs = 0;
+const ZOOM_RELOAD_COOLDOWN_MS = 15_000;
+
+// ── 404 / stray-page recovery ─────────────────────────────────────────────────
+// When the browser lands on a 404, home page, or any page outside the
+// configured event URL while monitoring is active, we navigate back to the
+// original targetEventUrl and retry automatically.
+/** Epoch ms of the last 404-recovery navigation (cooldown guard). */
+let last404RecoveryMs = 0;
+const RECOVERY_404_COOLDOWN_MS = 8_000;
+
 function resetStateMachineToMonitoring(reason = 'Re-arm reset'): void {
   try {
     const s = stateMachine.state;
@@ -147,7 +172,353 @@ function ensurePageBridgeInjected(): void {
   }
 }
 
+// ── 404 / stray-page recovery function ────────────────────────────────────────
+/**
+ * Checks whether the current page is a 404 or an unrelated page (e.g. home)
+ * while monitoring is active, and if so navigates back to the configured
+ * targetEventUrl after a cooldown guard.
+ *
+ * Detection signals (ANY one is enough):
+ *  • URL contains "/404" or "?error=404"
+ *  • document.title contains "404" or "not found" or "page not found"
+ *  • HTTP status meta tag <meta name="prerender-status-code" content="404">
+ *  • Current URL is ticketbox.vn but does NOT start with any path of the
+ *    configured targetEventUrl AND is NOT a booking sub-page
+ *    (i.e. landed on home / category / completely different event)
+ *
+ * Returns true when a recovery navigation was triggered.
+ */
+async function detectAndRecoverFromStrayPage(): Promise<boolean> {
+  if (!isMonitoringActive || userExplicitlyStopped) return false;
+  if (typeof window === 'undefined' || typeof document === 'undefined') return false;
+
+  // Cooldown guard
+  if (Date.now() - last404RecoveryMs < RECOVERY_404_COOLDOWN_MS) return false;
+
+  const config = await storage.getConfiguration().catch(() => null);
+  if (!config?.targetEventUrl) return false;
+
+  const targetUrl = config.targetEventUrl.trim();
+  const currentUrl = window.location.href;
+
+  // ── Signal 1: explicit 404 in URL
+  const urlIs404 =
+    currentUrl.includes('/404') ||
+    currentUrl.includes('?error=404') ||
+    currentUrl.includes('error=not_found');
+
+  // ── Signal 2: page title indicates 404 / not found
+  const titleLower = document.title.toLowerCase();
+  const titleIs404 =
+    titleLower.includes('404') ||
+    titleLower.includes('not found') ||
+    titleLower.includes('page not found') ||
+    titleLower.includes('không tìm thấy');
+
+  // ── Signal 3: prerender meta status code
+  const prerenderMeta = document.querySelector<HTMLMetaElement>(
+    'meta[name="prerender-status-code"]'
+  );
+  const metaIs404 = prerenderMeta?.content === '404';
+
+  // ── Signal 4: landed on Ticketbox home / unrelated page
+  //   The targetEventUrl looks like https://ticketbox.vn/events/26590/...
+  //   Extract the event path prefix (up to the event slug) and check if
+  //   the current URL starts with it. If we're on ticketbox.vn but NOT on
+  //   any booking sub-path AND NOT on the event path → stray page.
+  let isStrayTicketboxPage = false;
+  try {
+    const targetParsed = new URL(targetUrl);
+    const currentParsed = new URL(currentUrl);
+    const onTicketbox = currentParsed.hostname.endsWith('ticketbox.vn');
+    const onTargetEvent = currentParsed.pathname.startsWith(targetParsed.pathname.split('/').slice(0, 3).join('/'));
+    const onBookingPath =
+      currentParsed.pathname.includes('/bookings/') ||
+      currentParsed.pathname.includes('/select-ticket') ||
+      currentParsed.pathname.includes('/question-form') ||
+      currentParsed.pathname.includes('/payment') ||
+      currentParsed.pathname.includes('/checkout');
+
+    // Home page: hostname matches but path is "/" or empty
+    const onHome =
+      onTicketbox &&
+      (currentParsed.pathname === '/' ||
+        currentParsed.pathname === '' ||
+        currentParsed.pathname === '/home');
+
+    if (onTicketbox && !onTargetEvent && !onBookingPath) {
+      isStrayTicketboxPage = true;
+    }
+    // Home is always stray regardless of targetEvent check
+    if (onHome) isStrayTicketboxPage = true;
+  } catch {
+    // URL parse error — skip signal 4
+  }
+
+  const isStray = urlIs404 || titleIs404 || metaIs404 || isStrayTicketboxPage;
+
+  if (!isStray) return false;
+
+  last404RecoveryMs = Date.now();
+
+  const reason = urlIs404
+    ? '404 in URL'
+    : titleIs404
+      ? `404 in title ("${document.title}")`
+      : metaIs404
+        ? 'prerender-status-code 404'
+        : 'stray/home page detected';
+
+  logger.warn(
+    `Stray page detected while monitoring (${reason}). Navigating back to configured event URL.`,
+    { currentUrl, targetUrl }
+  );
+
+  // Reset state machine so the next poll starts fresh
+  resetStateMachineToMonitoring('404 stray-page recovery');
+  awaitingNavigationFromUrl = null;
+
+  window.setTimeout(() => {
+    if (typeof window !== 'undefined') {
+      window.location.href = targetUrl;
+    }
+  }, 400);
+
+  return true;
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 ensurePageBridgeInjected();
+
+let prevUrl = typeof window !== 'undefined' ? window.location.href : '';
+
+function checkUrlChange(): void {
+  if (!isExtensionContextValid()) return;
+  const nowUrl = typeof window !== 'undefined' ? window.location.href : '';
+  if (nowUrl !== prevUrl) {
+    const oldUrl = prevUrl;
+    prevUrl = nowUrl;
+    logger.info('Detected SPA URL transition', { from: oldUrl, to: nowUrl });
+    if (awaitingNavigationFromUrl && nowUrl !== awaitingNavigationFromUrl) {
+      awaitingNavigationFromUrl = null;
+    }
+
+    // ── 404 / stray-page recovery on URL change ─────────────────────────
+    detectAndRecoverFromStrayPage().catch(() => {});
+
+    if (nowUrl.includes('/select-ticket') || nowUrl.includes('/booking')) {
+      if (!userExplicitlyStopped && !isMonitoringActive) {
+        logger.info('Detected navigation to select-ticket page; ensuring monitoring is active');
+        isMonitoringActive = true;
+        try {
+          if (stateMachine.state === PurchaseState.FAILED || stateMachine.state === PurchaseState.STOPPED) {
+            stateMachine.transition({ type: 'RESET_REQUESTED' });
+            stateMachine.transition({ type: 'ARM' });
+            stateMachine.transition({ type: 'MONITORING_STARTED' });
+          }
+        } catch {
+          // ignore
+        }
+        scheduleNextPoll(100);
+      }
+    }
+    scheduleDiscoveryScan(50);
+  }
+}
+
+// ── Anti-bot zoom-thrash detector (bootstrap) ────────────────────────────────
+/**
+ * Called whenever a devicePixelRatio or canvas-scale change is observed.
+ * Records direction-reversals in a sliding 4-second window and reloads
+ * if the thrash threshold (≥ 2 reversals) is exceeded.
+ */
+function onZoomSampleObserved(newDpr: number): void {
+  const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+  const isOnBookingOrSeatmap =
+    currentUrl.includes('/select-ticket') ||
+    currentUrl.includes('/booking') ||
+    currentUrl.includes('/bookings/');
+
+  if (!isMonitoringActive && !isExecutingJourney && !isOnBookingOrSeatmap) return;
+
+  const delta = newDpr - lastDpr;
+  if (Math.abs(delta) < 0.01) return; // ignore noise
+
+  const direction: -1 | 1 = delta > 0 ? 1 : -1;
+  const now = Date.now();
+
+  // A reversal is a direction flip from the previous non-zero direction
+  if (lastZoomDirection !== 0 && direction !== lastZoomDirection) {
+    zoomReversalTimestamps.push(now);
+  }
+  lastZoomDirection = direction;
+  lastDpr = newDpr;
+
+  // Prune timestamps outside the sliding window
+  const cutoff = now - ZOOM_REVERSAL_WINDOW_MS;
+  while (zoomReversalTimestamps.length > 0 && zoomReversalTimestamps[0]! < cutoff) {
+    zoomReversalTimestamps.shift();
+  }
+
+  if (zoomReversalTimestamps.length >= ZOOM_REVERSAL_THRESHOLD) {
+    // Check cooldown to prevent reload storm
+    if (now - lastZoomReloadMs < ZOOM_RELOAD_COOLDOWN_MS) return;
+    lastZoomReloadMs = now;
+    zoomReversalTimestamps.length = 0;
+    lastZoomDirection = 0;
+
+    logger.warn(
+      'Anti-bot zoom-thrash detected: rapid zoom oscillation detected on seatmap. Reloading page to recover clean state.',
+      { reversalsInWindow: ZOOM_REVERSAL_THRESHOLD, windowMs: ZOOM_REVERSAL_WINDOW_MS }
+    );
+    // Brief pause so the log can flush, then reload
+    window.setTimeout(() => {
+      if (typeof window !== 'undefined') window.location.reload();
+    }, 150);
+  }
+}
+
+/**
+ * Bootstraps the zoom-thrash detector.
+ * Uses 4 coordinated strategies:
+ * 1. window.matchMedia on devicePixelRatio (resolves browser/CSS page zoom)
+ * 2. ResizeObserver on Konva canvas and container (resolves layout size oscillation)
+ * 3. MutationObserver on style attributes for CSS transform / zoom
+ * 4. window 'message' listener for ZOOM_SAMPLE & ROUTE_CHANGE from MAIN world (page-bridge.ts)
+ */
+function startZoomThrashDetector(): void {
+  if (typeof window === 'undefined') return;
+
+  // Strategy 1: matchMedia on devicePixelRatio changes
+  function watchDpr(): void {
+    const dpr = window.devicePixelRatio;
+    const mql = window.matchMedia(`(resolution: ${dpr}dppx)`);
+    const onDprChange = (e: MediaQueryListEvent) => {
+      if (!e.matches) {
+        onZoomSampleObserved(window.devicePixelRatio);
+        watchDpr(); // re-subscribe to the new DPR value
+      }
+    };
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', onDprChange, { once: true });
+    } else {
+      // Safari <14 fallback
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (mql as any).addListener(onDprChange);
+    }
+  }
+  watchDpr();
+
+  // Strategy 2: ResizeObserver on the Konva canvas container
+  if (typeof ResizeObserver !== 'undefined') {
+    let lastCanvasWidth = 0;
+    let lastCanvasHeight = 0;
+
+    const canvasObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const w = entry.contentRect.width;
+        const h = entry.contentRect.height;
+        if (lastCanvasWidth === 0) { lastCanvasWidth = w; lastCanvasHeight = h; continue; }
+        // Compute synthetic DPR-like ratio from canvas size change
+        const ratio = (w * h) / (lastCanvasWidth * lastCanvasHeight);
+        if (ratio > 0 && Math.abs(ratio - 1) > 0.02) {
+          onZoomSampleObserved(window.devicePixelRatio * (ratio > 1 ? 1.05 : 0.95));
+        }
+        lastCanvasWidth = w;
+        lastCanvasHeight = h;
+      }
+    });
+
+    const attachCanvasObserver = () => {
+      const konvaContent =
+        document.querySelector<HTMLElement>('.konvajs-content') ??
+        document.querySelector<HTMLElement>('canvas');
+      if (konvaContent) {
+        canvasObserver.observe(konvaContent);
+      }
+    };
+    attachCanvasObserver();
+    window.setTimeout(attachCanvasObserver, 1500);
+    window.setTimeout(attachCanvasObserver, 4000);
+  }
+
+  // Strategy 3: MutationObserver on style attributes for CSS transform / zoom
+  if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') {
+    const parseScaleFromTransform = (transform: string): number | null => {
+      if (!transform || transform === 'none') return null;
+      const matrixMatch = transform.match(/matrix\(([^,]+),\s*([^,]+)/);
+      if (matrixMatch && matrixMatch[1] && matrixMatch[2]) {
+        const a = parseFloat(matrixMatch[1]);
+        const b = parseFloat(matrixMatch[2]);
+        if (!isNaN(a) && !isNaN(b)) {
+          return Math.sqrt(a * a + b * b);
+        }
+      }
+      const scaleMatch = transform.match(/scale\(([^,\)]+)/);
+      if (scaleMatch && scaleMatch[1]) {
+        const s = parseFloat(scaleMatch[1]);
+        if (!isNaN(s)) return s;
+      }
+      return null;
+    };
+
+    const styleObserver = new MutationObserver((mutations) => {
+      for (const mut of mutations) {
+        if (mut.type === 'attributes' && mut.attributeName === 'style') {
+          const target = mut.target as HTMLElement;
+          if (!target || !target.style) continue;
+          const cssTransform = target.style.transform;
+          if (cssTransform) {
+            const sc = parseScaleFromTransform(cssTransform);
+            if (sc !== null) {
+              onZoomSampleObserved(sc);
+              continue;
+            }
+          }
+          const cssZoom = (target.style as unknown as Record<string, string>).zoom;
+          if (cssZoom) {
+            const z = parseFloat(cssZoom);
+            if (!isNaN(z)) {
+              onZoomSampleObserved(z);
+            }
+          }
+        }
+      }
+    });
+
+    const attachStyleObserver = () => {
+      const candidates = document.querySelectorAll(
+        '.konvajs-content, canvas, svg.seatmap, .seat-map, [class*="seat-map"], [class*="seatmap"], [class*="stage"]'
+      );
+      candidates.forEach((el) => {
+        try {
+          styleObserver.observe(el, { attributes: true, attributeFilter: ['style', 'class'] });
+        } catch {
+          // ignore
+        }
+      });
+    };
+    attachStyleObserver();
+    window.setTimeout(attachStyleObserver, 1500);
+    window.setTimeout(attachStyleObserver, 3500);
+  }
+
+  // Strategy 4: window.postMessage from MAIN world (page-bridge.ts)
+  window.addEventListener('message', (event: MessageEvent) => {
+    if (event.source !== window || !event.data) return;
+    const msg = event.data;
+    if (msg.source === 'TICKETBOX_ASSISTANT_PAGE') {
+      if (msg.type === 'ZOOM_SAMPLE' && typeof msg.scale === 'number') {
+        onZoomSampleObserved(msg.scale);
+      } else if (msg.type === 'ROUTE_CHANGE') {
+        checkUrlChange();
+      }
+    }
+  });
+}
+
+startZoomThrashDetector();
+// ─────────────────────────────────────────────────────────────────────────────
 
 logger.info('Ticketbox Content Script loaded on page', {
   url: window.location.href,
@@ -335,8 +706,14 @@ async function performDiscoveryScan(force = false): Promise<void> {
   isDiscoveryScanning = true;
 
   try {
+    // ── 404 / stray-page recovery: bail early if on wrong page ──────────────
+    const recovered = await detectAndRecoverFromStrayPage();
+    if (recovered) return; // navigation triggered — stop scanning this cycle
+    // ────────────────────────────────────────────────────────────────────────
+
     const eventState = await adapter.getEventState();
     const catalog = await adapter.discoverTicketCatalog();
+
     const allTickets = catalog.showings.flatMap((s) => s.ticketTypes);
     const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
     const summary = await adapter.getBookingSummary();
@@ -494,6 +871,21 @@ async function performDiscoveryScan(force = false): Promise<void> {
             }
             return;
           }
+        }
+
+        // Check if an area modal is still open on screen after 2.5s - meaning continue click didn't navigate
+        const hasOpenAreaModal =
+          typeof document !== 'undefined' &&
+          document.querySelector('.ant-modal, [role="dialog"], [class*="modal"]') !== null;
+        if (hasOpenAreaModal && Date.now() - awaitingNavigationTimestamp > 2500) {
+          logger.warn(
+            'Modal dialog still present on screen after 2.5s; clearing navigation wait to allow retry'
+          );
+          awaitingNavigationFromUrl = null;
+          if (isMonitoringActive && !isExecutingJourney && !activeJourneyPromise) {
+            attemptBookingJourney();
+          }
+          return;
         }
 
         if (Date.now() - awaitingNavigationTimestamp < 10000) {
@@ -1003,37 +1395,6 @@ if (typeof MutationObserver !== 'undefined') {
 
 // Detect SPA client-side routing transitions (Next.js / HTML5 History API)
 if (typeof window !== 'undefined') {
-  let prevUrl = window.location.href;
-  const checkUrlChange = () => {
-    if (!isExtensionContextValid()) return;
-    const nowUrl = window.location.href;
-    if (nowUrl !== prevUrl) {
-      const oldUrl = prevUrl;
-      prevUrl = nowUrl;
-      logger.info('Detected SPA URL transition', { from: oldUrl, to: nowUrl });
-      if (awaitingNavigationFromUrl && nowUrl !== awaitingNavigationFromUrl) {
-        awaitingNavigationFromUrl = null;
-      }
-      if (nowUrl.includes('/select-ticket') || nowUrl.includes('/booking')) {
-        if (!userExplicitlyStopped && !isMonitoringActive) {
-          logger.info('Detected navigation to select-ticket page; ensuring monitoring is active');
-          isMonitoringActive = true;
-          try {
-            if (stateMachine.state === PurchaseState.FAILED || stateMachine.state === PurchaseState.STOPPED) {
-              stateMachine.transition({ type: 'RESET_REQUESTED' });
-              stateMachine.transition({ type: 'ARM' });
-              stateMachine.transition({ type: 'MONITORING_STARTED' });
-            }
-          } catch {
-            // ignore
-          }
-          scheduleNextPoll(100);
-        }
-      }
-      scheduleDiscoveryScan(50);
-    }
-  };
-
   window.addEventListener('popstate', checkUrlChange);
   window.addEventListener('hashchange', checkUrlChange);
   const scheduleUrlCheck = () => {

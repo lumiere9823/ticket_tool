@@ -667,11 +667,17 @@ export class PurchaseStateMachine {
         if (event.type === 'AREA_SELECTION_REQUIRED') {
           return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
         }
+        if (event.type === 'SELECTING_AREA') {
+          return this.performTransition(PurchaseState.SELECTING_AREA);
+        }
         if (event.type === 'SEAT_MAP_DETECTED') {
           return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
         }
         if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
           return this.performTransition(PurchaseState.SELECTING_SEATS);
+        }
+        if (event.type === 'SEATS_SELECTED') {
+          return this.performTransition(PurchaseState.SEATS_SELECTED);
         }
         if (event.type === 'TICKETS_DETECTED') {
           return this.performTransition(PurchaseState.TICKETS_DETECTED);
@@ -751,6 +757,9 @@ export class PurchaseStateMachine {
         }
         if (event.type === 'SELECTING_SEATS') {
           return this.performTransition(PurchaseState.SELECTING_SEATS);
+        }
+        if (event.type === 'SEATS_SELECTED') {
+          return this.performTransition(PurchaseState.SEATS_SELECTED);
         }
         if (event.type === 'TICKETS_DETECTED') {
           return this.performTransition(PurchaseState.TICKETS_DETECTED);

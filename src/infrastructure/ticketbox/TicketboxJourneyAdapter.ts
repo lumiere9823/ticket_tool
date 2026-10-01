@@ -1265,7 +1265,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         });
         (showingBtn as MutableDOMElement).click!();
 
-        await new Promise((r) => setTimeout(r, 600));
+        await new Promise((r) => setTimeout(r, 200));
 
         const updatedUrl = typeof window !== 'undefined' ? window.location.href : '';
         const currentBtnHref = showingBtn.getAttribute('href') || btnHref;
@@ -1341,7 +1341,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     if (actionBtn && typeof actionBtn.click === 'function') {
       this.logger?.info('Clicking action button in ticket row', { candidateId });
       actionBtn.click();
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 60));
     } else if (typeof targetRow.click === 'function') {
       targetRow.click();
     }
@@ -1378,10 +1378,32 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const isAlreadyOnBookingPage =
       currentUrl.includes('/select-ticket') ||
       currentUrl.includes('/booking') ||
-      root.querySelector('svg.seatmap, [class*="seatmap"], .seat-map') !== null;
+      root.querySelector('svg.seatmap, [class*="seatmap"], .seat-map, .konvajs-content, [class*="konvajs"]') !== null;
 
-    // Polling loop for modal stepper or quantity controls (modal may take 100-400ms to open after area click)
-    const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 15 : 1;
+    // Fast path: If on seat map page with visual seat map and no stepper controls present,
+    // quantity is handled directly by seat/area picking.
+    const hasActualSeatMap =
+      root.querySelector('.konvajs-content, [class*="konvajs"], svg.seatmap, [data-seatmap]') !== null ||
+      this.findSeatmapSvg() !== null;
+
+    const hasAnyQuantityStepper =
+      root.querySelector(
+        'input[type="number"], .qty-input, input.quantity, .ant-input-number, [class*="stepper"], .btn-plus, [class*="btn-plus"], button[aria-label*="plus"], button[aria-label*="add"], button[aria-label*="tăng"]'
+      ) !== null ||
+      (typeof document !== 'undefined' &&
+        document.querySelector(
+          '.ant-modal, [role="dialog"], input[type="number"], .qty-input, .ant-input-number, .bottom-bar input'
+        ) !== null);
+
+    if (isAlreadyOnBookingPage && hasActualSeatMap && !hasAnyQuantityStepper) {
+      this.logger?.info('Already on seat map page; quantity handled via seat/area selection', {
+        ticketName: ticket.name,
+      });
+      return true;
+    }
+
+    // Polling loop for modal stepper or quantity controls (modal may take 50-200ms to open after area click)
+    const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 4 : 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const doc = typeof document !== 'undefined' ? document : null;
@@ -1417,10 +1439,6 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           modalInput = modalRaw.querySelector(
             'input[type="number"], .qty-input, input.quantity, .ant-input-number-input, input'
           ) as HTMLInputElement | null;
-          if (modalInput) {
-            const rawVal = modalInput.value || modalInput.getAttribute('value') || '0';
-            currentModalQty = parseInt(rawVal, 10) || 0;
-          }
 
           // Check for explicit minus / plus selector inside modal
           let modalMinusBtn = modalRaw.querySelector(
@@ -1491,7 +1509,20 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
           const readModalQty = (): number => {
             if (modalInput) {
-              const rawVal = modalInput.value || modalInput.getAttribute('value') || '0';
+              const propVal =
+                'value' in modalInput && modalInput.value !== undefined
+                  ? String(modalInput.value)
+                  : '';
+              if (propVal.trim() !== '') {
+                const p = parseInt(propVal, 10);
+                if (!isNaN(p)) return p;
+              }
+              const ariaVal = modalInput.getAttribute('aria-valuenow');
+              if (ariaVal) {
+                const p = parseInt(ariaVal, 10);
+                if (!isNaN(p)) return p;
+              }
+              const rawVal = modalInput.getAttribute('value') || '0';
               const p = parseInt(rawVal, 10);
               if (!isNaN(p)) return p;
             }
@@ -1512,24 +1543,40 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               targetQuantity: quantity,
             });
 
-            const maxModalSteps = 10;
+            // 1. In browser world, dispatch directly via Page-World Bridge (MAIN world)
+            // which triggers React Fiber synthetic onClick and clicks continue button synchronously!
+            if (typeof window !== 'undefined') {
+              const bridgeRes = await this.sendPageBridgeRequest<{ success: boolean; message?: string }>(
+                'CONFIRM_AREA_MODAL',
+                { quantity, ticketName: ticket.name }
+              );
+              if (bridgeRes.success) {
+                this.logger?.info('Area modal confirmed via Page Bridge (Main World)', { quantity });
+                return true;
+              }
+            }
+
+            const diff = quantity - currentModalQty;
+            const maxModalSteps = Math.min(10, Math.abs(diff) || 1);
             let lastObs = currentModalQty;
             for (let step = 0; step < maxModalSteps && currentModalQty !== quantity; step++) {
               if (currentModalQty < quantity) {
                 if (!modalPlusBtn) break;
                 this.clickElement(wrapBrowserElement(modalPlusBtn));
-                await new Promise((r) => setTimeout(r, 150));
+                await new Promise((r) => setTimeout(r, 40));
               } else if (currentModalQty > quantity) {
                 if (!modalMinusBtn) break;
                 this.clickElement(wrapBrowserElement(modalMinusBtn));
-                await new Promise((r) => setTimeout(r, 150));
+                await new Promise((r) => setTimeout(r, 40));
               }
               const nextModalQty = readModalQty();
               if (nextModalQty === lastObs) {
-                const numEl = modalRaw.querySelector('span, div, p, strong');
-                if (numEl) {
+                const explicitDisplay = modalRaw.querySelector(
+                  '.qty-display, [class*="qty-display"], [class*="qty_display"]'
+                );
+                if (explicitDisplay && 'textContent' in explicitDisplay) {
                   const delta = currentModalQty < quantity ? 1 : -1;
-                  numEl.textContent = String(currentModalQty + delta);
+                  (explicitDisplay as HTMLElement).textContent = String(currentModalQty + delta);
                 }
               }
               currentModalQty = readModalQty();
@@ -1556,7 +1603,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               }
             }
 
-            await new Promise((r) => setTimeout(r, 200));
+            await new Promise((r) => setTimeout(r, 50));
             this.logger?.info('Area modal quantity set successfully', { quantity });
             return true;
           }
@@ -1742,10 +1789,20 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
       const readCurrentQty = (): number => {
         if (input) {
-          const rawCurrentVal =
-            input.getAttribute('value') ||
-            ('value' in input ? String((input as MutableDOMElement).value) : '') ||
-            '0';
+          const propVal =
+            'value' in input && (input as MutableDOMElement).value !== undefined
+              ? String((input as MutableDOMElement).value)
+              : '';
+          if (propVal.trim() !== '') {
+            const p = parseInt(propVal, 10);
+            if (!isNaN(p)) return p;
+          }
+          const ariaVal = input.getAttribute('aria-valuenow');
+          if (ariaVal) {
+            const p = parseInt(ariaVal, 10);
+            if (!isNaN(p)) return p;
+          }
+          const rawCurrentVal = input.getAttribute('value') || '0';
           const p = parseInt(rawCurrentVal, 10);
           if (!isNaN(p)) return p;
         }
@@ -1825,7 +1882,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       });
 
       if (plusBtn || minusBtn) {
-        const maxSteps = 10;
+        const delta = quantity - curQty;
+        const maxSteps = Math.min(10, Math.abs(delta) || 1);
         let lastObserved = curQty;
         for (let step = 0; step < maxSteps && curQty !== quantity; step++) {
           if (curQty < quantity) {
@@ -1837,7 +1895,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               ticketName: ticket.name,
             });
             this.clickElement(plusBtn);
-            await new Promise((r) => setTimeout(r, 120));
+            await new Promise((r) => setTimeout(r, 40));
           } else if (curQty > quantity) {
             if (!minusBtn) break;
             this.logger?.info('Clicking minus button to decrement quantity', {
@@ -1847,7 +1905,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               ticketName: ticket.name,
             });
             this.clickElement(minusBtn);
-            await new Promise((r) => setTimeout(r, 120));
+            await new Promise((r) => setTimeout(r, 40));
           }
 
           const nextVal = readCurrentQty();
@@ -1857,8 +1915,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               '.qty-display, [class*="qty-display"], [class*="qty_display"]'
             );
             if (explicitQty && 'textContent' in explicitQty) {
-              const delta = curQty < quantity ? 1 : -1;
-              const sim = curQty + delta;
+              const d = curQty < quantity ? 1 : -1;
+              const sim = curQty + d;
               (explicitQty as MutableDOMElement).textContent = String(sim);
               curQty = sim;
               lastObserved = sim;
@@ -1914,16 +1972,16 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         ticketName: ticket.name,
       });
 
+      // If controls were found and adjusted, do not waste excessive cycles
+      if (plusBtn || minusBtn || input) {
+        if (attempt >= 2) break;
+      }
+
       // Wait before next attempt if polling
       if (attempt < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 60));
       }
     }
-
-    // If on seat map page with actual visual seat map and no stepper, quantity is handled by seat selection
-    const hasActualSeatMap =
-      root.querySelector('.konvajs-content, [class*="konvajs"], svg.seatmap, [data-seatmap]') !== null ||
-      this.findSeatmapSvg() !== null;
 
     if (isAlreadyOnBookingPage && hasActualSeatMap) {
       this.logger?.info('Already on seat map page; quantity handled via seat/area selection', {
@@ -2034,6 +2092,17 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         parentClickable.click();
       }
     }
+
+    if (typeof window !== 'undefined') {
+      const txt = (nativeEl.innerText || nativeEl.textContent || '').trim();
+      const id = nativeEl.id ? `#${nativeEl.id}` : '';
+      if (id || (txt && txt.length < 50)) {
+        this.sendPageBridgeRequest('CLICK_ELEMENT', {
+          selector: id || undefined,
+          text: txt || undefined,
+        }).catch(() => {});
+      }
+    }
   }
 
   /**
@@ -2096,7 +2165,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     // Phrases that indicate static selection labels unless accompanied by a forward keyword
     const selectionOnlyPhrases = ['chọn vé', 'chọn khu vực', 'chọn ghế', 'chọn chỗ'];
 
-    const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 30 : 1;
+    const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 25 : 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Auto-dismiss blocking "Hủy đơn hàng?" modal if present
@@ -2280,27 +2349,43 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             rawBtn.closest('.ant-modal, [role="dialog"], [class*="modal"]') !== null;
 
           if (isInsideModal) {
-            await new Promise((r) => setTimeout(r, 350));
             const doc = typeof document !== 'undefined' ? document : null;
-            const bottomBtn = doc?.querySelector(
-              '.bottom-bar button, [class*="bottom-bar"] button, [class*="bottomBar"] button, [class*="bottom"] button, #btn-continue'
-            ) as HTMLElement | null;
-            if (bottomBtn) {
-              const bText = (bottomBtn.textContent || '').toLowerCase().trim();
+            let modalClosed = false;
+            for (let w = 0; w < 5; w++) {
+              await new Promise((r) => setTimeout(r, 60));
+              const openModal = doc?.querySelector(
+                '.ant-modal, [role="dialog"], [class*="modal"]'
+              ) as HTMLElement | null;
               if (
-                targetKeywords.some((kw) => bText.includes(kw)) &&
-                !promptOrBackPhrases.some((phrase) => bText.includes(phrase)) &&
-                !this.isElementDisabled(wrapBrowserElement(bottomBtn))
+                !openModal ||
+                openModal.offsetParent === null ||
+                openModal.style.display === 'none'
               ) {
-                this.logger?.info('Also clicked bottom bar continue button after modal confirmation', {
-                  buttonText: bText,
-                });
-                this.clickElement(wrapBrowserElement(bottomBtn));
+                modalClosed = true;
+                break;
+              }
+            }
+            if (modalClosed) {
+              const bottomBtn = doc?.querySelector(
+                '.bottom-bar button, [class*="bottom-bar"] button, [class*="bottomBar"] button, [class*="bottom"] button, #btn-continue'
+              ) as HTMLElement | null;
+              if (bottomBtn) {
+                const bText = (bottomBtn.textContent || '').toLowerCase().trim();
+                if (
+                  targetKeywords.some((kw) => bText.includes(kw)) &&
+                  !promptOrBackPhrases.some((phrase) => bText.includes(phrase)) &&
+                  !this.isElementDisabled(wrapBrowserElement(bottomBtn))
+                ) {
+                  this.logger?.info('Modal closed; also clicked bottom bar continue button', {
+                    buttonText: bText,
+                  });
+                  this.clickElement(wrapBrowserElement(bottomBtn));
+                }
               }
             }
           }
 
-          await new Promise((r) => setTimeout(r, 150));
+          await new Promise((r) => setTimeout(r, 50));
           return true;
         }
       }
@@ -2312,9 +2397,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         }
       );
 
-      // If not yet available/enabled, wait 250ms before next attempt
+      // If not yet available/enabled, wait 75ms before next attempt
       if (attempt < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 250));
+        await new Promise((r) => setTimeout(r, 75));
       }
     }
 
@@ -2839,16 +2924,28 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             '.legend-item, [class*="legend-item"], [class*="tier-item"], [class*="ticket-item"], [class*="section-item"], .ticket-legend > div, aside div[role="button"], .sidebar div[role="button"], button'
           )
         );
+        const normAreaName = safeAreaName ? safeAreaName.toLowerCase() : '';
+        const spacedAreaName = normAreaName.replace(/[\s_-]+/g, ' ');
+        const cleanAreaName = normAreaName.replace(/[\s_-]+/g, '_');
+        const compactAreaName = normAreaName.replace(/[\s_-]+/g, '');
+
         for (const tc of tierCandidates) {
           const txt = (tc.textContent || '').toLowerCase();
-          const matchesName = safeAreaName && txt.includes(safeAreaName.toLowerCase());
+          const cleanTxt = txt.replace(/[\s_-]+/g, ' ');
+          const compactTxt = txt.replace(/[\s_-]+/g, '');
+          const matchesName =
+            safeAreaName &&
+            (txt.includes(normAreaName) ||
+              (cleanAreaName.length > 2 && txt.includes(cleanAreaName)) ||
+              (spacedAreaName.length > 2 && cleanTxt.includes(spacedAreaName)) ||
+              (compactAreaName.length > 2 && compactTxt.includes(compactAreaName)));
           const matchesId = safeTicketTypeId && txt.includes(safeTicketTypeId);
           if (matchesName || matchesId) {
             this.logger?.info('Found matching tier item in right sidebar/legend, clicking', {
               text: txt.slice(0, 40),
             });
             this.clickElement(wrapBrowserElement(tc as HTMLElement));
-            await new Promise((r) => setTimeout(r, 400));
+            await new Promise((r) => setTimeout(r, 80));
             return true;
           }
         }
@@ -2867,7 +2964,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             areaName,
             transitioned: bridgeRes.data?.transitioned,
           });
-          await new Promise((r) => setTimeout(r, 400));
+          await new Promise((r) => setTimeout(r, 100));
           return true;
         }
 
@@ -2884,7 +2981,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         if (konvaContent) {
           this.logger?.info('Dispatching simulated click to Konva canvas container', { areaId, coords });
           this.clickElement(wrapBrowserElement(konvaContent));
-          await new Promise((r) => setTimeout(r, 500));
+          await new Promise((r) => setTimeout(r, 100));
           return true;
         }
       }

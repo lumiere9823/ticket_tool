@@ -858,13 +858,17 @@ export class ExecuteBookingJourneyUseCase {
       this.logger.info(`Available seats detected: ${availableSeats.length}`);
 
       // Area-based / Non-reserving seat selection (e.g. ULTRA VIP - L2, STARDOM - L, FANZONE)
+      // Also handles the case where discoverAreas() returned 0 results (Konva canvas not parsed
+      // by DOM selectors) so chosenArea is null, but the chosen ticket zone has no individual
+      // seats — e.g. FANZONE standing zones on a Konva seatmap.
       const isAreaBased =
         chosenArea?.isReservingSeat === false ||
-        (availableSeats.length === 0 && chosenArea && chosenArea.mode === 'AREA_BASED');
+        (availableSeats.length === 0 && chosenArea && chosenArea.mode === 'AREA_BASED') ||
+        (availableSeats.length === 0 && chosenArea === null);
 
       if (isAreaBased && availableSeats.length === 0) {
         this.logger.info(
-          `Target area '${chosenArea?.name}' is an area-based ticket tier (no individual seats to pick).`
+          `Target area '${chosenArea?.name ?? chosenTicket.name}' is an area-based ticket tier (no individual seats to pick).`
         );
 
         if (this.adapter.selectQuantity) {
@@ -891,6 +895,20 @@ export class ExecuteBookingJourneyUseCase {
 
         const seatLabel = chosenArea ? chosenArea.name : chosenTicket.name;
         currentSelection.seats = [seatLabel];
+        if (this.stateMachine.state === PurchaseState.BOOKING_MODE_DETECTED) {
+          try {
+            this.stateMachine.transition({ type: 'AREA_SELECTION_REQUIRED' });
+            this.stateMachine.transition({ type: 'SELECTING_AREA' });
+          } catch {
+            // ignore
+          }
+        } else if (this.stateMachine.state === PurchaseState.AREA_SELECTION_REQUIRED) {
+          try {
+            this.stateMachine.transition({ type: 'SELECTING_AREA' });
+          } catch {
+            // ignore
+          }
+        }
         this.stateMachine.transition({
           type: 'SEATS_SELECTED',
           seats: [seatLabel],
@@ -919,12 +937,15 @@ export class ExecuteBookingJourneyUseCase {
               retryContext.failedAreaIds.add(currentSelection.areaName);
             }
           }
+          // Use chosenTicket.name as fallback so the log never shows 'undefined'
+          const areaLabel =
+            currentSelection.areaName ?? currentSelection.areaId ?? chosenTicket.name;
           this.logger.warn(
-            `No available seats in area '${currentSelection.areaName || currentSelection.areaId}' (all taken or blacklisted). Retrying next area.`
+            `No available seats in area '${areaLabel}' (all taken or blacklisted). Retrying next area.`
           );
           throw new BookingError({
             code: 'NO_AVAILABLE_SEATS',
-            message: `No available seats discovered on seat map for '${currentSelection.areaName || currentSelection.areaId}' (all taken or blacklisted)`,
+            message: `No available seats discovered on seat map for '${areaLabel}' (all taken or blacklisted)`,
             state: this.stateMachine.state,
             recoverable: true,
           });
@@ -1035,9 +1056,9 @@ export class ExecuteBookingJourneyUseCase {
     if (this.adapter.proceedToNextStep) {
       const proceedOk = await this.adapter.proceedToNextStep();
       if (proceedOk) {
-        // Poll for error modal (e.g. -1242 seat collision) that appears immediately after clicking proceed
-        for (let i = 0; i < 4; i++) {
-          await new Promise((r) => setTimeout(r, 300));
+        // Fast-poll for error modal (e.g. -1242 seat collision) that appears immediately after clicking proceed
+        for (let i = 0; i < 3; i++) {
+          await new Promise((r) => setTimeout(r, 120));
           if (this.adapter.detectAndHandleErrorModal) {
             const modalResult = await this.adapter.detectAndHandleErrorModal();
             if (modalResult.hasError && modalResult.isSeatUnavailable) {
