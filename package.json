@@ -14,6 +14,7 @@
     "lint:fix": "eslint . --fix",
     "format:check": "prettier --check .",
     "format": "prettier --write .",
+    "test:chromium": "npx tsx scripts/test-chromium-captcha.ts",
     "ci": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run build"
   },
   "devDependencies": {

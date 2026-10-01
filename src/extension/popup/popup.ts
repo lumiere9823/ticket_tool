@@ -190,6 +190,11 @@ const btnBasicDeselectAll = document.getElementById(
   'btn-basic-deselect-all'
 ) as HTMLButtonElement | null;
 
+const interventionBanner = document.getElementById('intervention-banner') as HTMLElement | null;
+const btnInterventionResume = document.getElementById(
+  'btn-intervention-resume'
+) as HTMLButtonElement | null;
+
 const ticketsTbody = document.getElementById('tickets-tbody') as HTMLElement;
 
 const selTicket = document.getElementById('sel-ticket') as HTMLElement;
@@ -1598,6 +1603,18 @@ function updateStateBadge(state: PurchaseState, blockingReason?: string): void {
       break;
   }
 
+  const isIntervention = [
+    PurchaseState.HUMAN_INTERVENTION_REQUIRED,
+    PurchaseState.CAPTCHA_REQUIRED,
+    PurchaseState.OTP_REQUIRED,
+    PurchaseState.SESSION_REAUTH_REQUIRED,
+    PurchaseState.UNKNOWN_SECURITY_CHALLENGE,
+  ].includes(state);
+
+  if (interventionBanner) {
+    interventionBanner.style.display = isIntervention ? 'flex' : 'none';
+  }
+
   const isRunning = [
     PurchaseState.ARMED,
     PurchaseState.MONITORING,
@@ -2813,6 +2830,18 @@ btnBasicArm?.addEventListener('click', handleBasicArm);
 btnBasicStop?.addEventListener('click', () => btnStop.click());
 btnBasicReset?.addEventListener('click', () => btnResetConfig?.click());
 btnCancelBasicScheduled?.addEventListener('click', () => btnCancelScheduledArm?.click());
+btnInterventionResume?.addEventListener('click', async () => {
+  addLog('Đang xác thực và tiếp tục sau giải CAPTCHA...');
+  try {
+    await messageBus.publish({
+      type: 'USER_COMPLETED_INTERVENTION',
+      interventionId: 'captcha_resolved',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('Error sending USER_COMPLETED_INTERVENTION from popup', err);
+  }
+});
 
 btnBasicSelectAll?.addEventListener('click', () => {
   basicTicketChecklist?.querySelectorAll('.basic-ticket-item').forEach((item) => {

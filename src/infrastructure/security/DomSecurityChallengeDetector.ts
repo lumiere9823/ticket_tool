@@ -23,14 +23,21 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
       return { detected: false };
     }
 
-    // 1. Cloudflare Turnstile
-    if (
-      this.hasElement(doc, '.cf-turnstile') ||
-      this.hasElement(doc, '#challenge-stage') ||
-      this.hasElement(doc, '[name="cf-turnstile-response"]') ||
-      this.hasIframeWithSrc(doc, 'challenges.cloudflare.com') ||
-      this.hasElement(doc, '#cf-wrapper')
-    ) {
+    // 1. Cloudflare Turnstile: if response token is already populated, challenge is resolved
+    const turnstileToken =
+      this.getElementValue(doc, '[name="cf-turnstile-response"]') ||
+      this.getElementValue(doc, '[name="cf_turnstile_response"]') ||
+      this.getElementValue(doc, '#cf-turnstile-response');
+
+    const hasTurnstileActive =
+      !turnstileToken &&
+      (this.hasElement(doc, '.cf-turnstile') ||
+        this.hasElement(doc, '#challenge-stage') ||
+        this.hasElement(doc, '[name="cf-turnstile-response"]') ||
+        this.hasIframeWithSrc(doc, 'challenges.cloudflare.com') ||
+        this.hasElement(doc, '#cf-wrapper'));
+
+    if (hasTurnstileActive) {
       return {
         detected: true,
         type: 'TURNSTILE',
@@ -39,14 +46,21 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
       };
     }
 
-    // 2. Google reCAPTCHA
-    if (
-      this.hasElement(doc, '.g-recaptcha') ||
-      this.hasElement(doc, '#g-recaptcha-response') ||
-      this.hasIframeWithSrc(doc, 'google.com/recaptcha') ||
-      this.hasIframeWithSrc(doc, 'recaptcha.net') ||
-      this.hasIframeWithTitle(doc, 'recaptcha')
-    ) {
+    // 2. Google reCAPTCHA: if response token is already populated, challenge is resolved
+    const recaptchaToken =
+      this.getElementValue(doc, '#g-recaptcha-response') ||
+      this.getElementValue(doc, '[name="g-recaptcha-response"]') ||
+      this.getElementValue(doc, '.g-recaptcha-response');
+
+    const hasRecaptchaActive =
+      !recaptchaToken &&
+      (this.hasElement(doc, '.g-recaptcha') ||
+        this.hasElement(doc, '#g-recaptcha-response') ||
+        this.hasIframeWithSrc(doc, 'google.com/recaptcha') ||
+        this.hasIframeWithSrc(doc, 'recaptcha.net') ||
+        this.hasIframeWithTitle(doc, 'recaptcha'));
+
+    if (hasRecaptchaActive) {
       return {
         detected: true,
         type: 'RECAPTCHA',
@@ -55,13 +69,19 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
       };
     }
 
-    // 3. hCaptcha
-    if (
-      this.hasElement(doc, '.h-captcha') ||
-      this.hasElement(doc, '[data-hcaptcha-widget-id]') ||
-      this.hasIframeWithSrc(doc, 'hcaptcha.com') ||
-      this.hasIframeWithTitle(doc, 'hcaptcha')
-    ) {
+    // 3. hCaptcha: if response token is already populated, challenge is resolved
+    const hcaptchaToken =
+      this.getElementValue(doc, '[name="h-captcha-response"]') ||
+      this.getElementValue(doc, '[name="g-recaptcha-response"]');
+
+    const hasHcaptchaActive =
+      !hcaptchaToken &&
+      (this.hasElement(doc, '.h-captcha') ||
+        this.hasElement(doc, '[data-hcaptcha-widget-id]') ||
+        this.hasIframeWithSrc(doc, 'hcaptcha.com') ||
+        this.hasIframeWithTitle(doc, 'hcaptcha'));
+
+    if (hasHcaptchaActive) {
       return {
         detected: true,
         type: 'HCAPTCHA',
@@ -140,6 +160,35 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
       // Ignored
     }
     return false;
+  }
+
+  private getElementValue(
+    doc: Document | Element | DOMElementLike,
+    selector: string
+  ): string | null {
+    try {
+      if ('querySelector' in doc && typeof doc.querySelector === 'function') {
+        const el = doc.querySelector(selector);
+        if (!el) return null;
+        if ('value' in el && typeof el.value === 'string' && el.value.trim().length > 0) {
+          return el.value.trim();
+        }
+        if ('getAttribute' in el && typeof el.getAttribute === 'function') {
+          const attrVal = el.getAttribute('value');
+          if (attrVal && attrVal.trim().length > 0) return attrVal.trim();
+        }
+        if (
+          'textContent' in el &&
+          typeof el.textContent === 'string' &&
+          el.textContent.trim().length > 0
+        ) {
+          return el.textContent.trim();
+        }
+      }
+    } catch {
+      // Ignored
+    }
+    return null;
   }
 
   private hasIframeWithSrc(doc: Document | Element | DOMElementLike, srcFragment: string): boolean {

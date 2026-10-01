@@ -17,6 +17,26 @@
         <p class="subtitle">Platform-Safe Purchase Assistant</p>
       </header>
 
+      <!-- HUMAN INTERVENTION / CAPTCHA ALERT BANNER -->
+      <div id="intervention-banner" class="intervention-banner" style="display: none">
+        <div class="intervention-icon">⚠️</div>
+        <div class="intervention-content">
+          <strong id="intervention-title">Cần giải CAPTCHA / Xác thực</strong>
+          <p id="intervention-desc">
+            Vui lòng giải CAPTCHA trên tab Ticketbox. Sau khi giải, hệ thống sẽ tự động tiếp tục
+            hoặc bấm nút bên dưới.
+          </p>
+          <button
+            type="button"
+            id="btn-intervention-resume"
+            class="btn-primary-small"
+            style="margin-top: 6px"
+          >
+            ✓ Đã giải xong — Tiếp tục ngay
+          </button>
+        </div>
+      </div>
+
       <!-- CONFIGURATION SECTION -->
       <section class="section config-card">
         <!-- MODE SWITCH TABS -->

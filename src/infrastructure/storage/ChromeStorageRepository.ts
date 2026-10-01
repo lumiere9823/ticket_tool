@@ -66,6 +66,41 @@ const PII_MAX_RETENTION_MS = 24 * 3600 * 1000; // 24 hours
 
 export class ChromeStorageRepository implements StorageRepository {
   private inMemoryMap: Map<string, unknown> = new Map();
+  private cachedConfig: AssistantConfiguration | null = null;
+  private cachedPersistentState: PersistentExecutionState | null = null;
+  private cachedJourneyState: StateContext | null = null;
+  private isStorageListenerAttached = false;
+
+  constructor() {
+    this.attachStorageChangeListener();
+  }
+
+  private attachStorageChangeListener(): void {
+    if (
+      typeof chrome !== 'undefined' &&
+      chrome.storage?.onChanged &&
+      !this.isStorageListenerAttached
+    ) {
+      this.isStorageListenerAttached = true;
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName === 'local') {
+          const configChange = changes[STORAGE_KEYS.CONFIG];
+          if (configChange) {
+            this.cachedConfig = (configChange.newValue as AssistantConfiguration) ?? null;
+          }
+          const persistChange = changes[STORAGE_KEYS.PERSISTENT_STATE];
+          if (persistChange) {
+            this.cachedPersistentState =
+              (persistChange.newValue as PersistentExecutionState) ?? null;
+          }
+          const journeyChange = changes[STORAGE_KEYS.JOURNEY_STATE];
+          if (journeyChange) {
+            this.cachedJourneyState = (journeyChange.newValue as StateContext) ?? null;
+          }
+        }
+      });
+    }
+  }
 
   private isChromeStorageAvailable(): boolean {
     return (
@@ -147,9 +182,11 @@ export class ChromeStorageRepository implements StorageRepository {
     return cleaned as T;
   }
 
-  public async getConfiguration(): Promise<AssistantConfiguration | null> {
+  public async getConfiguration(forceRefresh = false): Promise<AssistantConfiguration | null> {
     let config: AssistantConfiguration | null = null;
-    if (this.isChromeStorageAvailable()) {
+    if (!forceRefresh && this.cachedConfig !== null) {
+      config = this.cachedConfig;
+    } else if (this.isChromeStorageAvailable()) {
       config = await new Promise<AssistantConfiguration | null>((resolve) => {
         chrome.storage.local.get(STORAGE_KEYS.CONFIG, (res) => {
           resolve((res[STORAGE_KEYS.CONFIG] as AssistantConfiguration) ?? null);
@@ -168,6 +205,7 @@ export class ChromeStorageRepository implements StorageRepository {
       }
     }
 
+    this.cachedConfig = config;
     return config;
   }
 
@@ -185,6 +223,9 @@ export class ChromeStorageRepository implements StorageRepository {
       }
     }
 
+    this.cachedConfig = safeConfig;
+    this.inMemoryMap.set(STORAGE_KEYS.CONFIG, safeConfig);
+
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.set({ [STORAGE_KEYS.CONFIG]: safeConfig }, () => {
@@ -192,7 +233,6 @@ export class ChromeStorageRepository implements StorageRepository {
         });
       });
     }
-    this.inMemoryMap.set(STORAGE_KEYS.CONFIG, safeConfig);
   }
 
   public async purgeUserProfile(): Promise<void> {
@@ -216,6 +256,7 @@ export class ChromeStorageRepository implements StorageRepository {
 
   public async saveCurrentState(state: StateContext): Promise<void> {
     const safeState = this.sanitizeStateData(state);
+    this.inMemoryMap.set(STORAGE_KEYS.STATE, safeState);
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.set({ [STORAGE_KEYS.STATE]: safeState }, () => {
@@ -223,22 +264,30 @@ export class ChromeStorageRepository implements StorageRepository {
         });
       });
     }
-    this.inMemoryMap.set(STORAGE_KEYS.STATE, safeState);
   }
 
-  public async getJourneyState(): Promise<StateContext | null> {
+  public async getJourneyState(forceRefresh = false): Promise<StateContext | null> {
+    if (!forceRefresh && this.cachedJourneyState !== null) {
+      return this.cachedJourneyState;
+    }
     if (this.isChromeStorageAvailable()) {
-      return new Promise((resolve) => {
+      const state = await new Promise<StateContext | null>((resolve) => {
         chrome.storage.local.get(STORAGE_KEYS.JOURNEY_STATE, (res) => {
           resolve((res[STORAGE_KEYS.JOURNEY_STATE] as StateContext) ?? null);
         });
       });
+      this.cachedJourneyState = state;
+      return state;
     }
-    return (this.inMemoryMap.get(STORAGE_KEYS.JOURNEY_STATE) as StateContext) ?? null;
+    const state = (this.inMemoryMap.get(STORAGE_KEYS.JOURNEY_STATE) as StateContext) ?? null;
+    this.cachedJourneyState = state;
+    return state;
   }
 
   public async saveJourneyState(state: StateContext): Promise<void> {
     const safeState = this.sanitizeStateData(state);
+    this.cachedJourneyState = safeState;
+    this.inMemoryMap.set(STORAGE_KEYS.JOURNEY_STATE, safeState);
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.set({ [STORAGE_KEYS.JOURNEY_STATE]: safeState }, () => {
@@ -246,7 +295,6 @@ export class ChromeStorageRepository implements StorageRepository {
         });
       });
     }
-    this.inMemoryMap.set(STORAGE_KEYS.JOURNEY_STATE, safeState);
   }
 
   public async getLifecycleState(): Promise<StateContext | null> {
@@ -262,6 +310,7 @@ export class ChromeStorageRepository implements StorageRepository {
 
   public async saveLifecycleState(state: StateContext): Promise<void> {
     const safeState = this.sanitizeStateData(state);
+    this.inMemoryMap.set(STORAGE_KEYS.LIFECYCLE_STATE, safeState);
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.set({ [STORAGE_KEYS.LIFECYCLE_STATE]: safeState }, () => {
@@ -269,24 +318,29 @@ export class ChromeStorageRepository implements StorageRepository {
         });
       });
     }
-    this.inMemoryMap.set(STORAGE_KEYS.LIFECYCLE_STATE, safeState);
   }
 
-  public async getPersistentState(): Promise<PersistentExecutionState | null> {
+  public async getPersistentState(forceRefresh = false): Promise<PersistentExecutionState | null> {
+    if (!forceRefresh && this.cachedPersistentState !== null) {
+      return this.cachedPersistentState;
+    }
     if (this.isChromeStorageAvailable()) {
-      return new Promise((resolve) => {
+      const state = await new Promise<PersistentExecutionState | null>((resolve) => {
         chrome.storage.local.get(STORAGE_KEYS.PERSISTENT_STATE, (res) => {
           resolve((res[STORAGE_KEYS.PERSISTENT_STATE] as PersistentExecutionState) ?? null);
         });
       });
+      this.cachedPersistentState = state;
+      return state;
     }
-    return (
-      (this.inMemoryMap.get(STORAGE_KEYS.PERSISTENT_STATE) as PersistentExecutionState) ?? null
-    );
+    const state =
+      (this.inMemoryMap.get(STORAGE_KEYS.PERSISTENT_STATE) as PersistentExecutionState) ?? null;
+    this.cachedPersistentState = state;
+    return state;
   }
 
   public async savePersistentState(state: Partial<PersistentExecutionState>): Promise<void> {
-    const current = await this.getPersistentState();
+    const current = this.cachedPersistentState ?? (await this.getPersistentState());
     const merged: PersistentExecutionState = {
       startedAt:
         state.startedAt !== undefined ? state.startedAt : (current?.startedAt ?? Date.now()),
@@ -304,6 +358,8 @@ export class ChromeStorageRepository implements StorageRepository {
       armedEventId: state.armedEventId !== undefined ? state.armedEventId : current?.armedEventId,
     };
     const safeState = this.sanitizeStateData(merged);
+    this.cachedPersistentState = safeState;
+    this.inMemoryMap.set(STORAGE_KEYS.PERSISTENT_STATE, safeState);
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.set({ [STORAGE_KEYS.PERSISTENT_STATE]: safeState }, () => {
@@ -311,10 +367,10 @@ export class ChromeStorageRepository implements StorageRepository {
         });
       });
     }
-    this.inMemoryMap.set(STORAGE_KEYS.PERSISTENT_STATE, safeState);
   }
 
   public async clearPersistentState(): Promise<void> {
+    this.cachedPersistentState = null;
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.remove(STORAGE_KEYS.PERSISTENT_STATE, () => {
@@ -330,6 +386,9 @@ export class ChromeStorageRepository implements StorageRepository {
    * Profiles are intentionally preserved.
    */
   public async clearConfiguration(): Promise<void> {
+    this.cachedConfig = null;
+    this.cachedPersistentState = null;
+    this.cachedJourneyState = null;
     const keysToRemove = [
       STORAGE_KEYS.CONFIG,
       STORAGE_KEYS.STATE,
@@ -418,12 +477,16 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   public async clearSession(): Promise<void> {
+    this.cachedConfig = null;
+    this.cachedPersistentState = null;
+    this.cachedJourneyState = null;
     const keysToRemove = [
       STORAGE_KEYS.STATE,
       STORAGE_KEYS.CONFIG,
       STORAGE_KEYS.JOURNEY_STATE,
       STORAGE_KEYS.LIFECYCLE_STATE,
     ];
+    keysToRemove.forEach((k) => this.inMemoryMap.delete(k));
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.remove(keysToRemove, () => {
@@ -431,6 +494,5 @@ export class ChromeStorageRepository implements StorageRepository {
         });
       });
     }
-    keysToRemove.forEach((k) => this.inMemoryMap.delete(k));
   }
 }

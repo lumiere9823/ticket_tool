@@ -67,55 +67,63 @@ function resetMirroredJourneyContext(): void {
 async function updateExtensionBadge(state?: string, scheduled?: boolean): Promise<void> {
   if (typeof chrome === 'undefined' || !chrome.action) return;
   try {
+    let text = '';
+    let color = '#10b981';
+
     if (scheduled) {
-      await chrome.action.setBadgeText({ text: '⏰' });
-      await chrome.action.setBadgeBackgroundColor({ color: '#f59e0b' });
-      return;
+      text = '⏰';
+      color = '#f59e0b';
+    } else {
+      switch (state) {
+        case PurchaseState.ARMED:
+        case 'ARMED':
+          text = 'ARM';
+          color = '#2563eb';
+          break;
+        case PurchaseState.MONITORING:
+        case 'MONITORING':
+          text = 'RUN';
+          color = '#10b981';
+          break;
+        case PurchaseState.WAITING_FOR_STOCK:
+        case 'WAITING_FOR_STOCK':
+          text = 'WAIT';
+          color = '#8b5cf6';
+          break;
+        case PurchaseState.SELECTING:
+        case PurchaseState.RESERVING:
+        case PurchaseState.CHECKOUT:
+        case PurchaseState.PAYMENT_GATE:
+          text = 'BUY';
+          color = '#ec4899';
+          break;
+        case PurchaseState.HUMAN_INTERVENTION_REQUIRED:
+        case PurchaseState.CAPTCHA_REQUIRED:
+        case PurchaseState.OTP_REQUIRED:
+        case PurchaseState.UNKNOWN_SECURITY_CHALLENGE:
+          text = 'CAPT';
+          color = '#ef4444';
+          break;
+        case PurchaseState.CONFIRMED:
+          text = 'DONE';
+          color = '#10b981';
+          break;
+        case PurchaseState.STOPPED:
+        case PurchaseState.STOPPED_LIMIT_REACHED:
+        case PurchaseState.STOPPED_NO_TARGET:
+        case PurchaseState.FAILED:
+        case PurchaseState.IDLE:
+        case PurchaseState.INIT:
+        default:
+          text = '';
+          break;
+      }
     }
-    switch (state) {
-      case PurchaseState.ARMED:
-      case 'ARMED':
-        await chrome.action.setBadgeText({ text: 'ARM' });
-        await chrome.action.setBadgeBackgroundColor({ color: '#2563eb' });
-        break;
-      case PurchaseState.MONITORING:
-      case 'MONITORING':
-        await chrome.action.setBadgeText({ text: 'RUN' });
-        await chrome.action.setBadgeBackgroundColor({ color: '#10b981' });
-        break;
-      case PurchaseState.WAITING_FOR_STOCK:
-      case 'WAITING_FOR_STOCK':
-        await chrome.action.setBadgeText({ text: 'WAIT' });
-        await chrome.action.setBadgeBackgroundColor({ color: '#8b5cf6' });
-        break;
-      case PurchaseState.SELECTING:
-      case PurchaseState.RESERVING:
-      case PurchaseState.CHECKOUT:
-      case PurchaseState.PAYMENT_GATE:
-        await chrome.action.setBadgeText({ text: 'BUY' });
-        await chrome.action.setBadgeBackgroundColor({ color: '#ec4899' });
-        break;
-      case PurchaseState.HUMAN_INTERVENTION_REQUIRED:
-      case PurchaseState.CAPTCHA_REQUIRED:
-      case PurchaseState.OTP_REQUIRED:
-      case PurchaseState.UNKNOWN_SECURITY_CHALLENGE:
-        await chrome.action.setBadgeText({ text: 'CAPT' });
-        await chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
-        break;
-      case PurchaseState.CONFIRMED:
-        await chrome.action.setBadgeText({ text: 'DONE' });
-        await chrome.action.setBadgeBackgroundColor({ color: '#10b981' });
-        break;
-      case PurchaseState.STOPPED:
-      case PurchaseState.STOPPED_LIMIT_REACHED:
-      case PurchaseState.STOPPED_NO_TARGET:
-      case PurchaseState.FAILED:
-      case PurchaseState.IDLE:
-      case PurchaseState.INIT:
-      default:
-        await chrome.action.setBadgeText({ text: '' });
-        break;
-    }
+
+    await Promise.all([
+      chrome.action.setBadgeText({ text }),
+      text ? chrome.action.setBadgeBackgroundColor({ color }) : Promise.resolve(),
+    ]);
   } catch (err) {
     logger.debug('Failed to update extension badge', { err: String(err) });
   }

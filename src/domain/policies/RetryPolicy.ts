@@ -58,6 +58,27 @@ export class RetryPolicy {
     return this.currentAttempts < this.config.maxAttempts;
   }
 
+  public shouldRetryClassified(classified: {
+    standardCategory?: string;
+    isRetryable: boolean;
+    reason: FailureReason;
+  }): boolean {
+    if (!classified.isRetryable) {
+      return false;
+    }
+    if (
+      classified.standardCategory === 'RATE_LIMIT' ||
+      classified.standardCategory === 'CAPTCHA' ||
+      classified.standardCategory === 'BOT_DEFENSE' ||
+      classified.standardCategory === 'QUEUE' ||
+      classified.standardCategory === 'AUTH' ||
+      classified.standardCategory === 'NON_RETRYABLE'
+    ) {
+      return false;
+    }
+    return this.shouldRetry(classified.reason);
+  }
+
   public recordAttempt(): number {
     this.currentAttempts++;
     return this.currentAttempts;

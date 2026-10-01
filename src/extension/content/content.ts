@@ -37,14 +37,16 @@ function isExtensionContextValid(): boolean {
 stateMachine.subscribe(async (context: StateContext) => {
   if (!isExtensionContextValid()) return;
   try {
-    await storage.saveJourneyState(context);
-    await messageBus.publish({
-      type: 'STATE_CHANGED',
-      timestamp: new Date().toISOString(),
-      attemptId: stateMachine.attemptId,
-      state: context.currentState,
-      context,
-    });
+    await Promise.all([
+      storage.saveJourneyState(context),
+      messageBus.publish({
+        type: 'STATE_CHANGED',
+        timestamp: new Date().toISOString(),
+        attemptId: stateMachine.attemptId,
+        state: context.currentState,
+        context,
+      }),
+    ]);
   } catch (err: unknown) {
     if (String(err).includes('Extension context invalidated')) return;
     logger.error('Error in stateMachine subscriber', err);
@@ -718,6 +720,60 @@ function scheduleNextPoll(delayMs?: number): void {
   }, finalDelay);
 }
 
+let challengeWatcherInterval: number | null = null;
+
+function startChallengeResolutionWatcher(): void {
+  if (challengeWatcherInterval) return;
+  logger.info(
+    'Started security challenge resolution watcher; awaiting human resolution in browser'
+  );
+
+  challengeWatcherInterval = window.setInterval(() => {
+    if (!isExtensionContextValid()) {
+      stopChallengeResolutionWatcher();
+      return;
+    }
+
+    const cur = stateMachine.state;
+    if (
+      cur !== PurchaseState.CAPTCHA_REQUIRED &&
+      cur !== PurchaseState.HUMAN_INTERVENTION_REQUIRED &&
+      cur !== PurchaseState.OTP_REQUIRED &&
+      cur !== PurchaseState.SESSION_REAUTH_REQUIRED &&
+      cur !== PurchaseState.UNKNOWN_SECURITY_CHALLENGE
+    ) {
+      stopChallengeResolutionWatcher();
+      return;
+    }
+
+    const check = challengeDetector.detectChallenge();
+    if (!check.detected) {
+      logger.info('Security challenge resolved by user; auto-resuming journey to MONITORING');
+      stopChallengeResolutionWatcher();
+      try {
+        stateMachine.transition({ type: 'USER_COMPLETED_CHALLENGE' });
+        stateMachine.transition({
+          type: 'STATE_VERIFIED',
+          verifiedState: PurchaseState.MONITORING,
+        });
+        isMonitoringActive = true;
+        userExplicitlyStopped = false;
+        scheduleDiscoveryScan(0);
+        scheduleNextPoll(200);
+      } catch (err) {
+        logger.warn('Failed during auto-resuming from security challenge', { err: String(err) });
+      }
+    }
+  }, 750);
+}
+
+function stopChallengeResolutionWatcher(): void {
+  if (challengeWatcherInterval) {
+    window.clearInterval(challengeWatcherInterval);
+    challengeWatcherInterval = null;
+  }
+}
+
 /**
  * Runs a single monitoring cycle, checks boundaries, discovers catalog,
  * and recursively schedules the next poll with jitter.
@@ -758,6 +814,7 @@ async function runMonitoringCycle(): Promise<void> {
           challengeType: challenge.type,
         });
       }
+      startChallengeResolutionWatcher();
       return;
     }
 
@@ -810,12 +867,14 @@ async function performDiscoveryScan(force = false): Promise<void> {
     if (recovered) return; // navigation triggered — stop scanning this cycle
     // ────────────────────────────────────────────────────────────────────────
 
-    const eventState = await adapter.getEventState();
-    const catalog = await adapter.discoverTicketCatalog();
+    const [eventState, catalog, summary] = await Promise.all([
+      adapter.getEventState(),
+      adapter.discoverTicketCatalog(),
+      adapter.getBookingSummary(),
+    ]);
 
     const allTickets = catalog.showings.flatMap((s) => s.ticketTypes);
     const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
-    const summary = await adapter.getBookingSummary();
 
     const activeShowing = catalog.showings[0];
     const showingInfo = activeShowing
@@ -1583,22 +1642,62 @@ if (typeof document !== 'undefined') {
   });
 }
 
-// Set up MutationObserver to re-scan when client-side React mounts tickets
+// Set up MutationObserver with coalescing and node filtering to handle mutation storms
 if (typeof MutationObserver !== 'undefined') {
+  let isMutationCoalescing = false;
+  let mutationCooldownTimer: number | null = null;
+  const MUTATION_COOLDOWN_MS = 100;
+
   const observer = new MutationObserver((mutations) => {
     if (!isExtensionContextValid()) {
       observer.disconnect();
       return;
     }
-    let hasAddedElements = false;
+
+    const curState = stateMachine.state;
+    if (
+      curState === PurchaseState.HELD ||
+      curState === PurchaseState.CONFIRMED ||
+      curState === PurchaseState.STOPPED
+    ) {
+      return;
+    }
+
+    if (isMutationCoalescing || isDiscoveryScanning) {
+      return;
+    }
+
+    let hasRelevantElements = false;
     for (const m of mutations) {
       if (m.addedNodes.length > 0) {
-        hasAddedElements = true;
-        break;
+        for (let i = 0; i < m.addedNodes.length; i++) {
+          const node = m.addedNodes[i];
+          if (node && node.nodeType === 1) {
+            const tag = (node as Element).tagName;
+            if (
+              tag !== 'SCRIPT' &&
+              tag !== 'STYLE' &&
+              tag !== 'LINK' &&
+              tag !== 'NOSCRIPT' &&
+              tag !== 'IFRAME'
+            ) {
+              hasRelevantElements = true;
+              break;
+            }
+          }
+        }
       }
+      if (hasRelevantElements) break;
     }
-    if (hasAddedElements) {
-      scheduleDiscoveryScan(100);
+
+    if (hasRelevantElements) {
+      isMutationCoalescing = true;
+      if (mutationCooldownTimer) window.clearTimeout(mutationCooldownTimer);
+      mutationCooldownTimer = window.setTimeout(() => {
+        isMutationCoalescing = false;
+        mutationCooldownTimer = null;
+        scheduleDiscoveryScan(0);
+      }, MUTATION_COOLDOWN_MS);
     }
   });
 
@@ -1840,28 +1939,39 @@ messageBus.subscribe((message: ExtensionMessage) => {
     }
 
     case 'USER_COMPLETED_INTERVENTION': {
-      logger.info('Content script received USER_COMPLETED_INTERVENTION; initiating STATE_RECHECK');
+      logger.info(
+        'Content script received USER_COMPLETED_INTERVENTION; verifying challenge status'
+      );
       try {
-        stateMachine.transition({ type: 'USER_COMPLETED_CHALLENGE' });
         const challengeResult = challengeDetector.detectChallenge();
         if (challengeResult.detected) {
-          logger.warn('Security challenge is still present in DOM after user intervention', {
+          logger.warn('Security challenge is still pending resolution in DOM', {
             type: challengeResult.type,
           });
-          stateMachine.transition({
-            type: 'STATE_UNVERIFIED',
-            reason: 'Security challenge is still present on page',
-          });
+          startChallengeResolutionWatcher();
         } else {
           logger.info(
             'Security challenge cleared; verifying safe state and returning to MONITORING'
           );
-          stateMachine.transition({
-            type: 'STATE_VERIFIED',
-            verifiedState: PurchaseState.MONITORING,
-          });
+          stopChallengeResolutionWatcher();
+          const cur = stateMachine.state;
+          if (
+            cur === PurchaseState.CAPTCHA_REQUIRED ||
+            cur === PurchaseState.HUMAN_INTERVENTION_REQUIRED ||
+            cur === PurchaseState.OTP_REQUIRED ||
+            cur === PurchaseState.SESSION_REAUTH_REQUIRED ||
+            cur === PurchaseState.UNKNOWN_SECURITY_CHALLENGE
+          ) {
+            stateMachine.transition({ type: 'USER_COMPLETED_CHALLENGE' });
+            stateMachine.transition({
+              type: 'STATE_VERIFIED',
+              verifiedState: PurchaseState.MONITORING,
+            });
+          }
           isMonitoringActive = true;
-          scheduleNextPoll(500);
+          userExplicitlyStopped = false;
+          scheduleDiscoveryScan(0);
+          scheduleNextPoll(300);
         }
       } catch (err) {
         logger.warn('Failed during USER_COMPLETED_INTERVENTION resume workflow', {

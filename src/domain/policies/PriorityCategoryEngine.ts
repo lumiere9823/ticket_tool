@@ -126,12 +126,32 @@ export class PriorityCategoryEngine {
       };
     }
 
-    // 3. Evaluate each priority category in strict order
-    for (let pIdx = 0; pIdx < normalizedPriorities.length; pIdx++) {
-      const priority = normalizedPriorities[pIdx]!;
-      const isAny = priority.toUpperCase() === 'ANY';
+    // Precompile priority list once (cleaned strings, wildcards, and token boundaries)
+    const compiledPriorities = normalizedPriorities.map((p) => {
+      const isAny = p.toUpperCase() === 'ANY';
+      const clean = this.cleanString(p);
+      const escaped = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const tokenRegex = new RegExp(`(^|\\s)${escaped}(\\s|$)`, 'i');
+      return {
+        raw: p,
+        clean,
+        isAny,
+        tokenRegex,
+      };
+    });
 
-      if (isAny) {
+    // Precompile eligible ticket strings once
+    const compiledTickets = eligibleTickets.map((t) => ({
+      ticket: t,
+      cleanName: this.cleanString(t.name),
+      cleanId: t.id ? this.cleanString(t.id) : null,
+    }));
+
+    // 3. Evaluate each priority category in strict order
+    for (let pIdx = 0; pIdx < compiledPriorities.length; pIdx++) {
+      const cp = compiledPriorities[pIdx]!;
+
+      if (cp.isAny) {
         // 'ANY' matches any eligible available ticket
         return {
           selectedTicket: eligibleTickets[0]!,
@@ -142,10 +162,8 @@ export class PriorityCategoryEngine {
       }
 
       // Step 2a: Exact normalized match (by Name or by ID)
-      const exactMatch = eligibleTickets.find(
-        (t) =>
-          this.isExactNormalizedMatch(t.name, priority) ||
-          (t.id !== null && this.isExactNormalizedMatch(t.id, priority))
+      const exactMatch = compiledTickets.find(
+        (ct) => ct.cleanName === cp.clean || (ct.cleanId !== null && ct.cleanId === cp.clean)
       );
       if (exactMatch) {
         const isFallback = pIdx > 0;
@@ -159,18 +177,16 @@ export class PriorityCategoryEngine {
           };
         }
         return {
-          selectedTicket: exactMatch,
-          reason: `Exact match for priority '${priority}' at index ${pIdx}`,
+          selectedTicket: exactMatch.ticket,
+          reason: `Exact match for priority '${cp.raw}' at index ${pIdx}`,
           matchedPriorityIndex: pIdx,
           fallbackUsed: isFallback,
         };
       }
 
       // Step 2b: Explicitly supported normalized boundary match (by Name or by ID)
-      const tokenMatch = eligibleTickets.find(
-        (t) =>
-          this.isSupportedTokenMatch(t.name, priority) ||
-          (t.id !== null && this.isExactNormalizedMatch(t.id, priority))
+      const tokenMatch = compiledTickets.find(
+        (ct) => cp.tokenRegex.test(ct.cleanName) || (ct.cleanId !== null && ct.cleanId === cp.clean)
       );
       if (tokenMatch) {
         const isFallback = pIdx > 0;
@@ -183,8 +199,8 @@ export class PriorityCategoryEngine {
           };
         }
         return {
-          selectedTicket: tokenMatch,
-          reason: `Token match for priority '${priority}' at index ${pIdx}`,
+          selectedTicket: tokenMatch.ticket,
+          reason: `Token match for priority '${cp.raw}' at index ${pIdx}`,
           matchedPriorityIndex: pIdx,
           fallbackUsed: isFallback,
         };

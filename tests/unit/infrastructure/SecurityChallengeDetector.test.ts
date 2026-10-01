@@ -132,6 +132,45 @@ describe('Security Challenge Detection & Resume Workflow (P1-4)', () => {
       expect(result.type).toBeUndefined();
     });
 
+    it('returns detected: false when Cloudflare Turnstile has been solved (token present)', () => {
+      const html = `
+        <div class="cf-turnstile">
+          <input type="hidden" name="cf-turnstile-response" value="0.29810a9f_test_solved_token_valid" />
+          <iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2" title="Cloudflare Turnstile"></iframe>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+
+      const result = detector.detectChallenge(root);
+      expect(result.detected).toBe(false);
+    });
+
+    it('returns detected: false when Google reCAPTCHA has been solved (token present)', () => {
+      const html = `
+        <div class="g-recaptcha" data-sitekey="test-key">
+          <textarea id="g-recaptcha-response" name="g-recaptcha-response">03AFcWeA7_recaptcha_solved_token_valid</textarea>
+          <iframe src="https://www.google.com/recaptcha/api2/anchor" title="reCAPTCHA"></iframe>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+
+      const result = detector.detectChallenge(root);
+      expect(result.detected).toBe(false);
+    });
+
+    it('returns detected: false when hCaptcha has been solved (token present)', () => {
+      const html = `
+        <div class="h-captcha" data-sitekey="test-key">
+          <textarea name="h-captcha-response">P0_eyJ_hcaptcha_solved_token_valid</textarea>
+          <iframe src="https://newassets.hcaptcha.com/captcha/v1/widget" title="hCaptcha checkbox"></iframe>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+
+      const result = detector.detectChallenge(root);
+      expect(result.detected).toBe(false);
+    });
+
     it('remains completely passive and never mutates the DOM', () => {
       const htmlBefore = `
         <div class="g-recaptcha" data-sitekey="123">

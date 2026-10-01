@@ -4,18 +4,45 @@ import { BookingError } from '../errors/BookingErrors';
 export type ErrorCategory =
   'BUSINESS' | 'AUTH' | 'PLATFORM' | 'NETWORK' | 'CHECKOUT' | 'PAYMENT' | 'UNKNOWN';
 
+export type StandardErrorCategory =
+  | 'TRANSIENT'
+  | 'RETRYABLE'
+  | 'NON_RETRYABLE'
+  | 'AUTH'
+  | 'BUSINESS_FAILURE'
+  | 'NETWORK_FAILURE'
+  | 'RATE_LIMIT'
+  | 'QUEUE'
+  | 'BOT_DEFENSE'
+  | 'CAPTCHA';
+
 export interface ClassifiedError {
   category: ErrorCategory;
+  standardCategory: StandardErrorCategory;
   reason: FailureReason;
   message: string;
   isRetryable: boolean;
 }
 
 export class ErrorClassifier {
+  public static isNonRetryableSafetySignal(classified: ClassifiedError): boolean {
+    return (
+      classified.standardCategory === 'RATE_LIMIT' ||
+      classified.standardCategory === 'CAPTCHA' ||
+      classified.standardCategory === 'BOT_DEFENSE' ||
+      classified.standardCategory === 'QUEUE' ||
+      classified.standardCategory === 'AUTH' ||
+      classified.reason === FailureReason.RATE_LIMITED ||
+      classified.reason === FailureReason.SESSION_EXPIRED ||
+      classified.reason === FailureReason.AUTH_FAILURE
+    );
+  }
+
   public static classify(error: unknown): ClassifiedError {
     if (!error) {
       return {
         category: 'UNKNOWN',
+        standardCategory: 'NON_RETRYABLE',
         reason: FailureReason.UNKNOWN,
         message: 'An unspecified error occurred',
         isRetryable: false,
@@ -32,6 +59,7 @@ export class ErrorClassifier {
         case 'ALL_AREAS_EXHAUSTED':
           return {
             category: 'BUSINESS',
+            standardCategory: 'BUSINESS_FAILURE',
             reason: FailureReason.SOLD_OUT,
             message: error.message,
             isRetryable: true,
@@ -42,6 +70,7 @@ export class ErrorClassifier {
         case 'PROCEED_FAILED':
           return {
             category: 'BUSINESS',
+            standardCategory: 'RETRYABLE',
             reason: FailureReason.RESERVATION_FAILED,
             message: error.message,
             isRetryable: true,
@@ -49,6 +78,7 @@ export class ErrorClassifier {
         case 'CONSENT_REQUIRED':
           return {
             category: 'BUSINESS',
+            standardCategory: 'NON_RETRYABLE',
             reason: FailureReason.INVALID_SELECTION,
             message: error.message,
             isRetryable: false,
@@ -56,6 +86,7 @@ export class ErrorClassifier {
         case 'PAYMENT_REQUIRED':
           return {
             category: 'PAYMENT',
+            standardCategory: 'NON_RETRYABLE',
             reason: FailureReason.PAYMENT_FAILED,
             message: error.message,
             isRetryable: false,
@@ -91,8 +122,39 @@ export class ErrorClassifier {
       ) {
         return {
           category: 'PLATFORM',
+          standardCategory: 'RATE_LIMIT',
           reason: FailureReason.RATE_LIMITED,
           message: message || 'Rate limit detected from platform',
+          isRetryable: false,
+        };
+      }
+
+      if (code.includes('CAPTCHA') || code.includes('CHALLENGE')) {
+        return {
+          category: 'PLATFORM',
+          standardCategory: 'CAPTCHA',
+          reason: FailureReason.RATE_LIMITED,
+          message: message || 'CAPTCHA challenge detected',
+          isRetryable: false,
+        };
+      }
+
+      if (code.includes('BOT') || code.includes('CLOUDFLARE') || code.includes('DATADOME')) {
+        return {
+          category: 'PLATFORM',
+          standardCategory: 'BOT_DEFENSE',
+          reason: FailureReason.RATE_LIMITED,
+          message: message || 'Bot defense challenge detected',
+          isRetryable: false,
+        };
+      }
+
+      if (code.includes('QUEUE') || code.includes('WAITING_ROOM')) {
+        return {
+          category: 'PLATFORM',
+          standardCategory: 'QUEUE',
+          reason: FailureReason.RATE_LIMITED,
+          message: message || 'Waiting room queue active',
           isRetryable: false,
         };
       }
@@ -105,6 +167,7 @@ export class ErrorClassifier {
       ) {
         return {
           category: 'AUTH',
+          standardCategory: 'AUTH',
           reason: FailureReason.SESSION_EXPIRED,
           message: message || 'Ticketbox session has expired or requires authentication',
           isRetryable: false,
@@ -114,16 +177,70 @@ export class ErrorClassifier {
       if (status === 403 || code === '403' || code === 'FORBIDDEN' || code === 'AUTH_FAILURE') {
         return {
           category: 'AUTH',
+          standardCategory: 'AUTH',
           reason: FailureReason.AUTH_FAILURE,
           message: message || 'Authentication failed on Ticketbox',
           isRetryable: false,
         };
       }
+
+      if (
+        status === 502 ||
+        status === 503 ||
+        status === 504 ||
+        code === 'ECONNRESET' ||
+        code === 'ETIMEDOUT' ||
+        code === 'NETWORK_ERROR'
+      ) {
+        return {
+          category: 'NETWORK',
+          standardCategory: 'NETWORK_FAILURE',
+          reason: FailureReason.UNKNOWN,
+          message: message || 'Network failure detected',
+          isRetryable: true,
+        };
+      }
     }
 
     // ── 3. Classification via explicit regex with word boundaries ────────────
+    // CAPTCHA challenge: match captcha, recaptcha, hcaptcha, turnstile
+    if (/\b(?:captcha|recaptcha|hcaptcha|turnstile|geetest)\b/i.test(message)) {
+      return {
+        category: 'PLATFORM',
+        standardCategory: 'CAPTCHA',
+        reason: FailureReason.RATE_LIMITED,
+        message: 'CAPTCHA challenge detected',
+        isRetryable: false,
+      };
+    }
+
+    // Bot defense / WAF challenges
+    if (
+      /\b(?:datadome|perimeterx|cloudflare\s+challenge|anti[-_\s]?bot|access\s+blocked\s+by\s+security)\b/i.test(
+        message
+      )
+    ) {
+      return {
+        category: 'PLATFORM',
+        standardCategory: 'BOT_DEFENSE',
+        reason: FailureReason.RATE_LIMITED,
+        message: 'Bot defense challenge detected',
+        isRetryable: false,
+      };
+    }
+
+    // Virtual queue / waiting room
+    if (/\b(?:waiting\s*room|queue-it|virtual\s*queue|hàng\s+đợi\s+chờ)\b/i.test(message)) {
+      return {
+        category: 'PLATFORM',
+        standardCategory: 'QUEUE',
+        reason: FailureReason.RATE_LIMITED,
+        message: 'Waiting room queue active',
+        isRetryable: false,
+      };
+    }
+
     // Rate-limiting: match "HTTP 429", "status: 429", "code: 429", "rate limit", or "too many requests"
-    // Never match arbitrary numbers in seat labels (e.g. "Seat A429") or prices.
     if (
       /\b(?:HTTP\s*429|status[:\s=]+429|code[:\s=]+429|429\s+too\s+many\s+requests|rate\s*limit(?:ed)?|too\s+many\s+requests)\b/i.test(
         message
@@ -131,14 +248,14 @@ export class ErrorClassifier {
     ) {
       return {
         category: 'PLATFORM',
+        standardCategory: 'RATE_LIMIT',
         reason: FailureReason.RATE_LIMITED,
         message: 'Rate limit detected from platform',
         isRetryable: false,
       };
     }
 
-    // Auth / Session expiration: match "HTTP 401", "status: 401", "session expired", etc.
-    // Never match event numbers like "Event 401".
+    // Auth / Session expiration
     if (
       /\b(?:HTTP\s*401|status[:\s=]+401|code[:\s=]+401|401\s+unauthorized|session\s+(?:has\s+)?expired|unauthorized|login\s+required)\b/i.test(
         message
@@ -146,14 +263,14 @@ export class ErrorClassifier {
     ) {
       return {
         category: 'AUTH',
+        standardCategory: 'AUTH',
         reason: FailureReason.SESSION_EXPIRED,
         message: 'Ticketbox session has expired or requires authentication',
         isRetryable: false,
       };
     }
 
-    // Auth Failure / Forbidden: match "HTTP 403", "status: 403", "forbidden", etc.
-    // Never match prices like "403000 VND".
+    // Auth Failure / Forbidden
     if (
       /\b(?:HTTP\s*403|status[:\s=]+403|code[:\s=]+403|403\s+forbidden|auth(?:entication)?\s+failed|forbidden|access\s+denied)\b/i.test(
         message
@@ -161,9 +278,25 @@ export class ErrorClassifier {
     ) {
       return {
         category: 'AUTH',
+        standardCategory: 'AUTH',
         reason: FailureReason.AUTH_FAILURE,
         message: 'Authentication failed on Ticketbox',
         isRetryable: false,
+      };
+    }
+
+    // Network failures
+    if (
+      /\b(?:fetch\s+failed|network\s+error|econnreset|etimedout|connection\s+reset|timeout)\b/i.test(
+        message
+      )
+    ) {
+      return {
+        category: 'NETWORK',
+        standardCategory: 'NETWORK_FAILURE',
+        reason: FailureReason.UNKNOWN,
+        message: 'Network failure detected',
+        isRetryable: true,
       };
     }
 
@@ -171,6 +304,7 @@ export class ErrorClassifier {
     if (/\b(?:sold\s*out|hết\s+vé|out\s+of\s+stock)\b/i.test(message)) {
       return {
         category: 'BUSINESS',
+        standardCategory: 'BUSINESS_FAILURE',
         reason: FailureReason.SOLD_OUT,
         message: 'Tickets in the selected category are sold out',
         isRetryable: true,
@@ -185,6 +319,7 @@ export class ErrorClassifier {
     ) {
       return {
         category: 'BUSINESS',
+        standardCategory: 'RETRYABLE',
         reason: FailureReason.RESERVATION_FAILED,
         message: 'Reservation rejected by platform',
         isRetryable: true,
@@ -199,6 +334,7 @@ export class ErrorClassifier {
     ) {
       return {
         category: 'PAYMENT',
+        standardCategory: 'NON_RETRYABLE',
         reason: FailureReason.PAYMENT_FAILED,
         message: 'Payment step failed',
         isRetryable: false,
@@ -207,6 +343,7 @@ export class ErrorClassifier {
 
     return {
       category: 'UNKNOWN',
+      standardCategory: 'NON_RETRYABLE',
       reason: FailureReason.UNKNOWN,
       message,
       isRetryable: false,

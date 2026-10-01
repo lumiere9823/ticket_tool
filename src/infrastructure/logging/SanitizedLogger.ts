@@ -44,35 +44,95 @@ const SENSITIVE_KEYS = new Set([
   'gender',
 ]);
 
+const SAFE_KEYS = new Set([
+  'attemptid',
+  'state',
+  'currentstate',
+  'previousstate',
+  'profileid',
+  'accountid',
+  'timestamp',
+  'event',
+  'status',
+  'level',
+  'target',
+  'category',
+  'candidateid',
+  'tierid',
+  'ticketid',
+  'price',
+  'quantity',
+  'total',
+  'count',
+  'durationms',
+  'latency',
+  'step',
+  'action',
+  'type',
+  'id',
+  'url',
+  'pathname',
+  'hostname',
+  'method',
+  'statuscode',
+  'ok',
+  'success',
+  'reason',
+  'code',
+  'mode',
+  'showingid',
+  'isretryable',
+]);
+
+const LOG_LEVEL_SEVERITY: Record<LogLevel, number> = {
+  DEBUG: 10,
+  INFO: 20,
+  WARN: 30,
+  ERROR: 40,
+};
+
 export class SanitizedLogger implements LoggerPort {
   private readonly defaultContext: {
     attemptId?: string | undefined;
     state?: string | undefined;
     profileId?: string | undefined;
+    minLogLevel?: LogLevel | undefined;
   };
   private readonly logSink?: ((entry: StructuredLogEntry) => void) | undefined;
+  private readonly minLogLevel: LogLevel;
 
   constructor(
     defaultContext: {
       attemptId?: string | undefined;
       state?: string | undefined;
       profileId?: string | undefined;
+      minLogLevel?: LogLevel | undefined;
     } = {},
     logSink?: ((entry: StructuredLogEntry) => void) | undefined
   ) {
     this.defaultContext = defaultContext;
     this.logSink = logSink;
+    this.minLogLevel = defaultContext.minLogLevel ?? 'DEBUG';
   }
 
   public debug(event: string, meta?: Record<string, unknown>): void {
+    if (LOG_LEVEL_SEVERITY[this.minLogLevel] > LOG_LEVEL_SEVERITY.DEBUG && !this.logSink) {
+      return;
+    }
     this.log('DEBUG', event, undefined, meta);
   }
 
   public info(event: string, meta?: Record<string, unknown>): void {
+    if (LOG_LEVEL_SEVERITY[this.minLogLevel] > LOG_LEVEL_SEVERITY.INFO && !this.logSink) {
+      return;
+    }
     this.log('INFO', event, undefined, meta);
   }
 
   public warn(event: string, meta?: Record<string, unknown>): void {
+    if (LOG_LEVEL_SEVERITY[this.minLogLevel] > LOG_LEVEL_SEVERITY.WARN && !this.logSink) {
+      return;
+    }
     this.log('WARN', event, undefined, meta);
   }
 
@@ -84,8 +144,12 @@ export class SanitizedLogger implements LoggerPort {
     attemptId?: string | undefined;
     state?: string | undefined;
     profileId?: string | undefined;
+    minLogLevel?: LogLevel | undefined;
   }): LoggerPort {
-    return new SanitizedLogger({ ...this.defaultContext, ...context }, this.logSink);
+    return new SanitizedLogger(
+      { ...this.defaultContext, ...context, minLogLevel: context.minLogLevel ?? this.minLogLevel },
+      this.logSink
+    );
   }
 
   private log(level: LogLevel, event: string, err?: unknown, meta?: Record<string, unknown>): void {
@@ -151,6 +215,7 @@ export class SanitizedLogger implements LoggerPort {
   }
 
   private isSensitiveKey(lowerKey: string): boolean {
+    if (SAFE_KEYS.has(lowerKey)) return false;
     if (SENSITIVE_KEYS.has(lowerKey)) return true;
     for (const s of SENSITIVE_KEYS) {
       if (lowerKey.includes(s)) return true;
@@ -159,6 +224,7 @@ export class SanitizedLogger implements LoggerPort {
   }
 
   private isSensitiveString(val: string): boolean {
+    if (val.length < 5) return false;
     const lower = val.toLowerCase();
     if (
       lower.startsWith('bearer ') ||
@@ -169,20 +235,24 @@ export class SanitizedLogger implements LoggerPort {
       return true;
     }
 
-    // P3-4 Pattern-based PII matching:
-    // 1. Email pattern
-    if (/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(val)) {
+    // P3-4 Pattern-based PII matching with fast-path guards:
+    // 1. Email pattern: only execute regex if '@' and '.' are present
+    if (
+      val.includes('@') &&
+      val.includes('.') &&
+      /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(val)
+    ) {
       return true;
     }
 
-    // 2. Vietnam Phone number pattern (+84 or 0 followed by 9 digits)
-    if (/(?:\+84|0)(?:3[2-9]|5[689]|7[06-9]|8[1-9]|9[0-9])[0-9]{7}\b/.test(val)) {
-      return true;
-    }
-
-    // 3. 9 or 12 digit National ID (CMND/CCCD)
-    if (/\b\d{9}\b|\b\d{12}\b/.test(val)) {
-      return true;
+    // 2. Vietnam Phone number / ID card: only test if string contains digits and is at least 9 chars
+    if (val.length >= 9 && /\d/.test(val)) {
+      if (/(?:\+84|0)(?:3[2-9]|5[689]|7[06-9]|8[1-9]|9[0-9])[0-9]{7}\b/.test(val)) {
+        return true;
+      }
+      if (/\b\d{9}\b|\b\d{12}\b/.test(val)) {
+        return true;
+      }
     }
 
     return false;
