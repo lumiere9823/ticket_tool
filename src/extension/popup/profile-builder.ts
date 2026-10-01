@@ -6,6 +6,7 @@ export interface ProfileInputElements {
   emailInput?: { value: string } | null;
   idCardInput?: { value: string } | null;
   agreeTermsCheckbox?: { checked: boolean } | null;
+  allowSensitiveCheckbox?: { checked: boolean } | null;
   birthYearInput?: { value: string } | null;
   genderSelect?: { value: string } | null;
   addressInput?: { value: string } | null;
@@ -14,6 +15,7 @@ export interface ProfileInputElements {
 /**
  * Builds UserProfileData from UI input elements with strict consent enforcement.
  * If agreeTermsCheckbox is unselected or missing, agreeToTerms defaults to false (fail-closed).
+ * idCard and address are strictly omitted unless allowSensitiveCheckbox is explicitly checked.
  */
 export function buildUserProfileFromInputs(
   inputs: ProfileInputElements,
@@ -34,6 +36,10 @@ export function buildUserProfileFromInputs(
         ? fallbackInputs.agreeTermsCheckbox.checked
         : false;
 
+  const allowSensitivePii = Boolean(
+    inputs.allowSensitiveCheckbox?.checked || fallbackInputs?.allowSensitiveCheckbox?.checked
+  );
+
   const birthYear =
     inputs.birthYearInput?.value.trim() ||
     fallbackInputs?.birthYearInput?.value.trim() ||
@@ -47,10 +53,12 @@ export function buildUserProfileFromInputs(
     fullName: name,
     phone,
     email,
-    idCard,
+    idCard: allowSensitivePii ? idCard : undefined,
     agreeToTerms: Boolean(agreeToTerms),
     birthYear,
     gender,
-    address,
+    address: allowSensitivePii ? address : undefined,
+    allowSensitivePii,
+    savedAt: Date.now(),
   };
 }

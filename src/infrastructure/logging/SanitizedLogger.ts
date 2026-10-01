@@ -17,6 +17,31 @@ const SENSITIVE_KEYS = new Set([
   'session',
   'sessiontoken',
   'secret',
+  // PII fields (P3-4)
+  'phone',
+  'phonenumber',
+  'telephone',
+  'mobile',
+  'tel',
+  'email',
+  'emailaddress',
+  'idcard',
+  'cccd',
+  'cmnd',
+  'nationalid',
+  'passport',
+  'address',
+  'fulladdress',
+  'street',
+  'fullname',
+  'firstname',
+  'lastname',
+  'customername',
+  'birthyear',
+  'birthday',
+  'dob',
+  'dateofbirth',
+  'gender',
 ]);
 
 export class SanitizedLogger implements LoggerPort {
@@ -135,11 +160,31 @@ export class SanitizedLogger implements LoggerPort {
 
   private isSensitiveString(val: string): boolean {
     const lower = val.toLowerCase();
-    return (
+    if (
       lower.startsWith('bearer ') ||
       lower.includes('eyjh') || // JWT header prefix
       lower.includes('connect.sid=') ||
       lower.includes('tb_session=')
-    );
+    ) {
+      return true;
+    }
+
+    // P3-4 Pattern-based PII matching:
+    // 1. Email pattern
+    if (/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(val)) {
+      return true;
+    }
+
+    // 2. Vietnam Phone number pattern (+84 or 0 followed by 9 digits)
+    if (/(?:\+84|0)(?:3[2-9]|5[689]|7[06-9]|8[1-9]|9[0-9])[0-9]{7}\b/.test(val)) {
+      return true;
+    }
+
+    // 3. 9 or 12 digit National ID (CMND/CCCD)
+    if (/\b\d{9}\b|\b\d{12}\b/.test(val)) {
+      return true;
+    }
+
+    return false;
   }
 }

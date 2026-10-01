@@ -117,6 +117,10 @@ const profileAddressInput = document.getElementById('profile-address') as HTMLIn
 const profileAgreeTermsCheckbox = document.getElementById(
   'profile-agree-terms'
 ) as HTMLInputElement;
+const profileAllowSensitive = document.getElementById(
+  'profile-allow-sensitive'
+) as HTMLInputElement | null;
+const btnClearPii = document.getElementById('btn-clear-pii') as HTMLButtonElement | null;
 
 const btnArm = document.getElementById('btn-arm') as HTMLButtonElement;
 const btnStop = document.getElementById('btn-stop') as HTMLButtonElement;
@@ -174,6 +178,12 @@ const basicProfileIdCard = document.getElementById(
 const basicProfileAgreeTerms = document.getElementById(
   'basic-profile-agree-terms'
 ) as HTMLInputElement | null;
+const basicProfileAllowSensitive = document.getElementById(
+  'basic-profile-allow-sensitive'
+) as HTMLInputElement | null;
+const btnBasicClearPii = document.getElementById(
+  'btn-basic-clear-pii'
+) as HTMLButtonElement | null;
 const btnBasicArm = document.getElementById('btn-basic-arm') as HTMLButtonElement | null;
 const btnBasicStop = document.getElementById('btn-basic-stop') as HTMLButtonElement | null;
 const btnBasicReset = document.getElementById('btn-basic-reset') as HTMLButtonElement | null;
@@ -1086,6 +1096,9 @@ function syncProfileFields(toMode: 'basic' | 'hardcore'): void {
     if (basicProfileAgreeTerms && profileAgreeTermsCheckbox) {
       basicProfileAgreeTerms.checked = profileAgreeTermsCheckbox.checked;
     }
+    if (basicProfileAllowSensitive && profileAllowSensitive) {
+      basicProfileAllowSensitive.checked = profileAllowSensitive.checked;
+    }
   } else {
     if (basicProfileName && profileNameInput && basicProfileName.value) {
       profileNameInput.value = basicProfileName.value;
@@ -1101,6 +1114,9 @@ function syncProfileFields(toMode: 'basic' | 'hardcore'): void {
     }
     if (basicProfileAgreeTerms && profileAgreeTermsCheckbox) {
       profileAgreeTermsCheckbox.checked = basicProfileAgreeTerms.checked;
+    }
+    if (basicProfileAllowSensitive && profileAllowSensitive) {
+      profileAllowSensitive.checked = basicProfileAllowSensitive.checked;
     }
   }
 }
@@ -1392,6 +1408,7 @@ async function handleBasicArm(): Promise<void> {
       emailInput: basicProfileEmail,
       idCardInput: basicProfileIdCard,
       agreeTermsCheckbox: basicProfileAgreeTerms,
+      allowSensitiveCheckbox: basicProfileAllowSensitive,
     },
     {
       nameInput: profileNameInput,
@@ -1399,6 +1416,7 @@ async function handleBasicArm(): Promise<void> {
       emailInput: profileEmailInput,
       idCardInput: profileIdCardInput,
       agreeTermsCheckbox: profileAgreeTermsCheckbox,
+      allowSensitiveCheckbox: profileAllowSensitive,
     }
   );
 
@@ -1719,16 +1737,27 @@ async function savePlan(): Promise<void> {
     scopedPurchasePlan: currentScopedPlan,
     ...(scheduledArmAt ? { scheduledArmAt } : {}),
     ...(ticketCatalogSnapshot ? { ticketCatalogSnapshot } : {}),
-    userProfile: {
-      fullName: profileNameInput.value.trim(),
-      phone: profilePhoneInput.value.trim(),
-      email: profileEmailInput.value.trim(),
-      idCard: profileIdCardInput?.value?.trim() || undefined,
-      birthYear: profileBirthYearInput?.value?.trim() || undefined,
-      gender: profileGenderSelect?.value?.trim() || undefined,
-      address: profileAddressInput?.value?.trim() || undefined,
-      agreeToTerms: profileAgreeTermsCheckbox.checked,
-    },
+    userProfile: buildUserProfileFromInputs(
+      {
+        nameInput: profileNameInput,
+        phoneInput: profilePhoneInput,
+        emailInput: profileEmailInput,
+        idCardInput: profileIdCardInput,
+        agreeTermsCheckbox: profileAgreeTermsCheckbox,
+        allowSensitiveCheckbox: profileAllowSensitive,
+        birthYearInput: profileBirthYearInput,
+        genderSelect: profileGenderSelect,
+        addressInput: profileAddressInput,
+      },
+      {
+        nameInput: basicProfileName,
+        phoneInput: basicProfilePhone,
+        emailInput: basicProfileEmail,
+        idCardInput: basicProfileIdCard,
+        agreeTermsCheckbox: basicProfileAgreeTerms,
+        allowSensitiveCheckbox: basicProfileAllowSensitive,
+      }
+    ),
     // Keep legacy preferences for backward compat with ARM_REQUESTED
     preferences: {
       categoryPriority: currentPlan.ticketRules.map((r) => r.ticketName).filter(Boolean),
@@ -2006,12 +2035,14 @@ function resetPopupToBlank(): void {
   if (profileGenderSelect) profileGenderSelect.value = '';
   if (profileAddressInput) profileAddressInput.value = '';
   if (profileAgreeTermsCheckbox) profileAgreeTermsCheckbox.checked = false;
+  if (profileAllowSensitive) profileAllowSensitive.checked = false;
 
   if (basicProfileName) basicProfileName.value = '';
   if (basicProfilePhone) basicProfilePhone.value = '';
   if (basicProfileEmail) basicProfileEmail.value = '';
   if (basicProfileIdCard) basicProfileIdCard.value = '';
   if (basicProfileAgreeTerms) basicProfileAgreeTerms.checked = false;
+  if (basicProfileAllowSensitive) basicProfileAllowSensitive.checked = false;
 
   // Scoped plan & Basic quantity
   if (scopedQuantityInput) scopedQuantityInput.value = '1';
@@ -2086,6 +2117,9 @@ async function loadInitialData(): Promise<void> {
       if (profileGenderSelect) profileGenderSelect.value = config.userProfile.gender ?? '';
       if (profileAddressInput) profileAddressInput.value = config.userProfile.address ?? '';
       profileAgreeTermsCheckbox.checked = config.userProfile.agreeToTerms ?? false;
+      if (profileAllowSensitive) {
+        profileAllowSensitive.checked = config.userProfile.allowSensitivePii ?? false;
+      }
 
       // Sync to basic profile
       if (basicProfileName) basicProfileName.value = config.userProfile.fullName ?? '';
@@ -2094,6 +2128,9 @@ async function loadInitialData(): Promise<void> {
       if (basicProfileIdCard) basicProfileIdCard.value = config.userProfile.idCard ?? '';
       if (basicProfileAgreeTerms) {
         basicProfileAgreeTerms.checked = config.userProfile.agreeToTerms ?? false;
+      }
+      if (basicProfileAllowSensitive) {
+        basicProfileAllowSensitive.checked = config.userProfile.allowSensitivePii ?? false;
       }
     }
 
@@ -2578,16 +2615,27 @@ btnArm.addEventListener('click', async () => {
     );
   }
 
-  const userProfile = {
-    fullName: profileNameInput.value.trim(),
-    phone: profilePhoneInput.value.trim(),
-    email: profileEmailInput.value.trim(),
-    idCard: profileIdCardInput?.value?.trim() || undefined,
-    birthYear: profileBirthYearInput?.value?.trim() || undefined,
-    gender: profileGenderSelect?.value?.trim() || undefined,
-    address: profileAddressInput?.value?.trim() || undefined,
-    agreeToTerms: profileAgreeTermsCheckbox.checked,
-  };
+  const userProfile = buildUserProfileFromInputs(
+    {
+      nameInput: profileNameInput,
+      phoneInput: profilePhoneInput,
+      emailInput: profileEmailInput,
+      idCardInput: profileIdCardInput,
+      agreeTermsCheckbox: profileAgreeTermsCheckbox,
+      allowSensitiveCheckbox: profileAllowSensitive,
+      birthYearInput: profileBirthYearInput,
+      genderSelect: profileGenderSelect,
+      addressInput: profileAddressInput,
+    },
+    {
+      nameInput: basicProfileName,
+      phoneInput: basicProfilePhone,
+      emailInput: basicProfileEmail,
+      idCardInput: basicProfileIdCard,
+      agreeTermsCheckbox: basicProfileAgreeTerms,
+      allowSensitiveCheckbox: basicProfileAllowSensitive,
+    }
+  );
 
   if (!userProfile.fullName || !userProfile.phone) {
     addLog(
@@ -2755,6 +2803,7 @@ eventUrlInput.addEventListener('keydown', (e) => {
   profileGenderSelect,
   profileAddressInput,
   profileAgreeTermsCheckbox,
+  profileAllowSensitive,
 ].forEach((el) => {
   if (el) {
     el.addEventListener('change', () => savePlan());
@@ -2857,7 +2906,14 @@ if (basicShowingSelect) {
 }
 
 // Auto-save basic profile fields
-[basicProfileName, basicProfilePhone, basicProfileEmail, basicProfileIdCard].forEach((el) => {
+[
+  basicProfileName,
+  basicProfilePhone,
+  basicProfileEmail,
+  basicProfileIdCard,
+  basicProfileAgreeTerms,
+  basicProfileAllowSensitive,
+].forEach((el) => {
   if (el) {
     el.addEventListener('change', () => {
       syncProfileFields('hardcore');
@@ -2865,6 +2921,39 @@ if (basicShowingSelect) {
     });
   }
 });
+
+// Clear PII Handler
+async function handleClearPii(): Promise<void> {
+  const confirmed = confirm(
+    'Bạn có chắc chắn muốn xóa toàn bộ thông tin cá nhân (Họ tên, SĐT, Email, CCCD, Địa chỉ) khỏi bộ nhớ thiết bị?'
+  );
+  if (!confirmed) return;
+
+  await storage.purgeUserProfile();
+
+  // Clear inputs in both forms
+  if (profileNameInput) profileNameInput.value = '';
+  if (profilePhoneInput) profilePhoneInput.value = '';
+  if (profileEmailInput) profileEmailInput.value = '';
+  if (profileIdCardInput) profileIdCardInput.value = '';
+  if (profileBirthYearInput) profileBirthYearInput.value = '';
+  if (profileGenderSelect) profileGenderSelect.value = '';
+  if (profileAddressInput) profileAddressInput.value = '';
+  if (profileAgreeTermsCheckbox) profileAgreeTermsCheckbox.checked = false;
+  if (profileAllowSensitive) profileAllowSensitive.checked = false;
+
+  if (basicProfileName) basicProfileName.value = '';
+  if (basicProfilePhone) basicProfilePhone.value = '';
+  if (basicProfileEmail) basicProfileEmail.value = '';
+  if (basicProfileIdCard) basicProfileIdCard.value = '';
+  if (basicProfileAgreeTerms) basicProfileAgreeTerms.checked = false;
+  if (basicProfileAllowSensitive) basicProfileAllowSensitive.checked = false;
+
+  addLog('🔒 Đã xoá toàn bộ dữ liệu cá nhân khỏi bộ nhớ cục bộ.');
+}
+
+btnClearPii?.addEventListener('click', handleClearPii);
+btnBasicClearPii?.addEventListener('click', handleClearPii);
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 

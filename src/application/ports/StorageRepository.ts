@@ -69,4 +69,5 @@ export interface StorageRepository {
   saveHumanInterventionRecord(record: Record<string, unknown>): Promise<void>;
 
   clearSession(): Promise<void>;
+  purgeUserProfile(): Promise<void>;
 }

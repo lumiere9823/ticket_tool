@@ -584,6 +584,11 @@ async function handleServiceWorkerMessage(
       });
 
       await updateExtensionBadge(journeyContext.currentState, false);
+
+      if (journeyContext.currentState === PurchaseState.CONFIRMED) {
+        logger.info('Journey reached CONFIRMED terminal state. Purging stored user profile.');
+        await storage.purgeUserProfile();
+      }
       break;
     }
 
@@ -612,6 +617,7 @@ async function handleServiceWorkerMessage(
     case 'STOP_REQUESTED': {
       mirroredJourneyContext = null;
       scheduledArmManager.cancel();
+      await storage.purgeUserProfile();
       if (
         stateMachine.state === PurchaseState.STOPPED ||
         stateMachine.state === PurchaseState.STOPPED_LIMIT_REACHED ||

@@ -35,6 +35,35 @@ const FORBIDDEN_STORAGE_KEYS = new Set([
   'secret',
 ]);
 
+const PII_STORAGE_KEYS = new Set([
+  'phone',
+  'phonenumber',
+  'telephone',
+  'mobile',
+  'tel',
+  'email',
+  'emailaddress',
+  'idcard',
+  'cccd',
+  'cmnd',
+  'nationalid',
+  'passport',
+  'address',
+  'fulladdress',
+  'street',
+  'fullname',
+  'firstname',
+  'lastname',
+  'customername',
+  'birthyear',
+  'birthday',
+  'dob',
+  'dateofbirth',
+  'gender',
+]);
+
+const PII_MAX_RETENTION_MS = 24 * 3600 * 1000; // 24 hours
+
 export class ChromeStorageRepository implements StorageRepository {
   private inMemoryMap: Map<string, unknown> = new Map();
 
@@ -46,6 +75,13 @@ export class ChromeStorageRepository implements StorageRepository {
       typeof chrome.storage !== 'undefined' &&
       typeof chrome.storage.local !== 'undefined'
     );
+  }
+
+  private isPiiString(val: string): boolean {
+    if (/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(val)) return true;
+    if (/(?:\+84|0)(?:3[2-9]|5[689]|7[06-9]|8[1-9]|9[0-9])[0-9]{7}\b/.test(val)) return true;
+    if (/\b\d{9}\b|\b\d{12}\b/.test(val)) return true;
+    return false;
   }
 
   /**
@@ -73,19 +109,82 @@ export class ChromeStorageRepository implements StorageRepository {
     return cleaned as T;
   }
 
+  /**
+   * Sanitizes state machine contexts and execution states so that both credentials
+   * AND sensitive PII (names, emails, phones, IDs) are redacted from logs and persisted state.
+   */
+  private sanitizeStateData<T>(data: T): T {
+    if (!data || typeof data !== 'object') {
+      if (typeof data === 'string' && this.isPiiString(data)) {
+        return '[REDACTED]' as unknown as T;
+      }
+      return data;
+    }
+
+    if (Array.isArray(data)) {
+      return data.map((item) => this.sanitizeStateData(item)) as unknown as T;
+    }
+
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      const lower = key.toLowerCase();
+      if (FORBIDDEN_STORAGE_KEYS.has(lower)) {
+        continue;
+      }
+      if (PII_STORAGE_KEYS.has(lower)) {
+        cleaned[key] = '[REDACTED]';
+        continue;
+      }
+      if (typeof value === 'object' && value !== null) {
+        cleaned[key] = this.sanitizeStateData(value);
+      } else if (typeof value === 'string' && this.isPiiString(value)) {
+        cleaned[key] = '[REDACTED]';
+      } else {
+        cleaned[key] = value;
+      }
+    }
+
+    return cleaned as T;
+  }
+
   public async getConfiguration(): Promise<AssistantConfiguration | null> {
+    let config: AssistantConfiguration | null = null;
     if (this.isChromeStorageAvailable()) {
-      return new Promise((resolve) => {
+      config = await new Promise<AssistantConfiguration | null>((resolve) => {
         chrome.storage.local.get(STORAGE_KEYS.CONFIG, (res) => {
           resolve((res[STORAGE_KEYS.CONFIG] as AssistantConfiguration) ?? null);
         });
       });
+    } else {
+      config = (this.inMemoryMap.get(STORAGE_KEYS.CONFIG) as AssistantConfiguration) ?? null;
     }
-    return (this.inMemoryMap.get(STORAGE_KEYS.CONFIG) as AssistantConfiguration) ?? null;
+
+    // Auto-purge userProfile if older than 24 hours
+    if (config?.userProfile) {
+      const savedAt = config.userProfile.savedAt;
+      if (savedAt && Date.now() - savedAt > PII_MAX_RETENTION_MS) {
+        delete config.userProfile;
+        await this.saveConfiguration(config);
+      }
+    }
+
+    return config;
   }
 
   public async saveConfiguration(config: AssistantConfiguration): Promise<void> {
     const safeConfig = this.sanitizeData(config);
+
+    // Enforce PII policy: idCard and address only saved if allowSensitivePii is explicitly true
+    if (safeConfig.userProfile) {
+      if (safeConfig.userProfile.savedAt === undefined) {
+        safeConfig.userProfile.savedAt = Date.now();
+      }
+      if (safeConfig.userProfile.allowSensitivePii !== true) {
+        delete safeConfig.userProfile.idCard;
+        delete safeConfig.userProfile.address;
+      }
+    }
+
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.set({ [STORAGE_KEYS.CONFIG]: safeConfig }, () => {
@@ -94,6 +193,14 @@ export class ChromeStorageRepository implements StorageRepository {
       });
     }
     this.inMemoryMap.set(STORAGE_KEYS.CONFIG, safeConfig);
+  }
+
+  public async purgeUserProfile(): Promise<void> {
+    const config = await this.getConfiguration();
+    if (config?.userProfile) {
+      delete config.userProfile;
+      await this.saveConfiguration(config);
+    }
   }
 
   public async getLastState(): Promise<StateContext | null> {
@@ -108,7 +215,7 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   public async saveCurrentState(state: StateContext): Promise<void> {
-    const safeState = this.sanitizeData(state);
+    const safeState = this.sanitizeStateData(state);
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.set({ [STORAGE_KEYS.STATE]: safeState }, () => {
@@ -131,7 +238,7 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   public async saveJourneyState(state: StateContext): Promise<void> {
-    const safeState = this.sanitizeData(state);
+    const safeState = this.sanitizeStateData(state);
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.set({ [STORAGE_KEYS.JOURNEY_STATE]: safeState }, () => {
@@ -154,7 +261,7 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   public async saveLifecycleState(state: StateContext): Promise<void> {
-    const safeState = this.sanitizeData(state);
+    const safeState = this.sanitizeStateData(state);
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.set({ [STORAGE_KEYS.LIFECYCLE_STATE]: safeState }, () => {
@@ -196,7 +303,7 @@ export class ChromeStorageRepository implements StorageRepository {
       armedTabId: state.armedTabId !== undefined ? state.armedTabId : current?.armedTabId,
       armedEventId: state.armedEventId !== undefined ? state.armedEventId : current?.armedEventId,
     };
-    const safeState = this.sanitizeData(merged);
+    const safeState = this.sanitizeStateData(merged);
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.set({ [STORAGE_KEYS.PERSISTENT_STATE]: safeState }, () => {

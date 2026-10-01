@@ -455,6 +455,7 @@ describe('ArmAssistantUseCase with Scope Guard (AC-09)', () => {
       saveProfile: vi.fn().mockResolvedValue(undefined),
       getHumanInterventionRecord: vi.fn().mockResolvedValue(null),
       saveHumanInterventionRecord: vi.fn().mockResolvedValue(undefined),
+      purgeUserProfile: vi.fn().mockResolvedValue(undefined),
       clearSession: vi.fn().mockResolvedValue(undefined),
     };
     const mockEventBus: EventBus = {

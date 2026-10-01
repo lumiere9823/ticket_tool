@@ -164,6 +164,8 @@ export interface UserProfileData {
   address?: string | undefined;
   agreeToTerms?: boolean | undefined;
   additionalFields?: Record<string, string> | undefined;
+  savedAt?: number | undefined;
+  allowSensitivePii?: boolean | undefined;
 }
 
 export interface BookingAttemptContext {
