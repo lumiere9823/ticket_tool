@@ -12,6 +12,25 @@ import { StateTransitionError } from '../errors/DomainError';
 
 export type StateChangeListener = (context: StateContext) => void;
 
+/**
+ * Immutable state transition audit event.
+ * Conforms to docs/ticketbox/04-state-machine.md Section 57.
+ */
+export interface StateTransitionAuditEvent {
+  fromState: PurchaseState;
+  event: string;
+  toState: PurchaseState;
+  timestamp: string;
+  attemptId?: string | undefined;
+  workflowId?: string | undefined;
+  accountId?: string | undefined;
+  profileId?: string | undefined;
+  eventId?: string | undefined;
+  evidence?: Record<string, unknown> | undefined;
+  failureReason?: FailureReason | undefined;
+  failureMessage?: string | undefined;
+}
+
 type TransitionResult = PurchaseState | StateContext;
 
 type TransitionHandler = (
@@ -691,6 +710,12 @@ export class PurchaseStateMachine {
   private _evidence?: Record<string, unknown> | undefined;
   private _updatedAt: string;
   private readonly listeners: Set<StateChangeListener> = new Set();
+  public static readonly MAX_AUDIT_LOG_SIZE = 100;
+  private readonly _auditLog: StateTransitionAuditEvent[] = [];
+
+  public getAuditLog(): readonly StateTransitionAuditEvent[] {
+    return this._auditLog;
+  }
 
   constructor(
     initialState: PurchaseState = PurchaseState.INIT,
@@ -1147,7 +1172,8 @@ export class PurchaseStateMachine {
         this._preInterventionState = this._state;
       }
     }
-    this._previousState = this._state;
+    const fromState = this._state;
+    this._previousState = fromState;
     this._state = to;
     this._updatedAt = new Date().toISOString();
     if (
@@ -1160,6 +1186,25 @@ export class PurchaseStateMachine {
     ) {
       this._failureMessage = message;
     }
+
+    const auditEvent: StateTransitionAuditEvent = {
+      fromState,
+      event: eventType,
+      toState: to,
+      timestamp: this._updatedAt,
+      ...(this._attemptId !== undefined ? { attemptId: this._attemptId } : {}),
+      ...(this._workflowId !== undefined ? { workflowId: this._workflowId } : {}),
+      ...(this._accountId !== undefined ? { accountId: this._accountId } : {}),
+      ...(this._profileId !== undefined ? { profileId: this._profileId } : {}),
+      ...(this._eventId !== undefined ? { eventId: this._eventId } : {}),
+      ...(this._evidence !== undefined ? { evidence: this._evidence } : {}),
+      ...(this._failureReason !== undefined ? { failureReason: this._failureReason } : {}),
+      ...(this._failureMessage !== undefined ? { failureMessage: this._failureMessage } : {}),
+    };
+    if (this._auditLog.length >= PurchaseStateMachine.MAX_AUDIT_LOG_SIZE) {
+      this._auditLog.shift();
+    }
+    this._auditLog.push(auditEvent);
 
     const context = this.getContext();
     this.notifyListeners(context);
