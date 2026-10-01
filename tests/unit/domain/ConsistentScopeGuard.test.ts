@@ -267,7 +267,9 @@ describe('P2-2: Scope Guard Consistency & Fail-Closed Behavior', () => {
 
       const result = filterByScope(multiShowingCatalog, defaultPlan);
       expect(result.validCandidates.length).toBe(0);
-      expect(result.rejectedCandidates.some((r) => r.reason.includes('outside scoped targets'))).toBe(true);
+      expect(
+        result.rejectedCandidates.some((r) => r.reason.includes('outside scoped targets'))
+      ).toBe(true);
     });
   });
 
@@ -276,7 +278,9 @@ describe('P2-2: Scope Guard Consistency & Fail-Closed Behavior', () => {
       const sm = new PurchaseStateMachine(PurchaseState.READY);
       const fakeAdapter = {
         getEventState: vi.fn().mockResolvedValue({ event: { id: 'e1', name: 'Show' } }),
-        discoverShowings: vi.fn().mockResolvedValue([{ id: 's1', name: 'Show 1', ticketTypes: [] }]),
+        discoverShowings: vi
+          .fn()
+          .mockResolvedValue([{ id: 's1', name: 'Show 1', ticketTypes: [] }]),
         discoverJourneyTickets: vi.fn().mockResolvedValue([
           {
             id: 't-vip',

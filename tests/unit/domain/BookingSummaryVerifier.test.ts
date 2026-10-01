@@ -243,7 +243,9 @@ describe('BookingSummaryVerifier', () => {
 
     const result = BookingSummaryVerifier.verify(zeroSubtotalSummary, validSelection);
     expect(result.isValid).toBe(false);
-    expect(result.errors.some((e) => e.includes('subtotal') && e.includes('greater than 0'))).toBe(true);
+    expect(result.errors.some((e) => e.includes('subtotal') && e.includes('greater than 0'))).toBe(
+      true
+    );
   });
 
   it('should fail-closed when item price is <= 0 or missing for paid tickets', () => {
@@ -257,7 +259,9 @@ describe('BookingSummaryVerifier', () => {
 
     const result = BookingSummaryVerifier.verify(zeroPriceSummary, validSelection);
     expect(result.isValid).toBe(false);
-    expect(result.errors.some((e) => e.includes('price') && e.includes('greater than 0'))).toBe(true);
+    expect(result.errors.some((e) => e.includes('price') && e.includes('greater than 0'))).toBe(
+      true
+    );
   });
 
   it('should reject when summary currency does not match expected currency', () => {
@@ -354,7 +358,9 @@ describe('BookingSummaryVerifier', () => {
 
     const result = BookingSummaryVerifier.verify(extraItemSummary, validSelection);
     expect(result.isValid).toBe(false);
-    expect(result.errors.some((e) => e.includes('Unexpected item') || e.includes('extra items'))).toBe(true);
+    expect(
+      result.errors.some((e) => e.includes('Unexpected item') || e.includes('extra items'))
+    ).toBe(true);
   });
 
   it('should reject when ticket price exceeds maxPricePerTicket ceiling', () => {

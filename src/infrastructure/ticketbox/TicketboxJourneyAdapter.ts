@@ -4132,6 +4132,14 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
                   inputEl.checked = true;
                 }
 
+                // Reset React value tracker if present
+                const tracker = (
+                  nativeEl as unknown as { _valueTracker?: { setValue?: (v: string) => void } }
+                )._valueTracker;
+                if (tracker && typeof tracker.setValue === 'function') {
+                  tracker.setValue('false');
+                }
+
                 const EventCtor = (
                   globalThis as unknown as {
                     Event?: new (type: string, init?: Record<string, unknown>) => unknown;
@@ -4185,6 +4193,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               ).Event;
               if (typeof EventCtor === 'function' && typeof selectEl.dispatchEvent === 'function') {
                 selectEl.dispatchEvent(new EventCtor('change', { bubbles: true }) as never);
+                selectEl.dispatchEvent(new EventCtor('input', { bubbles: true }) as never);
               }
               this.logger?.info('Form select dropdown set', {
                 label: item.field.label,
@@ -4193,19 +4202,43 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               });
             } else {
               // TEXT, EMAIL, PHONE, ID_CARD, BIRTH_YEAR, ADDRESS
-              const inputEl = nativeEl as HTMLInputElement;
-              if (typeof window !== 'undefined' && window.HTMLInputElement) {
-                const desc = Object.getOwnPropertyDescriptor(
-                  window.HTMLInputElement.prototype,
-                  'value'
-                );
-                if (desc && desc.set) {
-                  desc.set.call(inputEl, item.targetValue);
-                } else {
-                  inputEl.value = item.targetValue;
-                }
-              } else if ('value' in inputEl) {
-                inputEl.value = item.targetValue;
+              const isTextArea =
+                (nativeEl.tagName && nativeEl.tagName.toLowerCase() === 'textarea') ||
+                (typeof HTMLTextAreaElement !== 'undefined' &&
+                  nativeEl instanceof HTMLTextAreaElement);
+
+              const HTMLInputCtor =
+                typeof window !== 'undefined' && window.HTMLInputElement
+                  ? window.HTMLInputElement
+                  : (globalThis as unknown as { HTMLInputElement?: { prototype: unknown } })
+                      .HTMLInputElement;
+
+              const HTMLTextAreaCtor =
+                typeof window !== 'undefined' && window.HTMLTextAreaElement
+                  ? window.HTMLTextAreaElement
+                  : (globalThis as unknown as { HTMLTextAreaElement?: { prototype: unknown } })
+                      .HTMLTextAreaElement;
+
+              const protoToUse = isTextArea
+                ? HTMLTextAreaCtor?.prototype
+                : HTMLInputCtor?.prototype;
+
+              const desc = protoToUse
+                ? Object.getOwnPropertyDescriptor(protoToUse, 'value')
+                : Object.getOwnPropertyDescriptor(Object.getPrototypeOf(nativeEl), 'value');
+
+              if (desc && desc.set) {
+                desc.set.call(nativeEl, item.targetValue);
+              } else if ('value' in nativeEl) {
+                (nativeEl as HTMLInputElement).value = item.targetValue;
+              }
+
+              // Reset React value tracker if present
+              const tracker = (
+                nativeEl as unknown as { _valueTracker?: { setValue?: (v: string) => void } }
+              )._valueTracker;
+              if (tracker && typeof tracker.setValue === 'function') {
+                tracker.setValue('');
               }
 
               const EventCtor = (

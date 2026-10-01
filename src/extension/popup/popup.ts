@@ -78,9 +78,7 @@ const paramAllowPartialCheckbox = document.getElementById(
 const paramMaxPricePerTicketInput = document.getElementById(
   'param-max-price-per-ticket'
 ) as HTMLInputElement | null;
-const paramMaxTotalInput = document.getElementById(
-  'param-max-total'
-) as HTMLInputElement | null;
+const paramMaxTotalInput = document.getElementById('param-max-total') as HTMLInputElement | null;
 const persistentTargetDisplay = document.getElementById('persistent-target-display') as HTMLElement;
 const persistentAttemptsDisplay = document.getElementById(
   'persistent-attempts-display'
@@ -181,9 +179,7 @@ const basicProfileAgreeTerms = document.getElementById(
 const basicProfileAllowSensitive = document.getElementById(
   'basic-profile-allow-sensitive'
 ) as HTMLInputElement | null;
-const btnBasicClearPii = document.getElementById(
-  'btn-basic-clear-pii'
-) as HTMLButtonElement | null;
+const btnBasicClearPii = document.getElementById('btn-basic-clear-pii') as HTMLButtonElement | null;
 const btnBasicArm = document.getElementById('btn-basic-arm') as HTMLButtonElement | null;
 const btnBasicStop = document.getElementById('btn-basic-stop') as HTMLButtonElement | null;
 const btnBasicReset = document.getElementById('btn-basic-reset') as HTMLButtonElement | null;
@@ -1316,139 +1312,139 @@ async function handleBasicArm(): Promise<void> {
       btnStop.click();
       return;
     }
-  const url = eventUrlInput.value.trim();
-  if (!url) {
-    alert('Vui lòng nhập hoặc mở URL sự kiện Ticketbox!');
-    return;
-  }
-
-  // Get checked tickets from basicTicketChecklist
-  const checkedItems = basicTicketChecklist?.querySelectorAll('.basic-ticket-item') ?? [];
-  const selectedTicketIds: string[] = [];
-  checkedItems.forEach((item) => {
-    const cb = item.querySelector('.basic-ticket-cb') as HTMLInputElement | null;
-    if (cb && cb.checked) {
-      const name = (item as HTMLElement).dataset.ticketName;
-      const id = (item as HTMLElement).dataset.ticketId;
-      if (id && !selectedTicketIds.includes(id)) selectedTicketIds.push(id);
-      if (name && !selectedTicketIds.includes(name)) selectedTicketIds.push(name);
-    }
-  });
-
-  if (selectedTicketIds.length === 0) {
-    alert(
-      'ARM bị chặn: Bạn chưa tick chọn hạng vé nào!\n\nVui lòng tick chọn ít nhất một hạng vé muốn mua trong danh sách.'
-    );
-    return;
-  }
-
-  const quantity = Math.max(1, parseInt(basicQuantityInput?.value || '1', 10) || 1);
-  const showingId =
-    basicShowingSelect?.value ||
-    showingSelect?.value ||
-    currentPlan.showingId ||
-    currentCatalog.showings?.[0]?.id ||
-    'default';
-
-  // Construct standard ScopedPurchasePlan
-  const plan: ScopedPurchasePlan = {
-    eventId: currentCatalog.eventId || 'event',
-    targets: [
-      {
-        showingId,
-        ticketTypeIds: selectedTicketIds,
-        rank: 1,
-      },
-    ],
-    quantity,
-    strategy: 'BY_TARGET_ORDER',
-    allowPartialQuantity: false,
-    persistence: {
-      maxDurationMinutes: 120,
-      maxAttempts: 1000,
-      pollIntervalMs: 1800,
-      jitterRatio: 0.2,
-    },
-  };
-
-  // Check scheduled time
-  const scheduledVal = basicScheduledArmTime?.value;
-  let isScheduled = false;
-  if (scheduledVal) {
-    const startMs = new Date(scheduledVal).getTime();
-    if (startMs > Date.now()) {
-      isScheduled = true;
-      activeScheduledTargetMs = startMs;
-      const startAtIso = new Date(startMs).toISOString();
-      plan.persistence.startAt = startAtIso;
-      if (basicScheduledStatus && basicScheduledTimeDisplay) {
-        basicScheduledStatus.style.display = 'flex';
-        basicScheduledTimeDisplay.textContent = new Date(startMs).toLocaleString('vi-VN');
-        if (basicScheduledCountdown) {
-          const remainingMs = Math.max(0, startMs - Date.now());
-          basicScheduledCountdown.textContent = `(Còn lại ${formatCountdown(remainingMs)})`;
-          basicScheduledCountdown.style.display = 'inline-flex';
-        }
-      }
-    } else {
-      alert('Thời gian hẹn giờ mở bán phải ở thời điểm tương lai!');
+    const url = eventUrlInput.value.trim();
+    if (!url) {
+      alert('Vui lòng nhập hoặc mở URL sự kiện Ticketbox!');
       return;
     }
-  }
 
-  currentScopedPlan = plan;
-  // Sync profile
-  syncProfileFields('hardcore');
-  await savePlan();
+    // Get checked tickets from basicTicketChecklist
+    const checkedItems = basicTicketChecklist?.querySelectorAll('.basic-ticket-item') ?? [];
+    const selectedTicketIds: string[] = [];
+    checkedItems.forEach((item) => {
+      const cb = item.querySelector('.basic-ticket-cb') as HTMLInputElement | null;
+      if (cb && cb.checked) {
+        const name = (item as HTMLElement).dataset.ticketName;
+        const id = (item as HTMLElement).dataset.ticketId;
+        if (id && !selectedTicketIds.includes(id)) selectedTicketIds.push(id);
+        if (name && !selectedTicketIds.includes(name)) selectedTicketIds.push(name);
+      }
+    });
 
-  const userProfile = buildUserProfileFromInputs(
-    {
-      nameInput: basicProfileName,
-      phoneInput: basicProfilePhone,
-      emailInput: basicProfileEmail,
-      idCardInput: basicProfileIdCard,
-      agreeTermsCheckbox: basicProfileAgreeTerms,
-      allowSensitiveCheckbox: basicProfileAllowSensitive,
-    },
-    {
-      nameInput: profileNameInput,
-      phoneInput: profilePhoneInput,
-      emailInput: profileEmailInput,
-      idCardInput: profileIdCardInput,
-      agreeTermsCheckbox: profileAgreeTermsCheckbox,
-      allowSensitiveCheckbox: profileAllowSensitive,
+    if (selectedTicketIds.length === 0) {
+      alert(
+        'ARM bị chặn: Bạn chưa tick chọn hạng vé nào!\n\nVui lòng tick chọn ít nhất một hạng vé muốn mua trong danh sách.'
+      );
+      return;
     }
-  );
 
-  if (isScheduled) {
-    addLog(
-      `⏰ [CƠ BẢN] Đã hẹn giờ ARM vào: ${new Date(plan.persistence.startAt!).toLocaleString('vi-VN')}. Đến giờ sẽ tự động mở tab săn vé!`
+    const quantity = Math.max(1, parseInt(basicQuantityInput?.value || '1', 10) || 1);
+    const showingId =
+      basicShowingSelect?.value ||
+      showingSelect?.value ||
+      currentPlan.showingId ||
+      currentCatalog.showings?.[0]?.id ||
+      'default';
+
+    // Construct standard ScopedPurchasePlan
+    const plan: ScopedPurchasePlan = {
+      eventId: currentCatalog.eventId || 'event',
+      targets: [
+        {
+          showingId,
+          ticketTypeIds: selectedTicketIds,
+          rank: 1,
+        },
+      ],
+      quantity,
+      strategy: 'BY_TARGET_ORDER',
+      allowPartialQuantity: false,
+      persistence: {
+        maxDurationMinutes: 120,
+        maxAttempts: 1000,
+        pollIntervalMs: 1800,
+        jitterRatio: 0.2,
+      },
+    };
+
+    // Check scheduled time
+    const scheduledVal = basicScheduledArmTime?.value;
+    let isScheduled = false;
+    if (scheduledVal) {
+      const startMs = new Date(scheduledVal).getTime();
+      if (startMs > Date.now()) {
+        isScheduled = true;
+        activeScheduledTargetMs = startMs;
+        const startAtIso = new Date(startMs).toISOString();
+        plan.persistence.startAt = startAtIso;
+        if (basicScheduledStatus && basicScheduledTimeDisplay) {
+          basicScheduledStatus.style.display = 'flex';
+          basicScheduledTimeDisplay.textContent = new Date(startMs).toLocaleString('vi-VN');
+          if (basicScheduledCountdown) {
+            const remainingMs = Math.max(0, startMs - Date.now());
+            basicScheduledCountdown.textContent = `(Còn lại ${formatCountdown(remainingMs)})`;
+            basicScheduledCountdown.style.display = 'inline-flex';
+          }
+        }
+      } else {
+        alert('Thời gian hẹn giờ mở bán phải ở thời điểm tương lai!');
+        return;
+      }
+    }
+
+    currentScopedPlan = plan;
+    // Sync profile
+    syncProfileFields('hardcore');
+    await savePlan();
+
+    const userProfile = buildUserProfileFromInputs(
+      {
+        nameInput: basicProfileName,
+        phoneInput: basicProfilePhone,
+        emailInput: basicProfileEmail,
+        idCardInput: basicProfileIdCard,
+        agreeTermsCheckbox: basicProfileAgreeTerms,
+        allowSensitiveCheckbox: basicProfileAllowSensitive,
+      },
+      {
+        nameInput: profileNameInput,
+        phoneInput: profilePhoneInput,
+        emailInput: profileEmailInput,
+        idCardInput: profileIdCardInput,
+        agreeTermsCheckbox: profileAgreeTermsCheckbox,
+        allowSensitiveCheckbox: profileAllowSensitive,
+      }
     );
-    alert(
-      `Đã đặt lịch hẹn ARM thành công!\n\n• Thời gian: ${new Date(plan.persistence.startAt!).toLocaleString('vi-VN')}\n• Hạng vé: ${selectedTicketIds.join(', ')}\n• Số lượng: ${quantity} vé.\n\nĐến giờ mở bán, trợ lý sẽ tự động đưa tab Ticketbox lên và săn vé!`
-    );
-  } else {
-    updateStateBadge(PurchaseState.ARMED);
-    addLog(`🚀 [CƠ BẢN] Đã ARM săn vé: ${selectedTicketIds.join(', ')} (${quantity} vé)...`);
-  }
 
-  const targetTab = await findTicketboxTab();
-  const targetTabId = targetTab?.id;
-  const eventId = plan.eventId || extractEventIdFromUrl(url) || undefined;
+    if (isScheduled) {
+      addLog(
+        `⏰ [CƠ BẢN] Đã hẹn giờ ARM vào: ${new Date(plan.persistence.startAt!).toLocaleString('vi-VN')}. Đến giờ sẽ tự động mở tab săn vé!`
+      );
+      alert(
+        `Đã đặt lịch hẹn ARM thành công!\n\n• Thời gian: ${new Date(plan.persistence.startAt!).toLocaleString('vi-VN')}\n• Hạng vé: ${selectedTicketIds.join(', ')}\n• Số lượng: ${quantity} vé.\n\nĐến giờ mở bán, trợ lý sẽ tự động đưa tab Ticketbox lên và săn vé!`
+      );
+    } else {
+      updateStateBadge(PurchaseState.ARMED);
+      addLog(`🚀 [CƠ BẢN] Đã ARM săn vé: ${selectedTicketIds.join(', ')} (${quantity} vé)...`);
+    }
 
-  await messageBus.publish({
-    type: 'ARM_REQUESTED',
-    timestamp: new Date().toISOString(),
-    eventUrl: url,
-    categoryPriority: selectedTicketIds,
-    quantity,
-    allowFallback: false,
-    scopedPurchasePlan: plan,
-    userProfile,
-    targetTabId,
-    eventId,
-    targetEventId: eventId,
-  });
+    const targetTab = await findTicketboxTab();
+    const targetTabId = targetTab?.id;
+    const eventId = plan.eventId || extractEventIdFromUrl(url) || undefined;
+
+    await messageBus.publish({
+      type: 'ARM_REQUESTED',
+      timestamp: new Date().toISOString(),
+      eventUrl: url,
+      categoryPriority: selectedTicketIds,
+      quantity,
+      allowFallback: false,
+      scopedPurchasePlan: plan,
+      userProfile,
+      targetTabId,
+      eventId,
+      targetEventId: eventId,
+    });
   } finally {
     isArmingInProgress = false;
   }
@@ -2192,9 +2188,7 @@ async function loadInitialData(): Promise<void> {
             currentScopedPlan.persistence.maxPricePerTicket ?? 0
           );
         if (paramMaxTotalInput)
-          paramMaxTotalInput.value = String(
-            currentScopedPlan.persistence.maxTotal ?? 0
-          );
+          paramMaxTotalInput.value = String(currentScopedPlan.persistence.maxTotal ?? 0);
 
         // Restore scheduled ARM input and status if a future startAt is saved
         const startAt = currentScopedPlan.persistence.startAt || config.scheduledArmAt;
@@ -2501,168 +2495,168 @@ btnArm.addEventListener('click', async () => {
       btnStop.click();
       return;
     }
-  const url = eventUrlInput.value.trim();
-  if (!url) {
-    alert('Please enter a target Ticketbox event URL');
-    return;
-  }
+    const url = eventUrlInput.value.trim();
+    if (!url) {
+      alert('Please enter a target Ticketbox event URL');
+      return;
+    }
 
-  // 1. Rebuild plans
-  rebuildPlanFromCards();
-  let scopedPlan = rebuildScopedPlanFromMatrix();
+    // 1. Rebuild plans
+    rebuildPlanFromCards();
+    let scopedPlan = rebuildScopedPlanFromMatrix();
 
-  // 2. Validate Scoped Purchase Plan (BR-S01, BR-S02, BR-S03, BR-S07, AC-09, AC-11)
-  const validation = ScopedPurchasePlanValidator.validate(
-    scopedPlan,
-    currentCatalog,
-    profileNameInput.value.trim() ? 1 : undefined
-  );
+    // 2. Validate Scoped Purchase Plan (BR-S01, BR-S02, BR-S03, BR-S07, AC-09, AC-11)
+    const validation = ScopedPurchasePlanValidator.validate(
+      scopedPlan,
+      currentCatalog,
+      profileNameInput.value.trim() ? 1 : undefined
+    );
 
-  // BR-S02 & AC-09: Whitelist rỗng thì chặn ARM kèm thông báo
-  if (
-    !scopedPlan.targets ||
-    scopedPlan.targets.length === 0 ||
-    scopedPlan.targets.every((t) => t.ticketTypeIds.length === 0)
-  ) {
-    const isScheduled = Boolean(scheduledArmTimeInput?.value);
-    const hasCatalog =
-      currentCatalog.tickets.length > 0 ||
-      (currentCatalog.showings ?? []).some(
-        (s) =>
-          'tickets' in s &&
-          Array.isArray((s as { tickets?: unknown[] }).tickets) &&
-          ((s as { tickets?: unknown[] }).tickets?.length ?? 0) > 0
+    // BR-S02 & AC-09: Whitelist rỗng thì chặn ARM kèm thông báo
+    if (
+      !scopedPlan.targets ||
+      scopedPlan.targets.length === 0 ||
+      scopedPlan.targets.every((t) => t.ticketTypeIds.length === 0)
+    ) {
+      const isScheduled = Boolean(scheduledArmTimeInput?.value);
+      const hasCatalog =
+        currentCatalog.tickets.length > 0 ||
+        (currentCatalog.showings ?? []).some(
+          (s) =>
+            'tickets' in s &&
+            Array.isArray((s as { tickets?: unknown[] }).tickets) &&
+            ((s as { tickets?: unknown[] }).tickets?.length ?? 0) > 0
+        );
+
+      let errorMsg: string;
+      if (!hasCatalog) {
+        // Matrix trống vì chưa quét trang
+        errorMsg = isScheduled
+          ? 'ARM bị chặn: Chưa quét được danh mục vé!\n\n' +
+            'Để hẹn giờ ARM, bạn cần làm trước:\n' +
+            '1. Mở tab Ticketbox event trên trình duyệt\n' +
+            '2. Nhấn nút ↺ (Refresh catalog) trong popup\n' +
+            '3. Tick ✅ hạng vé muốn mua trong ma trận\n' +
+            '4. Chọn giờ hẹn → nhấn ARM'
+          : 'ARM bị chặn: Chưa quét được danh mục vé!\n\n' +
+            '1. Mở tab Ticketbox event trên trình duyệt\n' +
+            '2. Nhấn nút ↺ (Refresh catalog) trong popup\n' +
+            '3. Tick ✅ hạng vé muốn mua → ARM';
+      } else {
+        // Catalog có nhưng chưa tick
+        errorMsg =
+          'ARM bị chặn: Whitelist rỗng!\n\nDanh mục vé đã được quét nhưng bạn chưa tick ✅ hạng vé nào trong bảng "SĂN VÉ CÓ PHẠM VI (SCOPED MATRIX)".\n\nVui lòng tick ít nhất một hạng vé trước khi ARM.';
+      }
+
+      if (scopedValidationError) {
+        scopedValidationError.style.display = 'block';
+        scopedValidationError.textContent = errorMsg.replace(/\n/g, '\n');
+      }
+      alert(errorMsg);
+      return;
+    }
+
+    if (!validation.valid) {
+      if (scopedValidationError) {
+        scopedValidationError.style.display = 'block';
+        scopedValidationError.textContent = `❌ Không thể ARM do vi phạm quy tắc:\n• ${validation.errors.join('\n• ')}`;
+      }
+      alert(`ARM bị chặn do lỗi cấu hình:\n• ${validation.errors.join('\n• ')}`);
+      return;
+    }
+
+    // 3. Summary confirmation check
+    if (!summaryConfirmCheckbox.checked) {
+      if (scopedSummaryBox) {
+        scopedSummaryBox.style.display = 'flex';
+        scopedSummaryBox.scrollIntoView({ behavior: 'smooth' });
+      }
+      alert(
+        'Vui lòng đọc bản tóm tắt "Sẽ chỉ mua / Sẽ KHÔNG mua" và tick chọn xác nhận trước khi ARM.'
       );
+      return;
+    }
 
-    let errorMsg: string;
-    if (!hasCatalog) {
-      // Matrix trống vì chưa quét trang
-      errorMsg = isScheduled
-        ? 'ARM bị chặn: Chưa quét được danh mục vé!\n\n' +
-          'Để hẹn giờ ARM, bạn cần làm trước:\n' +
-          '1. Mở tab Ticketbox event trên trình duyệt\n' +
-          '2. Nhấn nút ↺ (Refresh catalog) trong popup\n' +
-          '3. Tick ✅ hạng vé muốn mua trong ma trận\n' +
-          '4. Chọn giờ hẹn → nhấn ARM'
-        : 'ARM bị chặn: Chưa quét được danh mục vé!\n\n' +
-          '1. Mở tab Ticketbox event trên trình duyệt\n' +
-          '2. Nhấn nút ↺ (Refresh catalog) trong popup\n' +
-          '3. Tick ✅ hạng vé muốn mua → ARM';
+    // Inject startAt from the datetime picker into scopedPlan persistence if set in the future
+    const scheduledArmValue = scheduledArmTimeInput?.value;
+    let isScheduled = false;
+    if (scheduledArmValue) {
+      const startAtIso = new Date(scheduledArmValue).toISOString();
+      const startAtMs = new Date(startAtIso).getTime();
+      if (startAtMs > Date.now()) {
+        isScheduled = true;
+        scopedPlan = {
+          ...scopedPlan,
+          persistence: {
+            ...scopedPlan.persistence,
+            startAt: startAtIso,
+          },
+        };
+        showScheduledArmStatus(startAtIso);
+      }
+    }
+
+    await savePlan();
+
+    if (isScheduled) {
+      addLog(
+        `⏰ Đã hẹn giờ ARM vào: ${new Date(scopedPlan.persistence.startAt!).toLocaleString('vi-VN')}. Trợ lý sẽ tự động chạy khi đến giờ!`
+      );
     } else {
-      // Catalog có nhưng chưa tick
-      errorMsg =
-        'ARM bị chặn: Whitelist rỗng!\n\nDanh mục vé đã được quét nhưng bạn chưa tick ✅ hạng vé nào trong bảng "SĂN VÉ CÓ PHẠM VI (SCOPED MATRIX)".\n\nVui lòng tick ít nhất một hạng vé trước khi ARM.';
+      updateStateBadge(PurchaseState.ARMED);
+      addLog(
+        'Đã kích hoạt trợ lý với Scope Guard cứng (ARMED)... Đang chuẩn bị săn vé theo phạm vi.'
+      );
     }
 
-    if (scopedValidationError) {
-      scopedValidationError.style.display = 'block';
-      scopedValidationError.textContent = errorMsg.replace(/\n/g, '\n');
-    }
-    alert(errorMsg);
-    return;
-  }
-
-  if (!validation.valid) {
-    if (scopedValidationError) {
-      scopedValidationError.style.display = 'block';
-      scopedValidationError.textContent = `❌ Không thể ARM do vi phạm quy tắc:\n• ${validation.errors.join('\n• ')}`;
-    }
-    alert(`ARM bị chặn do lỗi cấu hình:\n• ${validation.errors.join('\n• ')}`);
-    return;
-  }
-
-  // 3. Summary confirmation check
-  if (!summaryConfirmCheckbox.checked) {
-    if (scopedSummaryBox) {
-      scopedSummaryBox.style.display = 'flex';
-      scopedSummaryBox.scrollIntoView({ behavior: 'smooth' });
-    }
-    alert(
-      'Vui lòng đọc bản tóm tắt "Sẽ chỉ mua / Sẽ KHÔNG mua" và tick chọn xác nhận trước khi ARM.'
+    const userProfile = buildUserProfileFromInputs(
+      {
+        nameInput: profileNameInput,
+        phoneInput: profilePhoneInput,
+        emailInput: profileEmailInput,
+        idCardInput: profileIdCardInput,
+        agreeTermsCheckbox: profileAgreeTermsCheckbox,
+        allowSensitiveCheckbox: profileAllowSensitive,
+        birthYearInput: profileBirthYearInput,
+        genderSelect: profileGenderSelect,
+        addressInput: profileAddressInput,
+      },
+      {
+        nameInput: basicProfileName,
+        phoneInput: basicProfilePhone,
+        emailInput: basicProfileEmail,
+        idCardInput: basicProfileIdCard,
+        agreeTermsCheckbox: basicProfileAgreeTerms,
+        allowSensitiveCheckbox: basicProfileAllowSensitive,
+      }
     );
-    return;
-  }
 
-  // Inject startAt from the datetime picker into scopedPlan persistence if set in the future
-  const scheduledArmValue = scheduledArmTimeInput?.value;
-  let isScheduled = false;
-  if (scheduledArmValue) {
-    const startAtIso = new Date(scheduledArmValue).toISOString();
-    const startAtMs = new Date(startAtIso).getTime();
-    if (startAtMs > Date.now()) {
-      isScheduled = true;
-      scopedPlan = {
-        ...scopedPlan,
-        persistence: {
-          ...scopedPlan.persistence,
-          startAt: startAtIso,
-        },
-      };
-      showScheduledArmStatus(startAtIso);
+    if (!userProfile.fullName || !userProfile.phone) {
+      addLog(
+        'Lưu ý: Chưa điền Họ tên hoặc SĐT trong "User Profile". Nếu sự kiện có bảng câu hỏi, hệ thống sẽ dừng chờ bạn điền.'
+      );
     }
-  }
 
-  await savePlan();
+    // Priority categories from scoped targets
+    const categoryPriority = scopedPlan.targets.flatMap((t) => t.ticketTypeIds);
 
-  if (isScheduled) {
-    addLog(
-      `⏰ Đã hẹn giờ ARM vào: ${new Date(scopedPlan.persistence.startAt!).toLocaleString('vi-VN')}. Trợ lý sẽ tự động chạy khi đến giờ!`
-    );
-  } else {
-    updateStateBadge(PurchaseState.ARMED);
-    addLog(
-      'Đã kích hoạt trợ lý với Scope Guard cứng (ARMED)... Đang chuẩn bị săn vé theo phạm vi.'
-    );
-  }
+    const targetTab = await findTicketboxTab();
+    const targetTabId = targetTab?.id;
+    const eventId = scopedPlan.eventId || extractEventIdFromUrl(url) || undefined;
 
-  const userProfile = buildUserProfileFromInputs(
-    {
-      nameInput: profileNameInput,
-      phoneInput: profilePhoneInput,
-      emailInput: profileEmailInput,
-      idCardInput: profileIdCardInput,
-      agreeTermsCheckbox: profileAgreeTermsCheckbox,
-      allowSensitiveCheckbox: profileAllowSensitive,
-      birthYearInput: profileBirthYearInput,
-      genderSelect: profileGenderSelect,
-      addressInput: profileAddressInput,
-    },
-    {
-      nameInput: basicProfileName,
-      phoneInput: basicProfilePhone,
-      emailInput: basicProfileEmail,
-      idCardInput: basicProfileIdCard,
-      agreeTermsCheckbox: basicProfileAgreeTerms,
-      allowSensitiveCheckbox: basicProfileAllowSensitive,
-    }
-  );
-
-  if (!userProfile.fullName || !userProfile.phone) {
-    addLog(
-      'Lưu ý: Chưa điền Họ tên hoặc SĐT trong "User Profile". Nếu sự kiện có bảng câu hỏi, hệ thống sẽ dừng chờ bạn điền.'
-    );
-  }
-
-  // Priority categories from scoped targets
-  const categoryPriority = scopedPlan.targets.flatMap((t) => t.ticketTypeIds);
-
-  const targetTab = await findTicketboxTab();
-  const targetTabId = targetTab?.id;
-  const eventId = scopedPlan.eventId || extractEventIdFromUrl(url) || undefined;
-
-  await messageBus.publish({
-    type: 'ARM_REQUESTED',
-    timestamp: new Date().toISOString(),
-    eventUrl: url,
-    categoryPriority,
-    quantity: scopedPlan.quantity,
-    allowFallback: false, // In scoped persistent mode, fallback outside scope is forbidden
-    scopedPurchasePlan: scopedPlan,
-    userProfile,
-    targetTabId,
-    eventId,
-    targetEventId: eventId,
-  });
+    await messageBus.publish({
+      type: 'ARM_REQUESTED',
+      timestamp: new Date().toISOString(),
+      eventUrl: url,
+      categoryPriority,
+      quantity: scopedPlan.quantity,
+      allowFallback: false, // In scoped persistent mode, fallback outside scope is forbidden
+      scopedPurchasePlan: scopedPlan,
+      userProfile,
+      targetTabId,
+      eventId,
+      targetEventId: eventId,
+    });
   } finally {
     isArmingInProgress = false;
   }

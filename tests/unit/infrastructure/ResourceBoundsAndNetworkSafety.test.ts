@@ -40,9 +40,9 @@ describe('P3-5: Resource Bounds and Network Safety', () => {
     });
 
     it('throws error and blocks network request if host is outside Ticketbox domain', async () => {
-      await expect(
-        safeTicketboxFetch('https://attacker.com/steal-data')
-      ).rejects.toThrow(/outside allowed Ticketbox domain/);
+      await expect(safeTicketboxFetch('https://attacker.com/steal-data')).rejects.toThrow(
+        /outside allowed Ticketbox domain/
+      );
 
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });

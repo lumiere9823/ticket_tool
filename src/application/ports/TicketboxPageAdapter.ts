@@ -108,6 +108,7 @@ export interface TicketboxPageAdapter {
     isSeatUnavailable: boolean;
     seatLabel?: string | undefined;
   }>;
+  getPageUrl?(): string;
   blacklistSeat?(seatIdOrLabel: string): void;
   deselectSeat?(seatLabel?: string): Promise<boolean>;
   isSeatBlacklisted?(seatIdOrLabel?: string | null): boolean;

@@ -65,9 +65,7 @@ export class RetryPolicy {
 
   public getBackoffDelayMs(applyJitter = false, jitterRatio = 0.2): number {
     const exponent = Math.max(0, this.currentAttempts - 1);
-    const rawDelay =
-      this.config.initialDelayMs *
-      Math.pow(this.config.backoffMultiplier, exponent);
+    const rawDelay = this.config.initialDelayMs * Math.pow(this.config.backoffMultiplier, exponent);
     const boundedDelay = Math.max(
       this.config.initialDelayMs,
       Math.min(rawDelay, this.config.maxDelayMs)

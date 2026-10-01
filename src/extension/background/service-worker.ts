@@ -242,10 +242,8 @@ async function checkHeartbeatLimits(): Promise<void> {
     const policy = config?.scopedPurchasePlan?.persistence;
     const planLimits = config?.purchasePlan?.limits;
 
-    const maxDurationMinutes =
-      policy?.maxDurationMinutes ?? planLimits?.maxDurationMinutes ?? 120;
-    const maxAttempts =
-      policy?.maxAttempts ?? planLimits?.maxAttempts ?? 1000;
+    const maxDurationMinutes = policy?.maxDurationMinutes ?? planLimits?.maxDurationMinutes ?? 120;
+    const maxAttempts = policy?.maxAttempts ?? planLimits?.maxAttempts ?? 1000;
     const stopAt = policy?.stopAt;
 
     const startedAtMs = new Date(persistentState.startedAt).getTime();

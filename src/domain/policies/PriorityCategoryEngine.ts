@@ -283,4 +283,3 @@ export class PriorityCategoryEngine {
     return false;
   }
 }
-

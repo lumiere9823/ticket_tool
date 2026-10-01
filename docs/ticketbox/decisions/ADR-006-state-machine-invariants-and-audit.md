@@ -38,9 +38,11 @@ Tài liệu thiết kế kiến trúc `docs/ticketbox/04-state-machine.md` quy �
 ## Consequences
 
 ### Positive
+
 - Hệ thống có khả năng truy vết hoàn chỉnh (full observability) về từng bước chuyển đổi trạng thái trong suốt phiên làm việc.
 - Ranh giới thanh toán và giữ chỗ được bảo vệ đa tầng (State Machine level + Action Guard level).
 - Không có rủi ro máy trạng thái bị kẹt ở trạng thái bất hợp lệ hoặc bị lợi dụng để tự động thanh toán.
 
 ### Negative
+
 - Bộ nhớ duy trì một mảng nhỏ chứa tối đa 100 sự kiện kiểm toán gần nhất trong suốt vòng đời của `PurchaseStateMachine`.

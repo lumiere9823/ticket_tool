@@ -136,11 +136,10 @@ export function matchTicketToScope(
   for (const target of matchingTargets) {
     const matchedById = Boolean(
       ticket.id &&
-        target.ticketTypeIds.some(
-          (id) =>
-            id === ticket.id || id.toLowerCase().trim() === ticket.id!.toLowerCase().trim()
-        ) &&
-        ticket.id !== ticket.name
+      target.ticketTypeIds.some(
+        (id) => id === ticket.id || id.toLowerCase().trim() === ticket.id!.toLowerCase().trim()
+      ) &&
+      ticket.id !== ticket.name
     );
 
     if (matchedById) {

@@ -491,8 +491,14 @@ describe('Ticketbox Parsers', () => {
       const root = parseHtmlToDOMElementLike(html);
       const payBtn = root.querySelector('#btn-pay');
       const continueBtn = root.querySelector('#btn-continue');
-      if (payBtn) payBtn.click = () => { payClicked = true; };
-      if (continueBtn) continueBtn.click = () => { continueClicked = true; };
+      if (payBtn)
+        payBtn.click = () => {
+          payClicked = true;
+        };
+      if (continueBtn)
+        continueBtn.click = () => {
+          continueClicked = true;
+        };
 
       const adapter = new TicketboxJourneyAdapter(undefined, root);
       adapter.setCustomUrl('https://ticketbox.vn/event/abc/question-form');

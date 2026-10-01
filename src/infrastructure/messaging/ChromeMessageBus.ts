@@ -157,7 +157,11 @@ export class ChromeMessageBus implements EventBus {
     if (this.isChromeRuntimeAvailable() && !this.chromeListenerAttached) {
       this.chromeListenerAttached = true;
       chrome.runtime.onMessage.addListener(
-        (message: unknown, sender?: chrome.runtime.MessageSender, sendResponse?: (res?: unknown) => void) => {
+        (
+          message: unknown,
+          sender?: chrome.runtime.MessageSender,
+          sendResponse?: (res?: unknown) => void
+        ) => {
           const senderInfo: MessageSenderInfo | undefined = sender
             ? {
                 tabId: sender.tab?.id,
@@ -179,12 +183,18 @@ export class ChromeMessageBus implements EventBus {
 
           if (this.isValidMessage(message)) {
             // Reject control messages from unauthorized senders (e.g. content scripts)
-            if (this.isControlMessage(message.type) && !this.isAuthorizedControlSender(senderInfo)) {
-              this.logger?.warn('ChromeMessageBus rejected control message from unauthorized sender', {
-                type: message.type,
-                senderTabId: senderInfo?.tabId,
-                senderUrl: senderInfo?.url,
-              });
+            if (
+              this.isControlMessage(message.type) &&
+              !this.isAuthorizedControlSender(senderInfo)
+            ) {
+              this.logger?.warn(
+                'ChromeMessageBus rejected control message from unauthorized sender',
+                {
+                  type: message.type,
+                  senderTabId: senderInfo?.tabId,
+                  senderUrl: senderInfo?.url,
+                }
+              );
               sendResponse?.({ success: false, error: 'UNAUTHORIZED_CONTROL_ORIGIN' });
               return;
             }

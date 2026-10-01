@@ -23,8 +23,12 @@ function makeLogger(): LoggerPort & {
     warnCalls,
     infoCalls,
     debug: () => {},
-    info: (msg: string, meta?: Record<string, unknown>) => { infoCalls.push([msg, meta]); },
-    warn: (msg: string, meta?: Record<string, unknown>) => { warnCalls.push([msg, meta]); },
+    info: (msg: string, meta?: Record<string, unknown>) => {
+      infoCalls.push([msg, meta]);
+    },
+    warn: (msg: string, meta?: Record<string, unknown>) => {
+      warnCalls.push([msg, meta]);
+    },
     error: () => {},
     withContext: () => self,
   };
@@ -36,7 +40,9 @@ function makeCapturingBus(): EventBus & { events: unknown[] } {
   const events: unknown[] = [];
   return {
     events,
-    publish: async (event: unknown) => { events.push(event); },
+    publish: async (event: unknown) => {
+      events.push(event);
+    },
     subscribe: () => () => {},
   };
 }

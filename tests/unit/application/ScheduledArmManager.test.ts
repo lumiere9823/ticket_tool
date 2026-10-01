@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ScheduledArmManager, AlarmProvider } from '../../../src/application/services/ScheduledArmManager';
+import {
+  ScheduledArmManager,
+  AlarmProvider,
+} from '../../../src/application/services/ScheduledArmManager';
 
 describe('P2-6: ScheduledArmManager idempotent lock and handle cancellation', () => {
   let mockAlarmProvider: AlarmProvider;

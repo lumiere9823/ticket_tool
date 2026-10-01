@@ -66,6 +66,13 @@ export class ExecuteBookingJourneyUseCase {
     }
   }
 
+  private getPageUrl(): string {
+    if (this.adapter.getPageUrl) {
+      return this.adapter.getPageUrl();
+    }
+    return typeof window !== 'undefined' && window.location ? window.location.href : '';
+  }
+
   private getState(): PurchaseState {
     return this.stateMachine.state;
   }
@@ -114,7 +121,7 @@ export class ExecuteBookingJourneyUseCase {
   private async waitForQuestionFormToClose(timeoutMs = 6000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     do {
-      const url = typeof window !== 'undefined' ? window.location.href : '';
+      const url = this.getPageUrl();
       if (!url.includes('/question-form')) return true;
       await new Promise((r) => setTimeout(r, 80));
     } while (Date.now() < deadline);
@@ -196,7 +203,7 @@ export class ExecuteBookingJourneyUseCase {
         }
       }
 
-      const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+      const currentUrl = this.getPageUrl();
       const isOnPaymentPage = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
       const currentState = this.getState();
 
@@ -314,11 +321,15 @@ export class ExecuteBookingJourneyUseCase {
               });
             }
           } catch (retryEntryErr: unknown) {
-            this.logger.warn('RETRY_TARGET transition skipped at retry entry (invalid from current state)', {
-              state: this.getState(),
-              retries,
-              error: retryEntryErr instanceof Error ? retryEntryErr.message : String(retryEntryErr),
-            });
+            this.logger.warn(
+              'RETRY_TARGET transition skipped at retry entry (invalid from current state)',
+              {
+                state: this.getState(),
+                retries,
+                error:
+                  retryEntryErr instanceof Error ? retryEntryErr.message : String(retryEntryErr),
+              }
+            );
           }
         }
         try {
@@ -347,6 +358,27 @@ export class ExecuteBookingJourneyUseCase {
 
           if (retries > this.MAX_RETRIES) {
             const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
+            if (preferences.scopedPurchasePlan) {
+              try {
+                this.stateMachine.transition({
+                  type: 'WAITING_FOR_STOCK',
+                  reason: `Max retries exceeded during scoped plan: ${errMsg}`,
+                });
+                return {
+                  success: false,
+                  finalState: PurchaseState.WAITING_FOR_STOCK,
+                  requiresUserAction: false,
+                  actionRequiredReason: `Max retries exceeded during scoped plan: ${errMsg}`,
+                };
+              } catch (waitErr: unknown) {
+                this.logger.warn(
+                  'Failed transition to WAITING_FOR_STOCK on max retries; falling back to FAILURE_OCCURRED',
+                  {
+                    error: waitErr instanceof Error ? waitErr.message : String(waitErr),
+                  }
+                );
+              }
+            }
             this.stateMachine.transition({
               type: 'FAILURE_OCCURRED',
               reason: FailureReason.UNKNOWN,
@@ -375,11 +407,15 @@ export class ExecuteBookingJourneyUseCase {
                 reason: `Preparing retry attempt ${retries}`,
               });
             } catch (retryPrepErr: unknown) {
-              this.logger.warn('RETRY_TARGET transition skipped at retry preparation (invalid from current state)', {
-                state: this.getState(),
-                retries,
-                error: retryPrepErr instanceof Error ? retryPrepErr.message : String(retryPrepErr),
-              });
+              this.logger.warn(
+                'RETRY_TARGET transition skipped at retry preparation (invalid from current state)',
+                {
+                  state: this.getState(),
+                  retries,
+                  error:
+                    retryPrepErr instanceof Error ? retryPrepErr.message : String(retryPrepErr),
+                }
+              );
             }
           }
         }
@@ -424,7 +460,7 @@ export class ExecuteBookingJourneyUseCase {
     latencyTracker?: LatencyTracker,
     retryContext?: JourneyRetryContext
   ): Promise<JourneyExecutionResult> {
-    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const currentUrl = this.getPageUrl();
     const isOnPayment = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
     const isOnQuestionForm = currentUrl.includes('/question-form');
     const isOnSelectTicket =
@@ -607,7 +643,7 @@ export class ExecuteBookingJourneyUseCase {
       }
 
       // Verify URL before claiming PAYMENT_GATE
-      const afterSubmitUrl = typeof window !== 'undefined' ? window.location.href : '';
+      const afterSubmitUrl = this.getPageUrl();
       const isActualPayment =
         afterSubmitUrl.includes('/payment') ||
         afterSubmitUrl.includes('/checkout') ||
@@ -1086,7 +1122,10 @@ export class ExecuteBookingJourneyUseCase {
             this.logger.warn('SELECTING_AREA transition skipped', {
               state: this.getState(),
               event: 'SELECTING_AREA',
-              error: selectingAreaErr instanceof Error ? selectingAreaErr.message : String(selectingAreaErr),
+              error:
+                selectingAreaErr instanceof Error
+                  ? selectingAreaErr.message
+                  : String(selectingAreaErr),
             });
           }
         }
@@ -1425,7 +1464,7 @@ export class ExecuteBookingJourneyUseCase {
     }
 
     // 9. PAYMENT GATE (Section 21)
-    const afterAllUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const afterAllUrl = this.getPageUrl();
     const isActualPayment =
       afterAllUrl.includes('/payment') ||
       afterAllUrl.includes('/checkout') ||

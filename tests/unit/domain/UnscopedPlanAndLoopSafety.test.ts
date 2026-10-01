@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { RetryPolicy } from '../../../src/domain/policies/RetryPolicy';
 import { BookingSummaryVerifier } from '../../../src/domain/policies/BookingSummaryVerifier';
 import { DEFAULT_PURCHASE_PLAN_LIMITS } from '../../../src/domain/entities/PurchasePlan';
-import { CurrentSelection, BookingSummary } from '../../../src/domain/entities/BookingJourneyModels';
+import {
+  CurrentSelection,
+  BookingSummary,
+} from '../../../src/domain/entities/BookingJourneyModels';
 
 describe('P2-8: Non-scoped plan limits, retry bounds, and loop safety', () => {
   it('DEFAULT_PURCHASE_PLAN_LIMITS provides mandatory default bounds for non-scoped plans', () => {

@@ -1386,7 +1386,10 @@ async function attemptBookingJourney(): Promise<void> {
         } else {
           logger.warn(
             `Journey execution failed (${consecutiveBookingFailures} consecutive failures). Halting monitoring and stopping for user to prevent infinite retry storm.`,
-            { consecutiveFailures: consecutiveBookingFailures, maxAllowed: MAX_CONSECUTIVE_AUTO_RECOVERIES }
+            {
+              consecutiveFailures: consecutiveBookingFailures,
+              maxAllowed: MAX_CONSECUTIVE_AUTO_RECOVERIES,
+            }
           );
           isMonitoringActive = false;
           if (monitoringTimeout) {
@@ -1399,7 +1402,9 @@ async function attemptBookingJourney(): Promise<void> {
               reason: `Exceeded maximum consecutive booking failure auto-recoveries (${MAX_CONSECUTIVE_AUTO_RECOVERIES}); halted for user`,
             });
           } catch (stopErr) {
-            logger.warn('Failed to transition to STOPPED after consecutive failures', { err: String(stopErr) });
+            logger.warn('Failed to transition to STOPPED after consecutive failures', {
+              err: String(stopErr),
+            });
           }
         }
       }
@@ -1890,7 +1895,11 @@ messageBus.subscribe((message: ExtensionMessage) => {
 // Direct runtime listener fallback for tab messages
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener(
-    (message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (res?: unknown) => void) => {
+    (
+      message: unknown,
+      sender: chrome.runtime.MessageSender,
+      sendResponse: (res?: unknown) => void
+    ) => {
       if (!isExtensionContextValid()) return undefined;
       if (sender && typeof chrome !== 'undefined' && chrome.runtime?.id) {
         if (sender.id && sender.id !== chrome.runtime.id) {

@@ -136,7 +136,11 @@ export function isValidBridgeResponse(msg: unknown): msg is BridgeResponseMessag
  * Returns window.location.origin if available, avoiding wildcard '*'.
  */
 export function getSafeBridgeTargetOrigin(): string {
-  if (typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null') {
+  if (
+    typeof window !== 'undefined' &&
+    window.location?.origin &&
+    window.location.origin !== 'null'
+  ) {
     return window.location.origin;
   }
   return '*';
