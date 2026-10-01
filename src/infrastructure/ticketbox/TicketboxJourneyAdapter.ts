@@ -39,9 +39,7 @@ import { FormAutofillPolicy } from '../../domain/policies/FormAutofillPolicy';
 import { PurchaseState } from '../../domain/states/PurchaseState';
 
 export type CancelOrderConfirmationResult =
-  | { status: 'confirmed' }
-  | { status: 'blocked'; reason: string }
-  | { status: 'not_found' };
+  { status: 'confirmed' } | { status: 'blocked'; reason: string } | { status: 'not_found' };
 
 /**
  * Internal typed interface for DOM elements that support mutations (click, value assignment).
@@ -166,7 +164,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
   public markRecoveryInitiated(): void {
     this.recoveryInitiatedAt = Date.now();
-    this.logger?.info('Assistant recovery initiated (window <= 5000ms for cancel order confirmation)');
+    this.logger?.info(
+      'Assistant recovery initiated (window <= 5000ms for cancel order confirmation)'
+    );
   }
 
   public setCustomUrl(url: string): void {
@@ -2531,13 +2531,13 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
       if (!isCancelOrderModal) continue;
 
-      this.logger?.info('Detected "Hủy đơn hàng?" confirmation modal, searching for "Hủy đơn" button');
+      this.logger?.info(
+        'Detected "Hủy đơn hàng?" confirmation modal, searching for "Hủy đơn" button'
+      );
       const modalRaw = (modal.rawElement || modal) as HTMLElement;
       let cancelBtn: DOMElementLike | HTMLElement | null = null;
 
-      const getClosestButton = (
-        el: DOMElementLike | HTMLElement
-      ): DOMElementLike | HTMLElement => {
+      const getClosestButton = (el: DOMElementLike | HTMLElement): DOMElementLike | HTMLElement => {
         let curr: DOMElementLike | HTMLElement | null = el;
         while (curr) {
           const tag = (curr.tagName || '').toUpperCase();
@@ -2564,10 +2564,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         const directMatch = clickables.find((el) => {
           const t = (el.textContent || '').trim().toLowerCase();
           return (
-            (t === 'hủy đơn' ||
-              t === 'huỷ đơn' ||
-              t === 'hủy đơn hàng' ||
-              t === 'huỷ đơn hàng') &&
+            (t === 'hủy đơn' || t === 'huỷ đơn' || t === 'hủy đơn hàng' || t === 'huỷ đơn hàng') &&
             !t.includes('ở lại') &&
             !t.includes('?')
           );
@@ -2625,10 +2622,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         const globalMatch = allGlobal.find((el) => {
           const t = (el.textContent || '').trim().toLowerCase();
           return (
-            (t === 'hủy đơn' ||
-              t === 'huỷ đơn' ||
-              t === 'hủy đơn hàng' ||
-              t === 'huỷ đơn hàng') &&
+            (t === 'hủy đơn' || t === 'huỷ đơn' || t === 'hủy đơn hàng' || t === 'huỷ đơn hàng') &&
             !t.includes('ở lại') &&
             !t.includes('?')
           );
@@ -2646,9 +2640,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       };
 
       if (cancelBtn && typeof cancelBtn.click === 'function') {
-        this.logger?.info(
-          'Clicking "Hủy đơn" button to cancel order and return to seat selection'
-        );
+        this.logger?.info('Clicking "Hủy đơn" button to cancel order and return to seat selection');
         this.clickElement(toDOMElementLike(cancelBtn));
         await new Promise((r) => setTimeout(r, 600));
         return true;
@@ -2672,9 +2664,12 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     // Condition (a): URL must be /select-ticket or /question-form
     const isAllowedPath = url.includes('/select-ticket') || url.includes('/question-form');
     if (!isAllowedPath) {
-      this.logger?.warn('Cancel order confirmation blocked: URL is not /select-ticket or /question-form', {
-        url: rawUrl,
-      });
+      this.logger?.warn(
+        'Cancel order confirmation blocked: URL is not /select-ticket or /question-form',
+        {
+          url: rawUrl,
+        }
+      );
       return { status: 'blocked', reason: 'URL must be /select-ticket or /question-form' };
     }
 
@@ -2698,20 +2693,29 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     ];
     const currentState = this.stateProvider ? this.stateProvider() : undefined;
     if (currentState && FORBIDDEN_STATES.includes(currentState)) {
-      this.logger?.warn('Cancel order confirmation blocked: current state forbids canceling order', {
-        currentState,
-      });
+      this.logger?.warn(
+        'Cancel order confirmation blocked: current state forbids canceling order',
+        {
+          currentState,
+        }
+      );
       return { status: 'blocked', reason: `State ${currentState} forbids canceling order` };
     }
 
     // Condition (d): assistant initiated recovery within last 5000ms
     const now = Date.now();
     if (!this.recoveryInitiatedAt || now - this.recoveryInitiatedAt > 5000) {
-      this.logger?.warn('Cancel order confirmation blocked: recovery was not initiated by assistant within 5s', {
-        recoveryInitiatedAt: this.recoveryInitiatedAt,
-        elapsedMs: this.recoveryInitiatedAt ? now - this.recoveryInitiatedAt : null,
-      });
-      return { status: 'blocked', reason: 'Assistant recovery was not initiated within last 5 seconds' };
+      this.logger?.warn(
+        'Cancel order confirmation blocked: recovery was not initiated by assistant within 5s',
+        {
+          recoveryInitiatedAt: this.recoveryInitiatedAt,
+          elapsedMs: this.recoveryInitiatedAt ? now - this.recoveryInitiatedAt : null,
+        }
+      );
+      return {
+        status: 'blocked',
+        reason: 'Assistant recovery was not initiated within last 5 seconds',
+      };
     }
 
     if (!this.detectCancelOrderModal()) {
@@ -2750,7 +2754,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     // 0. Check if "Hủy đơn hàng?" confirmation dialog is already open on screen
     // (Only dismissed if recovery was explicitly initiated and safety invariants pass)
-    const cancelModalDismissed = (await this.confirmCancelOrderForReselect()).status === 'confirmed';
+    const cancelModalDismissed =
+      (await this.confirmCancelOrderForReselect()).status === 'confirmed';
     if (cancelModalDismissed) {
       let seatLabel: string | undefined;
       const containers: DOMElementLike[] = [];

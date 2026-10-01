@@ -54,11 +54,12 @@ export class ExecuteBookingJourneyUseCase {
     if (
       this.adapter &&
       'setCurrentStateProvider' in this.adapter &&
-      typeof (this.adapter as { setCurrentStateProvider?: (fn: () => PurchaseState) => void }).setCurrentStateProvider === 'function'
+      typeof (this.adapter as { setCurrentStateProvider?: (fn: () => PurchaseState) => void })
+        .setCurrentStateProvider === 'function'
     ) {
-      (this.adapter as { setCurrentStateProvider: (fn: () => PurchaseState) => void }).setCurrentStateProvider(
-        () => this.stateMachine.state
-      );
+      (
+        this.adapter as { setCurrentStateProvider: (fn: () => PurchaseState) => void }
+      ).setCurrentStateProvider(() => this.stateMachine.state);
     }
   }
 

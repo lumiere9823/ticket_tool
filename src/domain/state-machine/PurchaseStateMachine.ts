@@ -5,10 +5,669 @@ import {
   StateContext,
   ReservationEvidence,
   PaymentConfirmationEvidence,
+  isHumanInterventionState,
+  isTerminalState,
 } from '../states/PurchaseState';
 import { StateTransitionError } from '../errors/DomainError';
 
 export type StateChangeListener = (context: StateContext) => void;
+
+type TransitionResult = PurchaseState | StateContext;
+
+type TransitionHandler = (
+  sm: PurchaseStateMachine,
+  event: StateTransitionEvent,
+  from: PurchaseState
+) => TransitionResult;
+
+type TransitionRule = PurchaseState | TransitionHandler;
+
+const ALLOWED_RETRY_STATES = new Set<PurchaseState>([
+  PurchaseState.MONITORING,
+  PurchaseState.WAITING,
+  PurchaseState.WAITING_FOR_STOCK,
+  PurchaseState.EVALUATING_TICKETS,
+  PurchaseState.SELECTING,
+  PurchaseState.TICKET_SELECTED,
+  PurchaseState.AVAILABLE_DETECTED,
+  PurchaseState.TICKETS_DETECTED,
+  PurchaseState.TICKET_TYPE_SELECTION,
+  PurchaseState.QUANTITY_SELECTION,
+  PurchaseState.SELECTING_QUANTITY,
+  PurchaseState.AREA_SELECTION_REQUIRED,
+  PurchaseState.SELECTING_AREA,
+  PurchaseState.SEAT_SELECTION,
+  PurchaseState.SEAT_MAP_DETECTED,
+  PurchaseState.SELECTING_SEATS,
+  PurchaseState.SEATS_SELECTED,
+  PurchaseState.BOOKING_MODE_DETECTED,
+  PurchaseState.BOOKING_SUMMARY_DETECTED,
+  PurchaseState.QUESTION_FORM_DETECTED,
+  PurchaseState.FILLING_ATTENDEE_FORM,
+  PurchaseState.FORM_VALIDATED,
+  PurchaseState.RESERVING,
+]);
+
+const ALLOWED_RESET_STATES = new Set<PurchaseState>([
+  PurchaseState.STOPPED,
+  PurchaseState.STOPPED_LIMIT_REACHED,
+  PurchaseState.STOPPED_NO_TARGET,
+  PurchaseState.WAITING_FOR_STOCK,
+  PurchaseState.RETRYING_TARGET,
+  PurchaseState.HUMAN_INTERVENTION_REQUIRED,
+  PurchaseState.WAITING,
+  PurchaseState.FAILED,
+  PurchaseState.CONFIRMED,
+  PurchaseState.UNKNOWN,
+  PurchaseState.RATE_LIMITED,
+  PurchaseState.SOLD_OUT,
+  PurchaseState.INVALID_SELECTION,
+  PurchaseState.RESERVATION_FAILED,
+  PurchaseState.CHECKOUT_FAILED,
+  PurchaseState.PAYMENT_FAILED,
+  PurchaseState.AUTH_FAILURE,
+  PurchaseState.ARMED,
+  PurchaseState.MONITORING,
+  PurchaseState.READY,
+  PurchaseState.IDLE,
+]);
+
+const handleEventDetected: TransitionHandler = (sm, event) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'EVENT_DETECTED' }>;
+  if (ev.eventId) sm.setEventId(ev.eventId);
+  return PurchaseState.EVENT_DETECTED;
+};
+
+const handleAuthFailed: TransitionHandler = (sm, event) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'AUTH_FAILED' }>;
+  sm.setFailureReason(ev.reason);
+  if (ev.reason === FailureReason.SESSION_EXPIRED) {
+    return PurchaseState.SESSION_REAUTH_REQUIRED;
+  }
+  return PurchaseState.FAILED;
+};
+
+const handleEventFailed: TransitionHandler = (sm, event) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'EVENT_FAILED' }>;
+  sm.setFailureReason(ev.reason);
+  return PurchaseState.FAILED;
+};
+
+const handleInvalidSelection: TransitionHandler = (sm, event) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'INVALID_SELECTION' }>;
+  sm.setFailureReason(ev.reason ?? FailureReason.INVALID_SELECTION);
+  return PurchaseState.INVALID_SELECTION;
+};
+
+const handleSeatUnavailable: TransitionHandler = (sm) => {
+  sm.setFailureReason(FailureReason.SOLD_OUT);
+  return PurchaseState.SOLD_OUT;
+};
+
+const handleRateLimited: TransitionHandler = (sm) => {
+  sm.setFailureReason(FailureReason.RATE_LIMITED);
+  return PurchaseState.RATE_LIMITED;
+};
+
+const handleReservationServerConfirmed: TransitionHandler = (sm, event, from) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'RESERVATION_SERVER_CONFIRMED' }>;
+  if (!ev.reservationId || ev.reservationId.trim() === '') {
+    throw new StateTransitionError(
+      from,
+      PurchaseState.HELD,
+      ev.type,
+      'Cannot transition to HELD without authoritative server reservationId'
+    );
+  }
+  const evidenceObj: ReservationEvidence = {
+    reservationId: ev.reservationId.trim(),
+    ...(ev.expiresAt ? { expiresAt: ev.expiresAt } : {}),
+    ...(ev.evidence?.holdId ? { holdId: ev.evidence.holdId } : {}),
+    ...(ev.evidence?.checkoutReference ? { checkoutReference: ev.evidence.checkoutReference } : {}),
+    serverConfirmedAt: new Date().toISOString(),
+  };
+  sm.setEvidence(evidenceObj as unknown as Record<string, unknown>);
+  return PurchaseState.HELD;
+};
+
+const handleReservationRejected: TransitionHandler = (sm, event) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'RESERVATION_REJECTED' }>;
+  sm.setFailureReason(ev.reason);
+  if (ev.message) sm.setFailureMessage(ev.message);
+  return PurchaseState.FAILED;
+};
+
+const handleCheckoutFailed: TransitionHandler = (sm, event) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'CHECKOUT_FAILED' }>;
+  sm.setFailureReason(ev.reason ?? FailureReason.CHECKOUT_FAILED);
+  if (ev.message) sm.setFailureMessage(ev.message);
+  return PurchaseState.CHECKOUT_FAILED;
+};
+
+const handlePaymentConfirmed: TransitionHandler = (sm, event, from) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'PAYMENT_CONFIRMED' }>;
+  const evidenceObj = sm.requirePaymentEvidence(from, ev);
+  sm.setEvidence(evidenceObj as unknown as Record<string, unknown>);
+  return PurchaseState.CONFIRMED;
+};
+
+const handlePaymentFailed: TransitionHandler = (sm, event) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'PAYMENT_FAILED' }>;
+  sm.setFailureReason(ev.reason ?? FailureReason.PAYMENT_FAILED);
+  if (ev.message) sm.setFailureMessage(ev.message);
+  return PurchaseState.PAYMENT_FAILED;
+};
+
+const handlePaymentTimeout: TransitionHandler = (sm, event) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'PAYMENT_TIMEOUT' }>;
+  sm.setFailureReason(FailureReason.PAYMENT_FAILED);
+  sm.setFailureMessage(ev.message ?? 'Payment timed out');
+  return PurchaseState.PAYMENT_FAILED;
+};
+
+const handleStateVerified: TransitionHandler = (sm, event, from) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'STATE_VERIFIED' }>;
+  const target = ev.verifiedState;
+
+  const forbiddenVerifiedStates = new Set<PurchaseState>([
+    PurchaseState.HELD,
+    PurchaseState.CONFIRMED,
+    PurchaseState.PAYMENT,
+    PurchaseState.CHECKOUT,
+    PurchaseState.RESERVING,
+    PurchaseState.PAYMENT_GATE,
+  ]);
+
+  if (forbiddenVerifiedStates.has(target)) {
+    throw new StateTransitionError(
+      from,
+      target,
+      ev.type,
+      `STATE_RECHECK cannot directly authorize '${target}'. Authoritative server evidence is required.`
+    );
+  }
+
+  if (
+    sm.previousState === PurchaseState.SESSION_REAUTH_REQUIRED &&
+    target !== PurchaseState.AUTH_CHECK
+  ) {
+    throw new StateTransitionError(
+      from,
+      target,
+      ev.type,
+      'Re-authentication recovery must route through AUTH_CHECK for authoritative session verification'
+    );
+  }
+
+  const preIntervention = sm.preInterventionState ?? sm.previousState;
+  const isAllowedTarget =
+    target === PurchaseState.MONITORING ||
+    target === PurchaseState.READY ||
+    target === preIntervention;
+
+  if (!isAllowedTarget) {
+    throw new StateTransitionError(
+      from,
+      target,
+      ev.type,
+      `STATE_RECHECK can only verify previous state ('${preIntervention}') or MONITORING/READY. Target '${target}' is not permitted.`
+    );
+  }
+
+  sm.clearPreInterventionState();
+  return target;
+};
+
+const handleStateUnverified: TransitionHandler = (sm, event) => {
+  const ev = event as Extract<StateTransitionEvent, { type: 'STATE_UNVERIFIED' }>;
+  sm.setFailureReason(FailureReason.UNKNOWN);
+  sm.setFailureMessage(ev.reason ?? 'State re-evaluation failed to verify safe application state');
+  sm.clearPreInterventionState();
+  return PurchaseState.UNKNOWN;
+};
+
+const handleNoOp: TransitionHandler = (sm) => {
+  return sm.getContext();
+};
+
+const humanInterventionResumeRules: Partial<Record<StateTransitionEvent['type'], TransitionRule>> =
+  {
+    HUMAN_INTERVENTION_RESOLVED: PurchaseState.STATE_RECHECK,
+    USER_COMPLETED_CHALLENGE: PurchaseState.STATE_RECHECK,
+  };
+
+const TRANSITION_TABLE: Partial<
+  Record<PurchaseState, Partial<Record<StateTransitionEvent['type'], TransitionRule>>>
+> = {
+  [PurchaseState.INIT]: {
+    EXTENSION_READY: PurchaseState.AUTH_CHECK,
+  },
+
+  [PurchaseState.AUTH_CHECK]: {
+    AUTHENTICATED: PurchaseState.EVENT_CHECK,
+    NOT_AUTHENTICATED: PurchaseState.SESSION_REAUTH_REQUIRED,
+    SESSION_EXPIRED: PurchaseState.SESSION_REAUTH_REQUIRED,
+    AUTH_FAILED: handleAuthFailed,
+  },
+
+  [PurchaseState.EVENT_CHECK]: {
+    EVENT_READY: PurchaseState.READY,
+    EVENT_NOT_OPEN: PurchaseState.READY,
+    EVENT_FAILED: handleEventFailed,
+  },
+
+  [PurchaseState.READY]: {
+    ARM: PurchaseState.ARMED,
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    MONITORING_STARTED: PurchaseState.MONITORING,
+  },
+
+  [PurchaseState.IDLE]: {
+    ARM: PurchaseState.ARMED,
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    MONITORING_STARTED: PurchaseState.MONITORING,
+  },
+
+  [PurchaseState.ARMED]: {
+    DISARM: PurchaseState.READY,
+    MONITORING_STARTED: PurchaseState.MONITORING,
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+  },
+
+  [PurchaseState.MONITORING]: {
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    QUESTION_FORM_DETECTED: PurchaseState.QUESTION_FORM_DETECTED,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    BOOKING_SUMMARY_DETECTED: PurchaseState.BOOKING_SUMMARY_DETECTED,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+    INVENTORY_AVAILABLE: PurchaseState.AVAILABLE_DETECTED,
+    EVALUATING_TICKETS: PurchaseState.EVALUATING_TICKETS,
+    WAITING: PurchaseState.WAITING_FOR_STOCK,
+    WAITING_FOR_STOCK: PurchaseState.WAITING_FOR_STOCK,
+    CAPTCHA_REQUIRED: PurchaseState.CAPTCHA_REQUIRED,
+    SESSION_EXPIRED: PurchaseState.SESSION_REAUTH_REQUIRED,
+    RATE_LIMITED: handleRateLimited,
+  },
+
+  [PurchaseState.WAITING]: {
+    MONITORING_STARTED: PurchaseState.MONITORING,
+    EVALUATING_TICKETS: PurchaseState.EVALUATING_TICKETS,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    INVENTORY_AVAILABLE: PurchaseState.AVAILABLE_DETECTED,
+    WAITING: PurchaseState.WAITING_FOR_STOCK,
+    WAITING_FOR_STOCK: PurchaseState.WAITING_FOR_STOCK,
+  },
+
+  [PurchaseState.WAITING_FOR_STOCK]: {
+    MONITORING_STARTED: PurchaseState.MONITORING,
+    EVALUATING_TICKETS: PurchaseState.EVALUATING_TICKETS,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    INVENTORY_AVAILABLE: PurchaseState.AVAILABLE_DETECTED,
+    WAITING: PurchaseState.WAITING_FOR_STOCK,
+    WAITING_FOR_STOCK: PurchaseState.WAITING_FOR_STOCK,
+  },
+
+  [PurchaseState.RETRYING_TARGET]: {
+    MONITORING_STARTED: PurchaseState.MONITORING,
+    EVALUATING_TICKETS: PurchaseState.EVALUATING_TICKETS,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    TICKET_SELECTED: PurchaseState.TICKET_SELECTED,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SELECTING_AREA: PurchaseState.SELECTING_AREA,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    CANDIDATE_FOUND: PurchaseState.SELECTING,
+    INVENTORY_AVAILABLE: PurchaseState.AVAILABLE_DETECTED,
+    WAITING: PurchaseState.WAITING_FOR_STOCK,
+    WAITING_FOR_STOCK: PurchaseState.WAITING_FOR_STOCK,
+  },
+
+  [PurchaseState.EVENT_DETECTED]: {
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    MONITORING_STARTED: PurchaseState.MONITORING,
+  },
+
+  [PurchaseState.SHOWING_DETECTED]: {
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    INVENTORY_AVAILABLE: PurchaseState.AVAILABLE_DETECTED,
+  },
+
+  [PurchaseState.TICKETS_DETECTED]: {
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    QUESTION_FORM_DETECTED: PurchaseState.QUESTION_FORM_DETECTED,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+    EVALUATING_TICKETS: PurchaseState.EVALUATING_TICKETS,
+    TICKET_SELECTED: PurchaseState.TICKET_SELECTED,
+    CANDIDATE_FOUND: PurchaseState.SELECTING,
+    WAITING: PurchaseState.WAITING,
+  },
+
+  [PurchaseState.EVALUATING_TICKETS]: {
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    TICKET_SELECTED: PurchaseState.TICKET_SELECTED,
+    CANDIDATE_FOUND: PurchaseState.SELECTING,
+    WAITING: PurchaseState.WAITING_FOR_STOCK,
+    WAITING_FOR_STOCK: PurchaseState.WAITING_FOR_STOCK,
+    NO_CANDIDATE_AVAILABLE: PurchaseState.MONITORING,
+    INVALID_SELECTION: handleInvalidSelection,
+  },
+
+  [PurchaseState.AVAILABLE_DETECTED]: {
+    CANDIDATE_FOUND: PurchaseState.SELECTING,
+    NO_CANDIDATE_AVAILABLE: PurchaseState.MONITORING,
+  },
+
+  [PurchaseState.SELECTING]: {
+    TICKET_SELECTED: PurchaseState.TICKET_SELECTED,
+    TICKET_TYPE_REQUIRED: PurchaseState.TICKET_TYPE_SELECTION,
+    QUANTITY_REQUIRED: PurchaseState.SELECTING_QUANTITY,
+    SELECTING_QUANTITY: PurchaseState.SELECTING_QUANTITY,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    RESERVATION_INITIATED: PurchaseState.RESERVING,
+    SELECTION_COMPLETED: PurchaseState.RESERVING,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    WAITING: PurchaseState.WAITING_FOR_STOCK,
+    WAITING_FOR_STOCK: PurchaseState.WAITING_FOR_STOCK,
+    INVALID_SELECTION: handleInvalidSelection,
+  },
+
+  [PurchaseState.TICKET_SELECTED]: {
+    TICKET_SELECTED: handleNoOp,
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    BOOKING_MODE_DETECTED: PurchaseState.BOOKING_MODE_DETECTED,
+    SELECTING_QUANTITY: PurchaseState.SELECTING_QUANTITY,
+    QUANTITY_REQUIRED: PurchaseState.SELECTING_QUANTITY,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    BOOKING_SUMMARY_DETECTED: PurchaseState.BOOKING_SUMMARY_DETECTED,
+    QUESTION_FORM_DETECTED: PurchaseState.QUESTION_FORM_DETECTED,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    WAITING: PurchaseState.WAITING_FOR_STOCK,
+    WAITING_FOR_STOCK: PurchaseState.WAITING_FOR_STOCK,
+    INVALID_SELECTION: handleInvalidSelection,
+  },
+
+  [PurchaseState.BOOKING_MODE_DETECTED]: {
+    SELECTING_QUANTITY: PurchaseState.SELECTING_QUANTITY,
+    QUANTITY_REQUIRED: PurchaseState.SELECTING_QUANTITY,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SELECTING_AREA: PurchaseState.SELECTING_AREA,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+  },
+
+  [PurchaseState.TICKET_TYPE_SELECTION]: {
+    QUANTITY_REQUIRED: PurchaseState.QUANTITY_SELECTION,
+    SELECTING_QUANTITY: PurchaseState.QUANTITY_SELECTION,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SEAT_SELECTION,
+    SELECTING_SEATS: PurchaseState.SEAT_SELECTION,
+    SELECTION_COMPLETED: PurchaseState.RESERVING,
+    INVALID_SELECTION: handleInvalidSelection,
+  },
+
+  [PurchaseState.QUANTITY_SELECTION]: {
+    BOOKING_SUMMARY_DETECTED: PurchaseState.BOOKING_SUMMARY_DETECTED,
+    QUESTION_FORM_DETECTED: PurchaseState.QUESTION_FORM_DETECTED,
+    FILLING_ATTENDEE_FORM: PurchaseState.FILLING_ATTENDEE_FORM,
+    CONSENT_REQUIRED: PurchaseState.CONSENT_REQUIRED,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SELECTION_COMPLETED: PurchaseState.RESERVING,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    INVALID_SELECTION: handleInvalidSelection,
+  },
+
+  [PurchaseState.SELECTING_QUANTITY]: {
+    BOOKING_SUMMARY_DETECTED: PurchaseState.BOOKING_SUMMARY_DETECTED,
+    QUESTION_FORM_DETECTED: PurchaseState.QUESTION_FORM_DETECTED,
+    FILLING_ATTENDEE_FORM: PurchaseState.FILLING_ATTENDEE_FORM,
+    CONSENT_REQUIRED: PurchaseState.CONSENT_REQUIRED,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SELECTION_COMPLETED: PurchaseState.RESERVING,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    INVALID_SELECTION: handleInvalidSelection,
+  },
+
+  [PurchaseState.AREA_SELECTION_REQUIRED]: {
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    SELECTING_AREA: PurchaseState.SELECTING_AREA,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+  },
+
+  [PurchaseState.SELECTING_AREA]: {
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    BOOKING_SUMMARY_DETECTED: PurchaseState.BOOKING_SUMMARY_DETECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+  },
+
+  [PurchaseState.SEAT_MAP_DETECTED]: {
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    SEAT_UNAVAILABLE: handleSeatUnavailable,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+  },
+
+  [PurchaseState.SEAT_SELECTION]: {
+    SELECTING_SEATS: handleNoOp,
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SELECTING_AREA: PurchaseState.SELECTING_AREA,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    BOOKING_SUMMARY_DETECTED: PurchaseState.BOOKING_SUMMARY_DETECTED,
+    SELECTION_COMPLETED: PurchaseState.RESERVING,
+    SEAT_UNAVAILABLE: handleSeatUnavailable,
+    WAITING: PurchaseState.WAITING,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    TICKET_SELECTED: PurchaseState.TICKET_SELECTED,
+    INVALID_SELECTION: handleInvalidSelection,
+  },
+
+  [PurchaseState.SELECTING_SEATS]: {
+    SELECTING_SEATS: handleNoOp,
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SELECTING_AREA: PurchaseState.SELECTING_AREA,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    BOOKING_SUMMARY_DETECTED: PurchaseState.BOOKING_SUMMARY_DETECTED,
+    SELECTION_COMPLETED: PurchaseState.RESERVING,
+    SEAT_UNAVAILABLE: handleSeatUnavailable,
+    WAITING: PurchaseState.WAITING,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+    TICKET_SELECTED: PurchaseState.TICKET_SELECTED,
+    INVALID_SELECTION: handleInvalidSelection,
+  },
+
+  [PurchaseState.SEATS_SELECTED]: {
+    SEATS_SELECTED: handleNoOp,
+    EVENT_DETECTED: handleEventDetected,
+    SHOWING_DETECTED: PurchaseState.SHOWING_DETECTED,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SELECTING_AREA: PurchaseState.SELECTING_AREA,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    TICKET_SELECTED: PurchaseState.TICKET_SELECTED,
+    BOOKING_SUMMARY_DETECTED: PurchaseState.BOOKING_SUMMARY_DETECTED,
+    QUESTION_FORM_DETECTED: PurchaseState.QUESTION_FORM_DETECTED,
+    FILLING_ATTENDEE_FORM: PurchaseState.FILLING_ATTENDEE_FORM,
+    CONSENT_REQUIRED: PurchaseState.CONSENT_REQUIRED,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+    SELECTION_COMPLETED: PurchaseState.RESERVING,
+    RESERVATION_INITIATED: PurchaseState.RESERVING,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+  },
+
+  [PurchaseState.BOOKING_SUMMARY_DETECTED]: {
+    QUESTION_FORM_DETECTED: PurchaseState.QUESTION_FORM_DETECTED,
+    FILLING_ATTENDEE_FORM: PurchaseState.FILLING_ATTENDEE_FORM,
+    CONSENT_REQUIRED: PurchaseState.CONSENT_REQUIRED,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+    RESERVATION_INITIATED: PurchaseState.RESERVING,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+  },
+
+  [PurchaseState.QUESTION_FORM_DETECTED]: {
+    FILLING_ATTENDEE_FORM: PurchaseState.FILLING_ATTENDEE_FORM,
+    FORM_VALIDATED: PurchaseState.FORM_VALIDATED,
+    CONSENT_REQUIRED: PurchaseState.CONSENT_REQUIRED,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SELECTING_AREA: PurchaseState.SELECTING_AREA,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    TICKET_SELECTED: PurchaseState.TICKET_SELECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+  },
+
+  [PurchaseState.FILLING_ATTENDEE_FORM]: {
+    FORM_VALIDATED: PurchaseState.FORM_VALIDATED,
+    CONSENT_REQUIRED: PurchaseState.CONSENT_REQUIRED,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SELECTING_AREA: PurchaseState.SELECTING_AREA,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    TICKET_SELECTED: PurchaseState.TICKET_SELECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+  },
+
+  [PurchaseState.FORM_VALIDATED]: {
+    CONSENT_REQUIRED: PurchaseState.CONSENT_REQUIRED,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+    RESERVATION_INITIATED: PurchaseState.RESERVING,
+    SEAT_MAP_DETECTED: PurchaseState.SEAT_MAP_DETECTED,
+    AREA_SELECTION_REQUIRED: PurchaseState.AREA_SELECTION_REQUIRED,
+    SELECTING_AREA: PurchaseState.SELECTING_AREA,
+    SELECTING_SEATS: PurchaseState.SELECTING_SEATS,
+    SEAT_SELECTION_REQUIRED: PurchaseState.SELECTING_SEATS,
+    SEATS_SELECTED: PurchaseState.SEATS_SELECTED,
+    TICKET_SELECTED: PurchaseState.TICKET_SELECTED,
+    TICKETS_DETECTED: PurchaseState.TICKETS_DETECTED,
+  },
+
+  [PurchaseState.CONSENT_REQUIRED]: {
+    HUMAN_INTERVENTION_RESOLVED: PurchaseState.PAYMENT_GATE,
+    USER_COMPLETED_CHALLENGE: PurchaseState.PAYMENT_GATE,
+    PAYMENT_GATE: PurchaseState.PAYMENT_GATE,
+  },
+
+  [PurchaseState.PAYMENT_GATE]: {
+    PAYMENT_GATE: handleNoOp,
+    PAYMENT_STARTED: PurchaseState.PAYMENT,
+    CONFIRMATION_PENDING: PurchaseState.CONFIRMATION_PENDING,
+    PAYMENT_CONFIRMED: handlePaymentConfirmed,
+    PAYMENT_ACTION_REQUIRED: PurchaseState.PAYMENT_ACTION_REQUIRED,
+    PAYMENT_FAILED: handlePaymentFailed,
+  },
+
+  [PurchaseState.CONFIRMATION_PENDING]: {
+    PAYMENT_CONFIRMED: handlePaymentConfirmed,
+    PAYMENT_FAILED: handlePaymentFailed,
+  },
+
+  [PurchaseState.RESERVING]: {
+    RESERVATION_SERVER_CONFIRMED: handleReservationServerConfirmed,
+    RESERVATION_REJECTED: handleReservationRejected,
+    SESSION_EXPIRED: PurchaseState.SESSION_REAUTH_REQUIRED,
+    RATE_LIMITED: handleRateLimited,
+    CAPTCHA_REQUIRED: PurchaseState.CAPTCHA_REQUIRED,
+    UNKNOWN_SECURITY_CHALLENGE: PurchaseState.UNKNOWN_SECURITY_CHALLENGE,
+    WAITING: PurchaseState.WAITING_FOR_STOCK,
+    WAITING_FOR_STOCK: PurchaseState.WAITING_FOR_STOCK,
+  },
+
+  [PurchaseState.HELD]: {
+    CHECKOUT_OPENED: PurchaseState.CHECKOUT,
+  },
+
+  [PurchaseState.CHECKOUT]: {
+    PAYMENT_STARTED: PurchaseState.PAYMENT,
+    PAYMENT_ACTION_REQUIRED: PurchaseState.PAYMENT_ACTION_REQUIRED,
+    CHECKOUT_FAILED: handleCheckoutFailed,
+    SESSION_EXPIRED: PurchaseState.SESSION_REAUTH_REQUIRED,
+    UNKNOWN_SECURITY_CHALLENGE: PurchaseState.UNKNOWN_SECURITY_CHALLENGE,
+  },
+
+  [PurchaseState.PAYMENT]: {
+    PAYMENT_CONFIRMED: handlePaymentConfirmed,
+    PAYMENT_ACTION_REQUIRED: PurchaseState.PAYMENT_ACTION_REQUIRED,
+    PAYMENT_FAILED: handlePaymentFailed,
+    PAYMENT_TIMEOUT: handlePaymentTimeout,
+  },
+
+  [PurchaseState.SESSION_REAUTH_REQUIRED]: {
+    HUMAN_INTERVENTION_RESOLVED: PurchaseState.AUTH_CHECK,
+    USER_COMPLETED_CHALLENGE: PurchaseState.AUTH_CHECK,
+  },
+
+  [PurchaseState.CAPTCHA_REQUIRED]: humanInterventionResumeRules,
+  [PurchaseState.OTP_REQUIRED]: humanInterventionResumeRules,
+  [PurchaseState.PAYMENT_ACTION_REQUIRED]: humanInterventionResumeRules,
+  [PurchaseState.UNKNOWN_SECURITY_CHALLENGE]: humanInterventionResumeRules,
+  [PurchaseState.HUMAN_INTERVENTION_REQUIRED]: humanInterventionResumeRules,
+
+  [PurchaseState.STATE_RECHECK]: {
+    STATE_VERIFIED: handleStateVerified,
+    STATE_UNVERIFIED: handleStateUnverified,
+  },
+};
 
 /**
  * Authoritative, pure Domain State Machine for purchase execution.
@@ -18,6 +677,7 @@ export type StateChangeListener = (context: StateContext) => void;
 export class PurchaseStateMachine {
   private _state: PurchaseState;
   private _previousState?: PurchaseState | undefined;
+  private _preInterventionState?: PurchaseState | undefined;
   private _attemptId?: string | undefined;
   private _workflowId?: string | undefined;
   private _accountId?: string | undefined;
@@ -57,6 +717,14 @@ export class PurchaseStateMachine {
 
   public get previousState(): PurchaseState | undefined {
     return this._previousState;
+  }
+
+  public get preInterventionState(): PurchaseState | undefined {
+    return this._preInterventionState;
+  }
+
+  public clearPreInterventionState(): void {
+    this._preInterventionState = undefined;
   }
 
   public get attemptId(): string | undefined {
@@ -157,9 +825,51 @@ export class PurchaseStateMachine {
     this._humanInterventionId = id;
   }
 
+  public setEvidence(evidence: Record<string, unknown> | undefined): void {
+    this._evidence = evidence;
+  }
+
+  public setFailureReason(reason: FailureReason | undefined): void {
+    this._failureReason = reason;
+  }
+
+  public setFailureMessage(msg: string | undefined): void {
+    this._failureMessage = msg;
+  }
+
   public incrementRetryCount(): number {
     this._retryCount++;
     return this._retryCount;
+  }
+
+  public requirePaymentEvidence(
+    from: PurchaseState,
+    event: Extract<StateTransitionEvent, { type: 'PAYMENT_CONFIRMED' }>
+  ): PaymentConfirmationEvidence {
+    const evidenceRef =
+      event.orderId?.trim() ||
+      event.confirmationReference?.trim() ||
+      event.evidence?.orderId?.trim() ||
+      event.evidence?.confirmationReference?.trim();
+
+    if (!evidenceRef) {
+      throw new StateTransitionError(
+        from,
+        PurchaseState.CONFIRMED,
+        event.type,
+        'Cannot transition to CONFIRMED without authoritative confirmation evidence (orderId or confirmationReference)'
+      );
+    }
+
+    const evidenceObj: PaymentConfirmationEvidence = {
+      ...(event.orderId?.trim() ? { orderId: event.orderId.trim() } : {}),
+      ...(event.confirmationReference?.trim()
+        ? { confirmationReference: event.confirmationReference.trim() }
+        : {}),
+      ...(event.evidence?.ticketId ? { ticketId: event.evidence.ticketId } : {}),
+      confirmedAt: new Date().toISOString(),
+    };
+    return evidenceObj;
   }
 
   /**
@@ -168,14 +878,13 @@ export class PurchaseStateMachine {
    */
   public transition(event: StateTransitionEvent): StateContext {
     const from = this._state;
-    this._transitionEvent = event.type;
 
     // Handle universal STOP_REQUESTED from any non-terminal state
     if (event.type === 'STOP_REQUESTED') {
       if (this._state === PurchaseState.STOPPED || this._state === PurchaseState.CONFIRMED) {
         return this.getContext();
       }
-      return this.performTransition(PurchaseState.STOPPED, event.reason);
+      return this.performTransition(PurchaseState.STOPPED, event.type, event.reason);
     }
 
     // Handle universal LIMIT_REACHED
@@ -186,7 +895,7 @@ export class PurchaseStateMachine {
       ) {
         return this.getContext();
       }
-      return this.performTransition(PurchaseState.STOPPED_LIMIT_REACHED, event.reason);
+      return this.performTransition(PurchaseState.STOPPED_LIMIT_REACHED, event.type, event.reason);
     }
 
     // Handle universal NO_TARGET_AVAILABLE
@@ -197,61 +906,79 @@ export class PurchaseStateMachine {
       ) {
         return this.getContext();
       }
-      return this.performTransition(PurchaseState.STOPPED_NO_TARGET, event.reason);
+      return this.performTransition(PurchaseState.STOPPED_NO_TARGET, event.type, event.reason);
     }
 
     // Handle universal SECURITY_CHALLENGE_DETECTED
     if (event.type === 'SECURITY_CHALLENGE_DETECTED') {
-      return this.performTransition(PurchaseState.HUMAN_INTERVENTION_REQUIRED);
+      if (this._state === PurchaseState.CONFIRMED || isTerminalState(this._state)) {
+        throw new StateTransitionError(
+          from,
+          PurchaseState.HUMAN_INTERVENTION_REQUIRED,
+          event.type,
+          'Cannot transition to HUMAN_INTERVENTION_REQUIRED from CONFIRMED or terminal state'
+        );
+      }
+      return this.performTransition(PurchaseState.HUMAN_INTERVENTION_REQUIRED, event.type);
     }
 
-    // Handle universal RETRY_TARGET from active purchase states
-    if (event.type === 'RETRY_TARGET') {
-      if (
-        this._state !== PurchaseState.STOPPED &&
-        this._state !== PurchaseState.STOPPED_LIMIT_REACHED &&
-        this._state !== PurchaseState.STOPPED_NO_TARGET &&
-        this._state !== PurchaseState.FAILED &&
-        this._state !== PurchaseState.CONFIRMED &&
-        this._state !== PurchaseState.PAYMENT_GATE &&
-        this._state !== PurchaseState.INIT &&
-        this._state !== PurchaseState.AUTH_CHECK
-      ) {
-        return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
+    // Handle universal FAILURE_OCCURRED
+    if (event.type === 'FAILURE_OCCURRED') {
+      if (this._state === PurchaseState.CONFIRMED || isTerminalState(this._state)) {
+        throw new StateTransitionError(
+          from,
+          PurchaseState.FAILED,
+          event.type,
+          'Cannot transition to FAILED from CONFIRMED or terminal state'
+        );
       }
+      this._failureReason = event.reason;
+      if (event.message !== undefined) {
+        this._failureMessage = event.message;
+      }
+      return this.performTransition(PurchaseState.FAILED, event.type);
+    }
+
+    // Handle universal UNSUPPORTED_FLOW
+    if (event.type === 'UNSUPPORTED_FLOW') {
+      if (this._state === PurchaseState.CONFIRMED || isTerminalState(this._state)) {
+        throw new StateTransitionError(
+          from,
+          PurchaseState.FAILED,
+          event.type,
+          'Cannot transition to FAILED from CONFIRMED or terminal state'
+        );
+      }
+      this._failureReason = FailureReason.UNKNOWN;
+      this._failureMessage = event.reason ?? 'Unsupported flow encountered';
+      return this.performTransition(PurchaseState.FAILED, event.type);
+    }
+
+    // Handle universal RETRY_TARGET strictly with allowlist of pre-reservation states
+    if (event.type === 'RETRY_TARGET') {
+      if (ALLOWED_RETRY_STATES.has(this._state)) {
+        return this.performTransition(PurchaseState.RETRYING_TARGET, event.type, event.reason);
+      }
+      throw new StateTransitionError(
+        from,
+        PurchaseState.RETRYING_TARGET,
+        event.type,
+        `RETRY_TARGET is only permitted from pre-reservation states. Current state: '${from}'`
+      );
     }
 
     // Handle RESET_REQUESTED from terminal/stopped states
     if (event.type === 'RESET_REQUESTED') {
-      if (
-        this._state === PurchaseState.STOPPED ||
-        this._state === PurchaseState.STOPPED_LIMIT_REACHED ||
-        this._state === PurchaseState.STOPPED_NO_TARGET ||
-        this._state === PurchaseState.WAITING_FOR_STOCK ||
-        this._state === PurchaseState.RETRYING_TARGET ||
-        this._state === PurchaseState.HUMAN_INTERVENTION_REQUIRED ||
-        this._state === PurchaseState.WAITING ||
-        this._state === PurchaseState.FAILED ||
-        this._state === PurchaseState.CONFIRMED ||
-        this._state === PurchaseState.UNKNOWN ||
-        this._state === PurchaseState.RATE_LIMITED ||
-        this._state === PurchaseState.SOLD_OUT ||
-        this._state === PurchaseState.INVALID_SELECTION ||
-        this._state === PurchaseState.RESERVATION_FAILED ||
-        this._state === PurchaseState.CHECKOUT_FAILED ||
-        this._state === PurchaseState.PAYMENT_FAILED ||
-        this._state === PurchaseState.AUTH_FAILURE ||
-        this._state === PurchaseState.ARMED ||
-        this._state === PurchaseState.MONITORING ||
-        this._state === PurchaseState.READY ||
-        this._state === PurchaseState.IDLE
-      ) {
+      if (ALLOWED_RESET_STATES.has(this._state)) {
         this._failureReason = undefined;
         this._failureMessage = undefined;
         this._humanInterventionId = undefined;
-        this._evidence = undefined;
+        if (this._state !== PurchaseState.CONFIRMED) {
+          this._evidence = undefined;
+        }
         this._retryCount = 0;
-        return this.performTransition(PurchaseState.READY);
+        this._preInterventionState = undefined;
+        return this.performTransition(PurchaseState.READY, event.type);
       }
       throw new StateTransitionError(
         from,
@@ -261,1027 +988,64 @@ export class PurchaseStateMachine {
       );
     }
 
-    // Handle universal FAILURE_OCCURRED
-    if (event.type === 'FAILURE_OCCURRED') {
-      this._failureReason = event.reason;
-      if (event.message !== undefined) {
-        this._failureMessage = event.message;
+    // Universal security challenges from active states
+    if (
+      event.type === 'CAPTCHA_REQUIRED' ||
+      event.type === 'OTP_REQUIRED' ||
+      event.type === 'UNKNOWN_SECURITY_CHALLENGE'
+    ) {
+      if (this._state === PurchaseState.CONFIRMED || isTerminalState(this._state)) {
+        throw new StateTransitionError(
+          from,
+          'UNKNOWN',
+          event.type,
+          `Cannot trigger security challenge from terminal or confirmed state '${from}'`
+        );
       }
-      return this.performTransition(PurchaseState.FAILED);
+      if (event.type === 'CAPTCHA_REQUIRED') {
+        return this.performTransition(PurchaseState.CAPTCHA_REQUIRED, event.type);
+      }
+      if (event.type === 'OTP_REQUIRED') {
+        return this.performTransition(PurchaseState.OTP_REQUIRED, event.type);
+      }
+      if (event.type === 'UNKNOWN_SECURITY_CHALLENGE') {
+        return this.performTransition(PurchaseState.UNKNOWN_SECURITY_CHALLENGE, event.type);
+      }
     }
 
-    // Handle universal UNSUPPORTED_FLOW
-    if (event.type === 'UNSUPPORTED_FLOW') {
-      this._failureReason = FailureReason.UNKNOWN;
-      this._failureMessage = event.reason ?? 'Unsupported flow encountered';
-      return this.performTransition(PurchaseState.FAILED);
+    // Query data-driven transition table
+    const handler = TRANSITION_TABLE[from]?.[event.type];
+    if (!handler) {
+      throw new StateTransitionError(
+        from,
+        'UNKNOWN',
+        event.type,
+        `State transition from '${from}' with event '${event.type}' is not allowed`
+      );
     }
 
-    switch (from) {
-      case PurchaseState.INIT:
-        if (event.type === 'EXTENSION_READY') {
-          return this.performTransition(PurchaseState.AUTH_CHECK);
-        }
-        break;
-
-      case PurchaseState.AUTH_CHECK:
-        if (event.type === 'AUTHENTICATED') {
-          return this.performTransition(PurchaseState.EVENT_CHECK);
-        }
-        if (event.type === 'NOT_AUTHENTICATED' || event.type === 'SESSION_EXPIRED') {
-          return this.performTransition(PurchaseState.SESSION_REAUTH_REQUIRED);
-        }
-        if (event.type === 'AUTH_FAILED') {
-          this._failureReason = event.reason;
-          if (event.reason === FailureReason.SESSION_EXPIRED) {
-            return this.performTransition(PurchaseState.SESSION_REAUTH_REQUIRED);
-          }
-          return this.performTransition(PurchaseState.FAILED);
-        }
-        break;
-
-      case PurchaseState.EVENT_CHECK:
-        if (event.type === 'EVENT_READY' || event.type === 'EVENT_NOT_OPEN') {
-          return this.performTransition(PurchaseState.READY);
-        }
-        if (event.type === 'EVENT_FAILED') {
-          this._failureReason = event.reason;
-          return this.performTransition(PurchaseState.FAILED);
-        }
-        break;
-
-      case PurchaseState.READY:
-      case PurchaseState.IDLE:
-        if (event.type === 'ARM') {
-          return this.performTransition(PurchaseState.ARMED);
-        }
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'MONITORING_STARTED') {
-          return this.performTransition(PurchaseState.MONITORING);
-        }
-        break;
-
-      case PurchaseState.ARMED:
-        if (event.type === 'DISARM') {
-          return this.performTransition(PurchaseState.READY);
-        }
-        if (event.type === 'MONITORING_STARTED') {
-          return this.performTransition(PurchaseState.MONITORING);
-        }
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        break;
-
-      case PurchaseState.MONITORING:
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'QUESTION_FORM_DETECTED') {
-          return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'BOOKING_SUMMARY_DETECTED') {
-          return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
-        }
-        if (event.type === 'PAYMENT_GATE') {
-          return this.performTransition(PurchaseState.PAYMENT_GATE);
-        }
-        if (event.type === 'INVENTORY_AVAILABLE') {
-          return this.performTransition(PurchaseState.AVAILABLE_DETECTED);
-        }
-        if (event.type === 'EVALUATING_TICKETS') {
-          return this.performTransition(PurchaseState.EVALUATING_TICKETS);
-        }
-        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
-          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
-        }
-        if (event.type === 'RETRY_TARGET') {
-          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
-        }
-        if (event.type === 'CAPTCHA_REQUIRED') {
-          return this.performTransition(PurchaseState.CAPTCHA_REQUIRED);
-        }
-        if (event.type === 'SESSION_EXPIRED') {
-          return this.performTransition(PurchaseState.SESSION_REAUTH_REQUIRED);
-        }
-        if (event.type === 'RATE_LIMITED') {
-          this._failureReason = FailureReason.RATE_LIMITED;
-          return this.performTransition(PurchaseState.RATE_LIMITED);
-        }
-        break;
-
-      case PurchaseState.WAITING:
-      case PurchaseState.WAITING_FOR_STOCK:
-        if (event.type === 'MONITORING_STARTED') {
-          return this.performTransition(PurchaseState.MONITORING);
-        }
-        if (event.type === 'EVALUATING_TICKETS') {
-          return this.performTransition(PurchaseState.EVALUATING_TICKETS);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'INVENTORY_AVAILABLE') {
-          return this.performTransition(PurchaseState.AVAILABLE_DETECTED);
-        }
-        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
-          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
-        }
-        if (event.type === 'RETRY_TARGET') {
-          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
-        }
-        break;
-
-      case PurchaseState.RETRYING_TARGET:
-        if (event.type === 'MONITORING_STARTED') {
-          return this.performTransition(PurchaseState.MONITORING);
-        }
-        if (event.type === 'EVALUATING_TICKETS') {
-          return this.performTransition(PurchaseState.EVALUATING_TICKETS);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'TICKET_SELECTED') {
-          return this.performTransition(PurchaseState.TICKET_SELECTED);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'AREA_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
-        }
-        if (event.type === 'SELECTING_AREA') {
-          return this.performTransition(PurchaseState.SELECTING_AREA);
-        }
-        if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'CANDIDATE_FOUND') {
-          return this.performTransition(PurchaseState.SELECTING);
-        }
-        if (event.type === 'INVENTORY_AVAILABLE') {
-          return this.performTransition(PurchaseState.AVAILABLE_DETECTED);
-        }
-        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
-          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
-        }
-        if (event.type === 'RETRY_TARGET') {
-          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
-        }
-        break;
-
-      case PurchaseState.EVENT_DETECTED:
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'MONITORING_STARTED') {
-          return this.performTransition(PurchaseState.MONITORING);
-        }
-        break;
-
-      case PurchaseState.SHOWING_DETECTED:
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'INVENTORY_AVAILABLE') {
-          return this.performTransition(PurchaseState.AVAILABLE_DETECTED);
-        }
-        break;
-
-      case PurchaseState.TICKETS_DETECTED:
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'QUESTION_FORM_DETECTED') {
-          return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'PAYMENT_GATE') {
-          return this.performTransition(PurchaseState.PAYMENT_GATE);
-        }
-        if (event.type === 'EVALUATING_TICKETS') {
-          return this.performTransition(PurchaseState.EVALUATING_TICKETS);
-        }
-        if (event.type === 'TICKET_SELECTED') {
-          return this.performTransition(PurchaseState.TICKET_SELECTED);
-        }
-        if (event.type === 'CANDIDATE_FOUND') {
-          return this.performTransition(PurchaseState.SELECTING);
-        }
-        if (event.type === 'WAITING') {
-          return this.performTransition(PurchaseState.WAITING, event.reason);
-        }
-        break;
-
-      case PurchaseState.EVALUATING_TICKETS:
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'TICKET_SELECTED') {
-          return this.performTransition(PurchaseState.TICKET_SELECTED);
-        }
-        if (event.type === 'CANDIDATE_FOUND') {
-          return this.performTransition(PurchaseState.SELECTING);
-        }
-        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
-          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
-        }
-        if (event.type === 'RETRY_TARGET') {
-          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
-        }
-        if (event.type === 'NO_CANDIDATE_AVAILABLE') {
-          return this.performTransition(PurchaseState.MONITORING);
-        }
-        if (event.type === 'INVALID_SELECTION') {
-          this._failureReason = event.reason ?? FailureReason.INVALID_SELECTION;
-          return this.performTransition(PurchaseState.INVALID_SELECTION);
-        }
-        break;
-
-      case PurchaseState.AVAILABLE_DETECTED:
-        if (event.type === 'CANDIDATE_FOUND') {
-          return this.performTransition(PurchaseState.SELECTING);
-        }
-        if (event.type === 'NO_CANDIDATE_AVAILABLE') {
-          return this.performTransition(PurchaseState.MONITORING);
-        }
-        break;
-
-      case PurchaseState.SELECTING:
-        if (event.type === 'TICKET_SELECTED') {
-          return this.performTransition(PurchaseState.TICKET_SELECTED);
-        }
-        if (event.type === 'TICKET_TYPE_REQUIRED') {
-          return this.performTransition(PurchaseState.TICKET_TYPE_SELECTION);
-        }
-        if (event.type === 'QUANTITY_REQUIRED' || event.type === 'SELECTING_QUANTITY') {
-          return this.performTransition(PurchaseState.SELECTING_QUANTITY);
-        }
-        if (event.type === 'SEAT_SELECTION_REQUIRED' || event.type === 'SELECTING_SEATS') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'RESERVATION_INITIATED' || event.type === 'SELECTION_COMPLETED') {
-          return this.performTransition(PurchaseState.RESERVING);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
-          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
-        }
-        if (event.type === 'RETRY_TARGET') {
-          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
-        }
-        if (event.type === 'INVALID_SELECTION') {
-          this._failureReason = event.reason ?? FailureReason.INVALID_SELECTION;
-          return this.performTransition(PurchaseState.INVALID_SELECTION);
-        }
-        break;
-
-      case PurchaseState.TICKET_SELECTED:
-        if (event.type === 'TICKET_SELECTED') {
-          return this.getContext();
-        }
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'BOOKING_MODE_DETECTED') {
-          return this.performTransition(PurchaseState.BOOKING_MODE_DETECTED);
-        }
-        if (event.type === 'SELECTING_QUANTITY' || event.type === 'QUANTITY_REQUIRED') {
-          return this.performTransition(PurchaseState.SELECTING_QUANTITY);
-        }
-        if (event.type === 'AREA_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'BOOKING_SUMMARY_DETECTED') {
-          return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
-        }
-        if (event.type === 'QUESTION_FORM_DETECTED') {
-          return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
-        }
-        if (event.type === 'PAYMENT_GATE') {
-          return this.performTransition(PurchaseState.PAYMENT_GATE);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
-          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
-        }
-        if (event.type === 'RETRY_TARGET') {
-          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
-        }
-        if (event.type === 'INVALID_SELECTION') {
-          this._failureReason = event.reason ?? FailureReason.INVALID_SELECTION;
-          return this.performTransition(PurchaseState.INVALID_SELECTION);
-        }
-        break;
-
-      case PurchaseState.BOOKING_MODE_DETECTED:
-        if (event.type === 'SELECTING_QUANTITY' || event.type === 'QUANTITY_REQUIRED') {
-          return this.performTransition(PurchaseState.SELECTING_QUANTITY);
-        }
-        if (event.type === 'AREA_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
-        }
-        if (event.type === 'SELECTING_AREA') {
-          return this.performTransition(PurchaseState.SELECTING_AREA);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        break;
-
-      case PurchaseState.TICKET_TYPE_SELECTION:
-        if (event.type === 'QUANTITY_REQUIRED' || event.type === 'SELECTING_QUANTITY') {
-          return this.performTransition(PurchaseState.QUANTITY_SELECTION);
-        }
-        if (event.type === 'SEAT_SELECTION_REQUIRED' || event.type === 'SELECTING_SEATS') {
-          return this.performTransition(PurchaseState.SEAT_SELECTION);
-        }
-        if (event.type === 'SELECTION_COMPLETED') {
-          return this.performTransition(PurchaseState.RESERVING);
-        }
-        if (event.type === 'INVALID_SELECTION') {
-          this._failureReason = event.reason ?? FailureReason.INVALID_SELECTION;
-          return this.performTransition(PurchaseState.INVALID_SELECTION);
-        }
-        break;
-
-      case PurchaseState.QUANTITY_SELECTION:
-      case PurchaseState.SELECTING_QUANTITY:
-        if (event.type === 'BOOKING_SUMMARY_DETECTED') {
-          return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
-        }
-        if (event.type === 'QUESTION_FORM_DETECTED') {
-          return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
-        }
-        if (event.type === 'FILLING_ATTENDEE_FORM') {
-          return this.performTransition(PurchaseState.FILLING_ATTENDEE_FORM);
-        }
-        if (event.type === 'CONSENT_REQUIRED') {
-          return this.performTransition(PurchaseState.CONSENT_REQUIRED);
-        }
-        if (event.type === 'PAYMENT_GATE') {
-          return this.performTransition(PurchaseState.PAYMENT_GATE);
-        }
-        if (event.type === 'CHECKOUT_OPENED') {
-          return this.performTransition(PurchaseState.CHECKOUT);
-        }
-        if (event.type === 'AREA_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'SEAT_SELECTION_REQUIRED' || event.type === 'SELECTING_SEATS') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'SELECTION_COMPLETED') {
-          return this.performTransition(PurchaseState.RESERVING);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'INVALID_SELECTION') {
-          this._failureReason = event.reason ?? FailureReason.INVALID_SELECTION;
-          return this.performTransition(PurchaseState.INVALID_SELECTION);
-        }
-        break;
-
-      case PurchaseState.AREA_SELECTION_REQUIRED:
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'SELECTING_AREA') {
-          return this.performTransition(PurchaseState.SELECTING_AREA);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'SELECTING_SEATS') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        break;
-
-      case PurchaseState.SELECTING_AREA:
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'SELECTING_SEATS') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'BOOKING_SUMMARY_DETECTED') {
-          return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        break;
-
-      case PurchaseState.SEAT_MAP_DETECTED:
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'SEAT_UNAVAILABLE') {
-          this._failureReason = FailureReason.SOLD_OUT;
-          return this.performTransition(PurchaseState.SOLD_OUT);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        break;
-
-      case PurchaseState.SEAT_SELECTION:
-      case PurchaseState.SELECTING_SEATS:
-        if (event.type === 'SELECTING_SEATS') {
-          return this.getContext();
-        }
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'AREA_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
-        }
-        if (event.type === 'SELECTING_AREA') {
-          return this.performTransition(PurchaseState.SELECTING_AREA);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'BOOKING_SUMMARY_DETECTED') {
-          return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
-        }
-        if (event.type === 'SELECTION_COMPLETED') {
-          return this.performTransition(PurchaseState.RESERVING);
-        }
-        if (event.type === 'SEAT_UNAVAILABLE') {
-          this._failureReason = FailureReason.SOLD_OUT;
-          return this.performTransition(PurchaseState.SOLD_OUT);
-        }
-        if (event.type === 'WAITING') {
-          return this.performTransition(PurchaseState.WAITING, event.reason);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        if (event.type === 'TICKET_SELECTED') {
-          return this.performTransition(PurchaseState.TICKET_SELECTED);
-        }
-        if (event.type === 'INVALID_SELECTION') {
-          this._failureReason = event.reason ?? FailureReason.INVALID_SELECTION;
-          return this.performTransition(PurchaseState.INVALID_SELECTION);
-        }
-        break;
-
-      case PurchaseState.SEATS_SELECTED:
-        if (event.type === 'SEATS_SELECTED') {
-          return this.getContext();
-        }
-        if (event.type === 'EVENT_DETECTED') {
-          if (event.eventId) this._eventId = event.eventId;
-          return this.performTransition(PurchaseState.EVENT_DETECTED);
-        }
-        if (event.type === 'SHOWING_DETECTED') {
-          return this.performTransition(PurchaseState.SHOWING_DETECTED);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'AREA_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
-        }
-        if (event.type === 'SELECTING_AREA') {
-          return this.performTransition(PurchaseState.SELECTING_AREA);
-        }
-        if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'TICKET_SELECTED') {
-          return this.performTransition(PurchaseState.TICKET_SELECTED);
-        }
-        if (event.type === 'BOOKING_SUMMARY_DETECTED') {
-          return this.performTransition(PurchaseState.BOOKING_SUMMARY_DETECTED);
-        }
-        if (event.type === 'QUESTION_FORM_DETECTED') {
-          return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
-        }
-        if (event.type === 'FILLING_ATTENDEE_FORM') {
-          return this.performTransition(PurchaseState.FILLING_ATTENDEE_FORM);
-        }
-        if (event.type === 'CONSENT_REQUIRED') {
-          return this.performTransition(PurchaseState.CONSENT_REQUIRED);
-        }
-        if (event.type === 'PAYMENT_GATE') {
-          return this.performTransition(PurchaseState.PAYMENT_GATE);
-        }
-        if (event.type === 'CHECKOUT_OPENED') {
-          return this.performTransition(PurchaseState.CHECKOUT);
-        }
-        if (event.type === 'SELECTION_COMPLETED' || event.type === 'RESERVATION_INITIATED') {
-          return this.performTransition(PurchaseState.RESERVING);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        break;
-
-      case PurchaseState.BOOKING_SUMMARY_DETECTED:
-        if (event.type === 'QUESTION_FORM_DETECTED') {
-          return this.performTransition(PurchaseState.QUESTION_FORM_DETECTED);
-        }
-        if (event.type === 'FILLING_ATTENDEE_FORM') {
-          return this.performTransition(PurchaseState.FILLING_ATTENDEE_FORM);
-        }
-        if (event.type === 'CONSENT_REQUIRED') {
-          return this.performTransition(PurchaseState.CONSENT_REQUIRED);
-        }
-        if (event.type === 'PAYMENT_GATE') {
-          return this.performTransition(PurchaseState.PAYMENT_GATE);
-        }
-        if (event.type === 'CHECKOUT_OPENED') {
-          return this.performTransition(PurchaseState.CHECKOUT);
-        }
-        if (event.type === 'RESERVATION_INITIATED') {
-          return this.performTransition(PurchaseState.RESERVING);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        break;
-
-      case PurchaseState.QUESTION_FORM_DETECTED:
-        if (event.type === 'FILLING_ATTENDEE_FORM') {
-          return this.performTransition(PurchaseState.FILLING_ATTENDEE_FORM);
-        }
-        if (event.type === 'FORM_VALIDATED') {
-          return this.performTransition(PurchaseState.FORM_VALIDATED);
-        }
-        if (event.type === 'CONSENT_REQUIRED') {
-          return this.performTransition(PurchaseState.CONSENT_REQUIRED);
-        }
-        if (event.type === 'PAYMENT_GATE') {
-          return this.performTransition(PurchaseState.PAYMENT_GATE);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'AREA_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
-        }
-        if (event.type === 'SELECTING_AREA') {
-          return this.performTransition(PurchaseState.SELECTING_AREA);
-        }
-        if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'TICKET_SELECTED') {
-          return this.performTransition(PurchaseState.TICKET_SELECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        break;
-
-      case PurchaseState.FILLING_ATTENDEE_FORM:
-        if (event.type === 'FORM_VALIDATED') {
-          return this.performTransition(PurchaseState.FORM_VALIDATED);
-        }
-        if (event.type === 'CONSENT_REQUIRED') {
-          return this.performTransition(PurchaseState.CONSENT_REQUIRED);
-        }
-        if (event.type === 'PAYMENT_GATE') {
-          return this.performTransition(PurchaseState.PAYMENT_GATE);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'AREA_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
-        }
-        if (event.type === 'SELECTING_AREA') {
-          return this.performTransition(PurchaseState.SELECTING_AREA);
-        }
-        if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'TICKET_SELECTED') {
-          return this.performTransition(PurchaseState.TICKET_SELECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        break;
-
-      case PurchaseState.FORM_VALIDATED:
-        if (event.type === 'CONSENT_REQUIRED') {
-          return this.performTransition(PurchaseState.CONSENT_REQUIRED);
-        }
-        if (event.type === 'PAYMENT_GATE') {
-          return this.performTransition(PurchaseState.PAYMENT_GATE);
-        }
-        if (event.type === 'CHECKOUT_OPENED') {
-          return this.performTransition(PurchaseState.CHECKOUT);
-        }
-        if (event.type === 'RESERVATION_INITIATED') {
-          return this.performTransition(PurchaseState.RESERVING);
-        }
-        if (event.type === 'SEAT_MAP_DETECTED') {
-          return this.performTransition(PurchaseState.SEAT_MAP_DETECTED);
-        }
-        if (event.type === 'AREA_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.AREA_SELECTION_REQUIRED);
-        }
-        if (event.type === 'SELECTING_AREA') {
-          return this.performTransition(PurchaseState.SELECTING_AREA);
-        }
-        if (event.type === 'SELECTING_SEATS' || event.type === 'SEAT_SELECTION_REQUIRED') {
-          return this.performTransition(PurchaseState.SELECTING_SEATS);
-        }
-        if (event.type === 'SEATS_SELECTED') {
-          return this.performTransition(PurchaseState.SEATS_SELECTED);
-        }
-        if (event.type === 'TICKET_SELECTED') {
-          return this.performTransition(PurchaseState.TICKET_SELECTED);
-        }
-        if (event.type === 'TICKETS_DETECTED') {
-          return this.performTransition(PurchaseState.TICKETS_DETECTED);
-        }
-        break;
-
-      case PurchaseState.CONSENT_REQUIRED:
-        if (
-          event.type === 'HUMAN_INTERVENTION_RESOLVED' ||
-          event.type === 'USER_COMPLETED_CHALLENGE' ||
-          event.type === 'PAYMENT_GATE'
-        ) {
-          return this.performTransition(PurchaseState.PAYMENT_GATE);
-        }
-        break;
-
-      case PurchaseState.PAYMENT_GATE:
-        if (event.type === 'PAYMENT_GATE') {
-          return this.getContext();
-        }
-        if (event.type === 'PAYMENT_STARTED') {
-          return this.performTransition(PurchaseState.PAYMENT);
-        }
-        if (event.type === 'CONFIRMATION_PENDING') {
-          return this.performTransition(PurchaseState.CONFIRMATION_PENDING);
-        }
-        if (event.type === 'PAYMENT_CONFIRMED') {
-          return this.performTransition(PurchaseState.CONFIRMED);
-        }
-        if (event.type === 'PAYMENT_ACTION_REQUIRED') {
-          return this.performTransition(PurchaseState.PAYMENT_ACTION_REQUIRED);
-        }
-        if (event.type === 'PAYMENT_FAILED') {
-          this._failureReason = event.reason ?? FailureReason.PAYMENT_FAILED;
-          return this.performTransition(PurchaseState.PAYMENT_FAILED);
-        }
-        break;
-
-      case PurchaseState.CONFIRMATION_PENDING:
-        if (event.type === 'PAYMENT_CONFIRMED') {
-          return this.performTransition(PurchaseState.CONFIRMED);
-        }
-        if (event.type === 'PAYMENT_FAILED') {
-          this._failureReason = event.reason ?? FailureReason.PAYMENT_FAILED;
-          return this.performTransition(PurchaseState.PAYMENT_FAILED);
-        }
-        break;
-
-      case PurchaseState.RESERVING:
-        if (event.type === 'RESERVATION_SERVER_CONFIRMED') {
-          // RULE 4 & 5: Server-confirmed evidence is required.
-          if (!event.reservationId || event.reservationId.trim() === '') {
-            throw new StateTransitionError(
-              from,
-              PurchaseState.HELD,
-              event.type,
-              'Cannot transition to HELD without authoritative server reservationId'
-            );
-          }
-          const evidenceObj: ReservationEvidence = {
-            reservationId: event.reservationId,
-            ...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
-            ...(event.evidence?.holdId ? { holdId: event.evidence.holdId } : {}),
-            ...(event.evidence?.checkoutReference
-              ? { checkoutReference: event.evidence.checkoutReference }
-              : {}),
-            serverConfirmedAt: new Date().toISOString(),
-          };
-          this._evidence = evidenceObj as unknown as Record<string, unknown>;
-          return this.performTransition(PurchaseState.HELD);
-        }
-        if (event.type === 'RESERVATION_REJECTED') {
-          this._failureReason = event.reason;
-          if (event.message) this._failureMessage = event.message;
-          return this.performTransition(PurchaseState.FAILED);
-        }
-        if (event.type === 'SESSION_EXPIRED') {
-          return this.performTransition(PurchaseState.SESSION_REAUTH_REQUIRED);
-        }
-        if (event.type === 'RATE_LIMITED') {
-          this._failureReason = FailureReason.RATE_LIMITED;
-          return this.performTransition(PurchaseState.RATE_LIMITED);
-        }
-        if (event.type === 'CAPTCHA_REQUIRED') {
-          return this.performTransition(PurchaseState.CAPTCHA_REQUIRED);
-        }
-        if (event.type === 'UNKNOWN_SECURITY_CHALLENGE') {
-          return this.performTransition(PurchaseState.UNKNOWN_SECURITY_CHALLENGE);
-        }
-        if (event.type === 'RETRY_TARGET') {
-          return this.performTransition(PurchaseState.RETRYING_TARGET, event.reason);
-        }
-        if (event.type === 'WAITING' || event.type === 'WAITING_FOR_STOCK') {
-          return this.performTransition(PurchaseState.WAITING_FOR_STOCK, event.reason);
-        }
-        break;
-
-      case PurchaseState.HELD:
-        if (event.type === 'CHECKOUT_OPENED') {
-          return this.performTransition(PurchaseState.CHECKOUT);
-        }
-        break;
-
-      case PurchaseState.CHECKOUT:
-        if (event.type === 'PAYMENT_STARTED') {
-          return this.performTransition(PurchaseState.PAYMENT);
-        }
-        if (event.type === 'PAYMENT_ACTION_REQUIRED') {
-          return this.performTransition(PurchaseState.PAYMENT_ACTION_REQUIRED);
-        }
-        if (event.type === 'CHECKOUT_FAILED') {
-          this._failureReason = event.reason ?? FailureReason.CHECKOUT_FAILED;
-          return this.performTransition(PurchaseState.CHECKOUT_FAILED);
-        }
-        if (event.type === 'SESSION_EXPIRED') {
-          return this.performTransition(PurchaseState.SESSION_REAUTH_REQUIRED);
-        }
-        if (event.type === 'UNKNOWN_SECURITY_CHALLENGE') {
-          return this.performTransition(PurchaseState.UNKNOWN_SECURITY_CHALLENGE);
-        }
-        break;
-
-      case PurchaseState.PAYMENT:
-        if (event.type === 'PAYMENT_CONFIRMED') {
-          // Critical Security Boundary: Confirmation requires authoritative evidence
-          const evidenceRef =
-            event.orderId?.trim() ||
-            event.confirmationReference?.trim() ||
-            event.evidence?.orderId?.trim() ||
-            event.evidence?.confirmationReference?.trim();
-
-          if (!evidenceRef) {
-            throw new StateTransitionError(
-              from,
-              PurchaseState.CONFIRMED,
-              event.type,
-              'Cannot transition to CONFIRMED without authoritative confirmation evidence (orderId or confirmationReference)'
-            );
-          }
-
-          const evidenceObj: PaymentConfirmationEvidence = {
-            ...(event.orderId ? { orderId: event.orderId } : {}),
-            ...(event.confirmationReference
-              ? { confirmationReference: event.confirmationReference }
-              : {}),
-            ...(event.evidence?.ticketId ? { ticketId: event.evidence.ticketId } : {}),
-            confirmedAt: new Date().toISOString(),
-          };
-          this._evidence = evidenceObj as unknown as Record<string, unknown>;
-          return this.performTransition(PurchaseState.CONFIRMED);
-        }
-        if (event.type === 'PAYMENT_ACTION_REQUIRED') {
-          return this.performTransition(PurchaseState.PAYMENT_ACTION_REQUIRED);
-        }
-        if (event.type === 'PAYMENT_FAILED') {
-          this._failureReason = event.reason ?? FailureReason.PAYMENT_FAILED;
-          return this.performTransition(PurchaseState.PAYMENT_FAILED);
-        }
-        if (event.type === 'PAYMENT_TIMEOUT') {
-          this._failureReason = FailureReason.PAYMENT_FAILED;
-          this._failureMessage = event.message ?? 'Payment timed out';
-          return this.performTransition(PurchaseState.PAYMENT_FAILED);
-        }
-        break;
-
-      // Human Intervention States: Session reauth requires authoritative authentication re-verification
-      case PurchaseState.SESSION_REAUTH_REQUIRED:
-        if (
-          event.type === 'HUMAN_INTERVENTION_RESOLVED' ||
-          event.type === 'USER_COMPLETED_CHALLENGE'
-        ) {
-          // Rule: SESSION_REAUTH_REQUIRED -> HUMAN_INTERVENTION_RESOLVED -> AUTH_CHECK
-          // Must verify actual authentication before proceeding to EVENT_CHECK or READY
-          return this.performTransition(PurchaseState.AUTH_CHECK);
-        }
-        break;
-
-      // Other Human Intervention States: Transition to STATE_RECHECK for revalidation
-      case PurchaseState.CAPTCHA_REQUIRED:
-      case PurchaseState.OTP_REQUIRED:
-      case PurchaseState.PAYMENT_ACTION_REQUIRED:
-      case PurchaseState.UNKNOWN_SECURITY_CHALLENGE:
-      case PurchaseState.HUMAN_INTERVENTION_REQUIRED:
-        if (
-          event.type === 'HUMAN_INTERVENTION_RESOLVED' ||
-          event.type === 'USER_COMPLETED_CHALLENGE'
-        ) {
-          return this.performTransition(PurchaseState.STATE_RECHECK);
-        }
-        break;
-
-      // STATE_RECHECK: Transitional verification state
-      case PurchaseState.STATE_RECHECK:
-        if (event.type === 'STATE_VERIFIED') {
-          // Rule: Observation / challenge completion alone MUST NEVER authorize HELD or CONFIRMED
-          if (
-            event.verifiedState === PurchaseState.HELD ||
-            event.verifiedState === PurchaseState.CONFIRMED
-          ) {
-            throw new StateTransitionError(
-              from,
-              event.verifiedState,
-              event.type,
-              `STATE_RECHECK cannot directly authorize '${event.verifiedState}'. Authoritative server evidence is required.`
-            );
-          }
-
-          // If recovering from SESSION_REAUTH_REQUIRED, must pass through AUTH_CHECK
-          if (
-            this._previousState === PurchaseState.SESSION_REAUTH_REQUIRED &&
-            event.verifiedState !== PurchaseState.AUTH_CHECK
-          ) {
-            throw new StateTransitionError(
-              from,
-              event.verifiedState,
-              event.type,
-              'Re-authentication recovery must route through AUTH_CHECK for authoritative session verification'
-            );
-          }
-
-          return this.performTransition(event.verifiedState);
-        }
-        if (event.type === 'STATE_UNVERIFIED') {
-          this._failureReason = FailureReason.UNKNOWN;
-          this._failureMessage =
-            event.reason ?? 'State re-evaluation failed to verify safe application state';
-          return this.performTransition(PurchaseState.UNKNOWN);
-        }
-        break;
-
-      default:
-        break;
+    if (typeof handler === 'string') {
+      return this.performTransition(handler, event.type);
     }
 
-    // If reached here, transition is invalid
-    throw new StateTransitionError(
-      from,
-      'UNKNOWN',
-      event.type,
-      `State transition from '${from}' with event '${event.type}' is not allowed`
-    );
+    const result = handler(this, event, from);
+    if (typeof result === 'string') {
+      return this.performTransition(result, event.type);
+    }
+    return result;
   }
 
-  private performTransition(to: PurchaseState, message?: string | undefined): StateContext {
+  private performTransition(
+    to: PurchaseState,
+    eventType: string,
+    message?: string | undefined
+  ): StateContext {
+    this._transitionEvent = eventType;
+    if (isHumanInterventionState(to)) {
+      if (this._preInterventionState === undefined && !isHumanInterventionState(this._state)) {
+        this._preInterventionState = this._state;
+      }
+    }
     this._previousState = this._state;
     this._state = to;
     this._updatedAt = new Date().toISOString();

@@ -859,7 +859,9 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       };
 
       const adapter = new TicketboxJourneyAdapter(logger, root);
-      adapter.setCustomUrl('https://ticketbox.vn/events/26578/bookings/81077997936830/select-ticket');
+      adapter.setCustomUrl(
+        'https://ticketbox.vn/events/26578/bookings/81077997936830/select-ticket'
+      );
       adapter.markRecoveryInitiated();
       const res = await adapter.confirmCancelOrderForReselect();
 
@@ -904,7 +906,9 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       };
 
       const adapter = new TicketboxJourneyAdapter(logger, root);
-      adapter.setCustomUrl('https://ticketbox.vn/events/26578/bookings/81077997936830/select-ticket');
+      adapter.setCustomUrl(
+        'https://ticketbox.vn/events/26578/bookings/81077997936830/select-ticket'
+      );
       adapter.markRecoveryInitiated();
       const result = await adapter.detectAndHandleErrorModal();
 
