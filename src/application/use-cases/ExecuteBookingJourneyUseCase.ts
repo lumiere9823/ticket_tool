@@ -237,8 +237,11 @@ export class ExecuteBookingJourneyUseCase {
           this.stateMachine.transition({ type: 'RESET_REQUESTED' });
           this.stateMachine.transition({ type: 'ARM' });
           this.stateMachine.transition({ type: 'MONITORING_STARTED' });
-        } catch {
-          // ignore
+        } catch (err: unknown) {
+          this.logger.warn('Initial clean-reset transition skipped (invalid from current state)', {
+            state: this.getState(),
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
 
@@ -310,8 +313,12 @@ export class ExecuteBookingJourneyUseCase {
                 reason: `Journey retry attempt ${retries}`,
               });
             }
-          } catch {
-            // ignore
+          } catch (retryEntryErr: unknown) {
+            this.logger.warn('RETRY_TARGET transition skipped at retry entry (invalid from current state)', {
+              state: this.getState(),
+              retries,
+              error: retryEntryErr instanceof Error ? retryEntryErr.message : String(retryEntryErr),
+            });
           }
         }
         try {
@@ -367,8 +374,12 @@ export class ExecuteBookingJourneyUseCase {
                 type: 'RETRY_TARGET',
                 reason: `Preparing retry attempt ${retries}`,
               });
-            } catch {
-              // ignore if invalid transition
+            } catch (retryPrepErr: unknown) {
+              this.logger.warn('RETRY_TARGET transition skipped at retry preparation (invalid from current state)', {
+                state: this.getState(),
+                retries,
+                error: retryPrepErr instanceof Error ? retryPrepErr.message : String(retryPrepErr),
+              });
             }
           }
         }
@@ -1047,8 +1058,11 @@ export class ExecuteBookingJourneyUseCase {
               },
               preferences.quantity
             );
-          } catch {
-            // ignore if quantity control not rendered in area view
+          } catch (qtyErr: unknown) {
+            this.logger.warn('Quantity control not rendered in area view; skipping quantity set', {
+              state: this.getState(),
+              error: qtyErr instanceof Error ? qtyErr.message : String(qtyErr),
+            });
           }
         }
 
@@ -1058,14 +1072,22 @@ export class ExecuteBookingJourneyUseCase {
           try {
             this.stateMachine.transition({ type: 'AREA_SELECTION_REQUIRED' });
             this.stateMachine.transition({ type: 'SELECTING_AREA' });
-          } catch {
-            // ignore
+          } catch (areaReqErr: unknown) {
+            this.logger.warn('AREA_SELECTION_REQUIRED/SELECTING_AREA transition skipped', {
+              state: this.getState(),
+              event: 'AREA_SELECTION_REQUIRED + SELECTING_AREA',
+              error: areaReqErr instanceof Error ? areaReqErr.message : String(areaReqErr),
+            });
           }
         } else if (this.stateMachine.state === PurchaseState.AREA_SELECTION_REQUIRED) {
           try {
             this.stateMachine.transition({ type: 'SELECTING_AREA' });
-          } catch {
-            // ignore
+          } catch (selectingAreaErr: unknown) {
+            this.logger.warn('SELECTING_AREA transition skipped', {
+              state: this.getState(),
+              event: 'SELECTING_AREA',
+              error: selectingAreaErr instanceof Error ? selectingAreaErr.message : String(selectingAreaErr),
+            });
           }
         }
         this.stateMachine.transition({

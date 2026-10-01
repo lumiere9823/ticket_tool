@@ -47,7 +47,11 @@ export class ArmAssistantUseCase {
       }
     }
 
-    // 1. Save configured preferences while preserving existing userProfile and purchasePlan
+    // 1. Transition state machine first: READY -> ARMED
+    //    Do this BEFORE saving config so a failed transition does not persist stale config.
+    const context = this.stateMachine.transition({ type: 'ARM' });
+
+    // 2. Build and save configured preferences (only reached if transition succeeded)
     const existing = await this.storage.getConfiguration();
     const profile = request.userProfile ?? existing?.userProfile;
     const config: AssistantConfiguration = {
@@ -67,9 +71,6 @@ export class ArmAssistantUseCase {
       ...(profile ? { userProfile: profile } : {}),
     };
     await this.storage.saveConfiguration(config);
-
-    // 2. Transition state machine: READY -> ARMED
-    const context = this.stateMachine.transition({ type: 'ARM' });
     await this.storage.saveCurrentState(context);
 
     // 3. Publish state update

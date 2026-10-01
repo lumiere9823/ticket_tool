@@ -31,7 +31,7 @@ export class StopAssistantUseCase {
       type: 'STATE_CHANGED',
       timestamp: new Date().toISOString(),
       attemptId: this.stateMachine.attemptId,
-      state: PurchaseState.STOPPED,
+      state: context.currentState,
       context,
     });
 
