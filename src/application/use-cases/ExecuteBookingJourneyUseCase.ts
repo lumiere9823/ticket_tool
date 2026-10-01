@@ -3,7 +3,7 @@ import { TicketboxPageAdapter } from '../ports/TicketboxPageAdapter';
 import { EventBus } from '../ports/EventBus';
 import { LoggerPort } from '../ports/LoggerPort';
 import { LatencyTracker } from '../services/LatencyTracker';
-import { PurchaseState, FailureReason } from '../../domain/states/PurchaseState';
+import { PurchaseState, FailureReason, canAutoReset } from '../../domain/states/PurchaseState';
 import {
   BookingPreferences,
   CurrentSelection,
@@ -160,8 +160,10 @@ export class ExecuteBookingJourneyUseCase {
         };
       }
 
-      if (currentState === PurchaseState.CONFIRMED || currentState === PurchaseState.HELD) {
-        this.logger.info(`State machine already ${currentState}. Halting.`);
+      if (!canAutoReset(currentState)) {
+        this.logger.info(
+          `State machine is in protected state ${currentState} (canAutoReset is false). Halting journey for user action.`
+        );
         return {
           success: true,
           finalState: currentState,
@@ -201,13 +203,10 @@ export class ExecuteBookingJourneyUseCase {
       while (retries <= this.MAX_RETRIES) {
         if (retries > 0) {
           const retryState = this.getState();
-          if (
-            retryState === PurchaseState.PAYMENT_GATE ||
-            retryState === PurchaseState.CONFIRMED ||
-            retryState === PurchaseState.HELD ||
-            retryState === PurchaseState.CONSENT_REQUIRED
-          ) {
-            this.logger.info(`Target state ${retryState} reached during journey. Halting retries.`);
+          if (!canAutoReset(retryState)) {
+            this.logger.info(
+              `Guarded state ${retryState} reached during journey (canAutoReset is false). Halting retries.`
+            );
             return {
               success: true,
               finalState: retryState,

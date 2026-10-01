@@ -5,7 +5,7 @@ import { SanitizedLogger } from '../../infrastructure/logging/SanitizedLogger';
 import { ExtensionMessage } from '../shared/messages';
 import { ExecuteBookingJourneyUseCase } from '../../application/use-cases/ExecuteBookingJourneyUseCase';
 import { PurchaseStateMachine } from '../../domain/state-machine/PurchaseStateMachine';
-import { PurchaseState, StateContext } from '../../domain/states/PurchaseState';
+import { PurchaseState, StateContext, canAutoReset } from '../../domain/states/PurchaseState';
 import { ChromeStorageRepository } from '../../infrastructure/storage/ChromeStorageRepository';
 import { BookingPreferences } from '../../domain/entities/BookingJourneyModels';
 import { LatencyTracker } from '../../application/services/LatencyTracker';
@@ -95,6 +95,13 @@ function resetStateMachineToMonitoring(reason = 'Re-arm reset'): void {
   try {
     const s = stateMachine.state;
     if (s === PurchaseState.MONITORING) return;
+    if (!canAutoReset(s)) {
+      logger.warn(
+        'Automated reset to MONITORING blocked: state requires user action or is protected',
+        { currentState: s, reason }
+      );
+      return;
+    }
     if (
       s !== PurchaseState.STOPPED &&
       s !== PurchaseState.READY &&

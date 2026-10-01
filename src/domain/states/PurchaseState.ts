@@ -102,6 +102,30 @@ export function isTerminalState(state: PurchaseState): boolean {
 }
 
 /**
+ * Checks if a state can be automatically reset by the assistant without explicit user intent.
+ * Pure domain function.
+ * Strictly returns false for human intervention states, reservation boundaries,
+ * and critical post-reservation / payment states.
+ */
+export function canAutoReset(state: PurchaseState): boolean {
+  if (isHumanInterventionState(state)) {
+    return false;
+  }
+  if (
+    state === PurchaseState.PAYMENT_GATE ||
+    state === PurchaseState.HELD ||
+    state === PurchaseState.CHECKOUT ||
+    state === PurchaseState.PAYMENT ||
+    state === PurchaseState.CONFIRMATION_PENDING ||
+    state === PurchaseState.CONFIRMED ||
+    state === PurchaseState.STATE_RECHECK
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Explicit failure reasons categorizing why a flow reached FAILED.
  */
 export enum FailureReason {
