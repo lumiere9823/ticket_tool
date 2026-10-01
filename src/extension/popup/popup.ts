@@ -17,6 +17,7 @@ import {
   PriorityStrategy,
   DEFAULT_PERSISTENCE_POLICY,
   createDefaultScopedPurchasePlan,
+  extractEventIdFromUrl,
 } from '../../domain/entities/ScopedPurchasePlan';
 import { ScopedPurchasePlanValidator } from '../../domain/policies/ScopedPurchasePlanValidator';
 import { PersistentExecutionState } from '../../application/ports/StorageRepository';
@@ -1331,6 +1332,10 @@ async function handleBasicArm(): Promise<void> {
     addLog(`🚀 [CƠ BẢN] Đã ARM săn vé: ${selectedTicketIds.join(', ')} (${quantity} vé)...`);
   }
 
+  const targetTab = await findTicketboxTab();
+  const targetTabId = targetTab?.id;
+  const eventId = plan.eventId || extractEventIdFromUrl(url) || undefined;
+
   await messageBus.publish({
     type: 'ARM_REQUESTED',
     timestamp: new Date().toISOString(),
@@ -1340,6 +1345,9 @@ async function handleBasicArm(): Promise<void> {
     allowFallback: false,
     scopedPurchasePlan: plan,
     userProfile,
+    targetTabId,
+    eventId,
+    targetEventId: eventId,
   });
 }
 
@@ -2487,6 +2495,10 @@ btnArm.addEventListener('click', async () => {
   // Priority categories from scoped targets
   const categoryPriority = scopedPlan.targets.flatMap((t) => t.ticketTypeIds);
 
+  const targetTab = await findTicketboxTab();
+  const targetTabId = targetTab?.id;
+  const eventId = scopedPlan.eventId || extractEventIdFromUrl(url) || undefined;
+
   await messageBus.publish({
     type: 'ARM_REQUESTED',
     timestamp: new Date().toISOString(),
@@ -2496,6 +2508,9 @@ btnArm.addEventListener('click', async () => {
     allowFallback: false, // In scoped persistent mode, fallback outside scope is forbidden
     scopedPurchasePlan: scopedPlan,
     userProfile,
+    targetTabId,
+    eventId,
+    targetEventId: eventId,
   });
 });
 

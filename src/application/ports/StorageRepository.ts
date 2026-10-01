@@ -23,6 +23,10 @@ export interface AssistantConfiguration {
   userProfile?: UserProfileData | undefined;
   /** ISO timestamp mirror of scopedPurchasePlan.persistence.startAt — for fast alarm handler lookup. */
   scheduledArmAt?: string | undefined;
+  /** Chrome tab ID strictly bound to the armed execution. */
+  armedTabId?: number | undefined;
+  /** Ticketbox event ID strictly bound to the armed execution. */
+  armedEventId?: string | undefined;
 }
 
 export interface PersistentExecutionState {
@@ -33,6 +37,8 @@ export interface PersistentExecutionState {
   currentPhase: string;
   stopReason?: string | undefined;
   tabHiddenWarning?: boolean | undefined;
+  armedTabId?: number | undefined;
+  armedEventId?: string | undefined;
 }
 
 export interface StorageRepository {

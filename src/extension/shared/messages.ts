@@ -35,6 +35,9 @@ export interface BaseExtensionMessage {
   timestamp: string;
   attemptId?: string | undefined;
   state?: PurchaseState | undefined;
+  targetTabId?: number | undefined;
+  targetEventId?: string | undefined;
+  eventId?: string | undefined;
 }
 
 export interface StateChangedMessage extends BaseExtensionMessage {

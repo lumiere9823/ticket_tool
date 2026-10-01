@@ -445,3 +445,17 @@ export function pickTarget(
       return eligible[0] ?? null;
   }
 }
+
+/**
+ * Authoritatively extracts the event ID from a Ticketbox URL.
+ * Handles both slug-based IDs (e.g. "rock-concert-12345" or "event-12345")
+ * and /events/:id or /event/:id route formats.
+ */
+export function extractEventIdFromUrl(url: string): string | null {
+  if (!url) return null;
+  const matchSlug = url.match(/-(\d+)(?:[/?#]|$)/);
+  if (matchSlug && matchSlug[1]) return matchSlug[1];
+  const matchEvent = url.match(/\/events?\/([a-zA-Z0-9_-]+)/i);
+  if (matchEvent && matchEvent[1]) return matchEvent[1];
+  return null;
+}

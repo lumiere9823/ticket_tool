@@ -8,6 +8,7 @@ import { StartMonitoringUseCase } from '../../application/use-cases/StartMonitor
 import { StopAssistantUseCase } from '../../application/use-cases/StopAssistantUseCase';
 import { ExtensionMessage } from '../shared/messages';
 import { MessageSenderInfo } from '../../application/ports/EventBus';
+import { extractEventIdFromUrl } from '../../domain/entities/ScopedPurchasePlan';
 
 const logger = new SanitizedLogger({ state: 'SERVICE_WORKER' });
 const storage = new ChromeStorageRepository();
@@ -376,7 +377,11 @@ async function executeScheduledArm(): Promise<void> {
         currentPhase: 'ARMED',
       });
 
-      await startMonitoringUseCase.execute(config.targetEventUrl);
+      await startMonitoringUseCase.execute(
+        config.targetEventUrl,
+        config.armedTabId,
+        config.armedEventId
+      );
     } else {
       logger.warn('SCHEDULED_ARM fired but state machine not in READY/IDLE; skipping', {
         state: stateMachine.state,
@@ -385,42 +390,60 @@ async function executeScheduledArm(): Promise<void> {
 
     // Bring Ticketbox tab to foreground to avoid browser background timer throttling
     if (typeof chrome !== 'undefined' && chrome.tabs) {
-      chrome.tabs.query({ url: '*://*.ticketbox.vn/*' }, (tabs) => {
-        const targetTab = tabs?.[0];
-        if (targetTab && targetTab.id) {
-          chrome.tabs.update(targetTab.id, { active: true });
-          if (targetTab.windowId) {
-            chrome.windows.update(targetTab.windowId, { focused: true });
-          }
-          chrome.tabs.sendMessage(
-            targetTab.id,
-            {
-              type: 'START_MONITORING',
-              timestamp: new Date().toISOString(),
-              targetEventUrl: config.targetEventUrl,
-            },
-            () => {
-              if (chrome.runtime.lastError) {
-                /* ignore */
-              }
-            }
-          );
-          chrome.tabs.sendMessage(
-            targetTab.id,
-            {
-              type: 'REQUEST_DISCOVERY_SCAN',
-              timestamp: new Date().toISOString(),
-            },
-            () => {
-              if (chrome.runtime.lastError) {
-                /* ignore */
-              }
-            }
-          );
-        } else if (config.targetEventUrl) {
-          chrome.tabs.create({ url: config.targetEventUrl, active: true });
+      const bringTabToForeground = (targetTab: chrome.tabs.Tab) => {
+        if (!targetTab.id) return;
+        chrome.tabs.update(targetTab.id, { active: true });
+        if (targetTab.windowId) {
+          chrome.windows.update(targetTab.windowId, { focused: true });
         }
-      });
+        chrome.tabs.sendMessage(
+          targetTab.id,
+          {
+            type: 'START_MONITORING',
+            timestamp: new Date().toISOString(),
+            targetEventUrl: config.targetEventUrl,
+            targetTabId: targetTab.id,
+            targetEventId: config.armedEventId,
+          },
+          () => {
+            if (chrome.runtime.lastError) {
+              /* ignore */
+            }
+          }
+        );
+        chrome.tabs.sendMessage(
+          targetTab.id,
+          {
+            type: 'REQUEST_DISCOVERY_SCAN',
+            timestamp: new Date().toISOString(),
+            targetTabId: targetTab.id,
+          },
+          () => {
+            if (chrome.runtime.lastError) {
+              /* ignore */
+            }
+          }
+        );
+      };
+
+      if (config.armedTabId) {
+        chrome.tabs.get(config.armedTabId, (tab) => {
+          if (!chrome.runtime.lastError && tab) {
+            bringTabToForeground(tab);
+          } else if (config.targetEventUrl) {
+            chrome.tabs.create({ url: config.targetEventUrl, active: true });
+          }
+        });
+      } else {
+        chrome.tabs.query({ url: '*://*.ticketbox.vn/*' }, (tabs) => {
+          const targetTab = tabs?.[0];
+          if (targetTab && targetTab.id) {
+            bringTabToForeground(targetTab);
+          } else if (config.targetEventUrl) {
+            chrome.tabs.create({ url: config.targetEventUrl, active: true });
+          }
+        });
+      }
     }
 
     // Push desktop notification
@@ -493,6 +516,19 @@ async function handleServiceWorkerMessage(
           });
           break;
         }
+
+        const currentConfig = await storage.getConfiguration();
+        if (
+          currentConfig?.armedTabId !== undefined &&
+          sender.tabId !== undefined &&
+          sender.tabId !== currentConfig.armedTabId
+        ) {
+          logger.warn('Rejected STATE_CHANGED from un-armed tab', {
+            senderTabId: sender.tabId,
+            armedTabId: currentConfig.armedTabId,
+          });
+          break;
+        }
       }
 
       const journeyContext = message.context;
@@ -555,6 +591,14 @@ async function handleServiceWorkerMessage(
 
     case 'ARM_REQUESTED': {
       try {
+        const armedTabId = message.targetTabId;
+        const armedEventId =
+          message.eventId ||
+          message.targetEventId ||
+          message.scopedPurchasePlan?.eventId ||
+          extractEventIdFromUrl(message.eventUrl) ||
+          undefined;
+
         // ── Scheduled ARM: if startAt is in the future, defer via chrome.alarm ──
         const startAt = message.scopedPurchasePlan?.persistence?.startAt;
         if (startAt) {
@@ -564,6 +608,8 @@ async function handleServiceWorkerMessage(
             logger.info('ARM deferred — scheduling alarm for future startAt', {
               startAt,
               delayMs: startMs - nowMs,
+              armedTabId,
+              armedEventId,
             });
 
             // Save full config so alarm handler can read it later
@@ -571,6 +617,8 @@ async function handleServiceWorkerMessage(
             await storage.saveConfiguration({
               targetEventUrl: message.eventUrl,
               discoveryMode: false,
+              armedTabId,
+              armedEventId,
               preferences: {
                 categoryPriority: message.categoryPriority,
                 quantity: message.quantity,
@@ -617,6 +665,8 @@ async function handleServiceWorkerMessage(
             await storage.savePersistentState({
               currentPhase: 'SCHEDULED',
               attemptsCount: 0,
+              armedTabId,
+              armedEventId,
               stopReason: undefined,
             });
 
@@ -624,6 +674,8 @@ async function handleServiceWorkerMessage(
               type: 'SCHEDULED_ARM_CONFIRMED',
               timestamp: new Date().toISOString(),
               scheduledAt: startAt,
+              targetTabId: armedTabId,
+              targetEventId: armedEventId,
             });
 
             await updateExtensionBadge(undefined, true);
@@ -656,7 +708,11 @@ async function handleServiceWorkerMessage(
           stateMachine.state === PurchaseState.READY ||
           stateMachine.state === PurchaseState.IDLE
         ) {
-          logger.info('Arming assistant upon user request', { eventUrl: message.eventUrl });
+          logger.info('Arming assistant upon user request', {
+            eventUrl: message.eventUrl,
+            armedTabId,
+            armedEventId,
+          });
           await armUseCase.execute({
             eventUrl: message.eventUrl,
             categoryPriority: message.categoryPriority,
@@ -666,16 +722,49 @@ async function handleServiceWorkerMessage(
             scopedPurchasePlan: message.scopedPurchasePlan,
           });
 
+          const existingConfig = await storage.getConfiguration();
+          await storage.saveConfiguration({
+            targetEventUrl: message.eventUrl,
+            discoveryMode: false,
+            armedTabId,
+            armedEventId,
+            preferences: {
+              categoryPriority: message.categoryPriority,
+              quantity: message.quantity,
+              allowFallback: message.allowFallback ?? true,
+            },
+            ...(existingConfig?.purchasePlan ? { purchasePlan: existingConfig.purchasePlan } : {}),
+            ...(message.scopedPurchasePlan
+              ? { scopedPurchasePlan: message.scopedPurchasePlan }
+              : existingConfig?.scopedPurchasePlan
+                ? { scopedPurchasePlan: existingConfig.scopedPurchasePlan }
+                : {}),
+            ...(message.userProfile
+              ? { userProfile: message.userProfile }
+              : existingConfig?.userProfile
+                ? { userProfile: existingConfig.userProfile }
+                : {}),
+            ...(existingConfig?.ticketCatalogSnapshot
+              ? { ticketCatalogSnapshot: existingConfig.ticketCatalogSnapshot }
+              : {}),
+          });
+
           await storage.savePersistentState({
             startedAt: new Date().toISOString(),
             attemptsCount: 0,
             currentPhase: 'ARMED',
+            armedTabId,
+            armedEventId,
             stopReason: undefined,
           });
 
           // Immediately start monitoring the target event
-          logger.info('Starting monitoring for armed event', { eventUrl: message.eventUrl });
-          await startMonitoringUseCase.execute(message.eventUrl);
+          logger.info('Starting monitoring for armed event', {
+            eventUrl: message.eventUrl,
+            armedTabId,
+            armedEventId,
+          });
+          await startMonitoringUseCase.execute(message.eventUrl, armedTabId, armedEventId);
         } else {
           logger.warn('Cannot arm assistant from current state', { state: stateMachine.state });
         }
@@ -690,7 +779,12 @@ async function handleServiceWorkerMessage(
         stateMachine.transition({ type: 'ARM' });
       }
       if (stateMachine.state === PurchaseState.ARMED) {
-        await startMonitoringUseCase.execute(message.eventUrl);
+        const config = await storage.getConfiguration();
+        await startMonitoringUseCase.execute(
+          message.eventUrl,
+          message.targetTabId ?? config?.armedTabId,
+          message.targetEventId ?? message.eventId ?? config?.armedEventId
+        );
       }
       break;
     }

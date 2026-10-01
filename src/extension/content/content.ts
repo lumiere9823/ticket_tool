@@ -13,6 +13,7 @@ import {
   filterByScope,
   pickTarget,
   ScopedPurchasePlan,
+  extractEventIdFromUrl,
 } from '../../domain/entities/ScopedPurchasePlan';
 
 import { DomSecurityChallengeDetector } from '../../infrastructure/security/DomSecurityChallengeDetector';
@@ -330,21 +331,42 @@ function checkUrlChange(): void {
 
     if (nowUrl.includes('/select-ticket') || nowUrl.includes('/booking')) {
       if (!userExplicitlyStopped && !isMonitoringActive) {
-        logger.info('Detected navigation to select-ticket page; ensuring monitoring is active');
-        isMonitoringActive = true;
-        try {
-          if (
-            stateMachine.state === PurchaseState.FAILED ||
-            stateMachine.state === PurchaseState.STOPPED
-          ) {
-            stateMachine.transition({ type: 'RESET_REQUESTED' });
-            stateMachine.transition({ type: 'ARM' });
-            stateMachine.transition({ type: 'MONITORING_STARTED' });
-          }
-        } catch {
-          // ignore
-        }
-        scheduleNextPoll(100);
+        storage
+          .getConfiguration()
+          .then((config) => {
+            return storage.getPersistentState().then((pState) => {
+              const isArmed =
+                pState?.currentPhase === 'ARMED' || pState?.currentPhase === 'MONITORING';
+              const armedEventId = config?.armedEventId || config?.scopedPurchasePlan?.eventId;
+              const curEventId = extractEventIdFromUrl(nowUrl);
+              const isMatchingEvent = armedEventId
+                ? curEventId === armedEventId
+                : Boolean(
+                    config?.targetEventUrl && nowUrl.includes(config.targetEventUrl.split('?')[0]!)
+                  );
+
+              if (isArmed && isMatchingEvent && !userExplicitlyStopped && !isMonitoringActive) {
+                logger.info(
+                  'Detected navigation to select-ticket page for armed event; ensuring monitoring is active'
+                );
+                isMonitoringActive = true;
+                try {
+                  if (
+                    stateMachine.state === PurchaseState.FAILED ||
+                    stateMachine.state === PurchaseState.STOPPED
+                  ) {
+                    stateMachine.transition({ type: 'RESET_REQUESTED' });
+                    stateMachine.transition({ type: 'ARM' });
+                    stateMachine.transition({ type: 'MONITORING_STARTED' });
+                  }
+                } catch {
+                  // ignore
+                }
+                scheduleNextPoll(100);
+              }
+            });
+          })
+          .catch(() => {});
       }
     }
     scheduleDiscoveryScan(50);
@@ -962,27 +984,42 @@ async function performDiscoveryScan(force = false): Promise<void> {
       currentUrl.includes('/payment');
 
     // Auto-resume monitoring if user is on select-ticket page (e.g. after clicking "Chọn ghế khác"),
-    // but NEVER auto-resume if the user explicitly clicked Stop.
+    // but NEVER auto-resume if the user explicitly clicked Stop, and only if armed for this event.
     if (
       !userExplicitlyStopped &&
       !isMonitoringActive &&
       (currentUrl.includes('/select-ticket') || currentUrl.includes('/booking'))
     ) {
-      logger.info(
-        'User on select-ticket page; auto-reactivating monitoring to continue seat selection'
-      );
-      isMonitoringActive = true;
-      try {
-        if (
-          stateMachine.state === PurchaseState.FAILED ||
-          stateMachine.state === PurchaseState.STOPPED
-        ) {
-          stateMachine.transition({ type: 'RESET_REQUESTED' });
-          stateMachine.transition({ type: 'ARM' });
-          stateMachine.transition({ type: 'MONITORING_STARTED' });
+      const [config, pState] = await Promise.all([
+        storage.getConfiguration().catch(() => null),
+        storage.getPersistentState().catch(() => null),
+      ]);
+      const isArmed = pState?.currentPhase === 'ARMED' || pState?.currentPhase === 'MONITORING';
+      const armedEventId = config?.armedEventId || config?.scopedPurchasePlan?.eventId;
+      const curEventId = extractEventIdFromUrl(currentUrl);
+      const isMatchingEvent = armedEventId
+        ? curEventId === armedEventId
+        : Boolean(
+            config?.targetEventUrl && currentUrl.includes(config.targetEventUrl.split('?')[0]!)
+          );
+
+      if (isArmed && isMatchingEvent && !userExplicitlyStopped && !isMonitoringActive) {
+        logger.info(
+          'User on select-ticket page for armed event; auto-reactivating monitoring to continue seat selection'
+        );
+        isMonitoringActive = true;
+        try {
+          if (
+            stateMachine.state === PurchaseState.FAILED ||
+            stateMachine.state === PurchaseState.STOPPED
+          ) {
+            stateMachine.transition({ type: 'RESET_REQUESTED' });
+            stateMachine.transition({ type: 'ARM' });
+            stateMachine.transition({ type: 'MONITORING_STARTED' });
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
     }
 
@@ -1022,6 +1059,22 @@ async function attemptBookingJourney(): Promise<void> {
       const config = await storage.getConfiguration();
       if (!config) return;
 
+      const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+      const armedEventId =
+        config.armedEventId ||
+        config.scopedPurchasePlan?.eventId ||
+        (config.targetEventUrl ? extractEventIdFromUrl(config.targetEventUrl) : null);
+      if (armedEventId) {
+        const curEventId = extractEventIdFromUrl(currentUrl);
+        if (curEventId && curEventId !== armedEventId) {
+          logger.warn(
+            'Skipping booking journey execution: current page event ID does not match armed event ID',
+            { currentEventId: curEventId, armedEventId }
+          );
+          return;
+        }
+      }
+
       const scopedPlan = config.scopedPurchasePlan;
       if (await checkLimitsAndStopIfNeeded(scopedPlan)) return;
 
@@ -1032,8 +1085,6 @@ async function attemptBookingJourney(): Promise<void> {
           : plan
             ? plan.ticketRules.map((r) => r.ticketName || r.ticketId).filter(Boolean)
             : config.preferences?.categoryPriority || [];
-
-      const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
       const isOnQuestionForm = currentUrl.includes('/question-form');
       const isOnPayment = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
 
@@ -1539,6 +1590,20 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'ARM_REQUESTED': {
       logger.info('Content script received ARM_REQUESTED');
+      const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+      const currentEventId = extractEventIdFromUrl(currentUrl);
+      const msgEventId =
+        message.targetEventId ||
+        message.eventId ||
+        (message.eventUrl ? extractEventIdFromUrl(message.eventUrl) : null);
+      if (msgEventId && currentEventId && msgEventId !== currentEventId) {
+        logger.warn('Content script received ARM_REQUESTED for different event ID. Ignoring.', {
+          currentEventId,
+          msgEventId,
+        });
+        break;
+      }
+
       // If ARM is scheduled for a future time, arm local timer and wait
       const startAt = message.scopedPurchasePlan?.persistence?.startAt;
       if (startAt) {
@@ -1594,6 +1659,20 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'START_MONITORING': {
       logger.info('Content script received START_MONITORING');
+      const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+      const currentEventId = extractEventIdFromUrl(currentUrl);
+      const msgEventId =
+        message.targetEventId ||
+        message.eventId ||
+        (message.eventUrl ? extractEventIdFromUrl(message.eventUrl) : null);
+      if (msgEventId && currentEventId && msgEventId !== currentEventId) {
+        logger.warn('Content script received START_MONITORING for different event ID. Ignoring.', {
+          currentEventId,
+          msgEventId,
+        });
+        break;
+      }
+
       resetStateMachineToMonitoring('User START_MONITORING');
       userExplicitlyStopped = false;
       isMonitoringActive = true;

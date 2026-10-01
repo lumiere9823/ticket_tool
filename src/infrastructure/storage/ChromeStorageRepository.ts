@@ -193,6 +193,8 @@ export class ChromeStorageRepository implements StorageRepository {
         state.tabHiddenWarning !== undefined
           ? state.tabHiddenWarning
           : (current?.tabHiddenWarning ?? false),
+      armedTabId: state.armedTabId !== undefined ? state.armedTabId : current?.armedTabId,
+      armedEventId: state.armedEventId !== undefined ? state.armedEventId : current?.armedEventId,
     };
     const safeState = this.sanitizeData(merged);
     if (this.isChromeStorageAvailable()) {

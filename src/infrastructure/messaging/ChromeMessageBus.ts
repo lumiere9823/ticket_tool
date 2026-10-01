@@ -67,37 +67,27 @@ export class ChromeMessageBus implements EventBus {
           }
         });
 
-        // Broadcast to Ticketbox tabs as well as active tab
-        if (chrome.tabs && chrome.tabs.query) {
-          const sentTabIds = new Set<number>();
-          const sendToTab = (tab: chrome.tabs.Tab) => {
-            if (tab.id && !sentTabIds.has(tab.id)) {
-              sentTabIds.add(tab.id);
-              chrome.tabs.sendMessage(tab.id, message, () => {
-                if (chrome.runtime.lastError) {
-                  // expected if tab has no content script or is not ready
-                }
-              });
-            }
-          };
-
-          // Query all Ticketbox tabs
-          chrome.tabs.query({ url: '*://*.ticketbox.vn/*' }, (ticketboxTabs) => {
-            if (ticketboxTabs) {
-              for (const tab of ticketboxTabs) {
-                sendToTab(tab);
+        // Route message to specific target tab or active tab (no broadcast to all Ticketbox tabs)
+        if (chrome.tabs) {
+          if (typeof message.targetTabId === 'number') {
+            chrome.tabs.sendMessage(message.targetTabId, message, () => {
+              if (chrome.runtime.lastError) {
+                // expected if tab has no content script or is not ready
               }
-            }
-          });
-
-          // Also query current active tab (for dev/mock environments)
-          chrome.tabs.query({ active: true, currentWindow: true }, (activeTabs) => {
-            if (activeTabs) {
-              for (const tab of activeTabs) {
-                sendToTab(tab);
+            });
+          } else if (chrome.tabs.query) {
+            // Target only the single active tab in the current window (never query all Ticketbox tabs)
+            chrome.tabs.query({ active: true, currentWindow: true }, (activeTabs) => {
+              const activeTab = activeTabs?.[0];
+              if (activeTab?.id) {
+                chrome.tabs.sendMessage(activeTab.id, message, () => {
+                  if (chrome.runtime.lastError) {
+                    // expected if tab has no content script or is not ready
+                  }
+                });
               }
-            }
-          });
+            });
+          }
         }
       } catch (err) {
         this.logger?.debug('Chrome runtime message broadcast skipped', { err });

@@ -10,20 +10,30 @@ export class StartMonitoringUseCase {
     private readonly stateMachine: PurchaseStateMachine,
     private readonly storage: StorageRepository,
     private readonly eventBus: EventBus,
-    private readonly logger: LoggerPort
+    private readonly logger?: LoggerPort
   ) {}
 
-  public async execute(eventUrl: string): Promise<StateContext> {
+  public async execute(
+    eventUrl: string,
+    targetTabId?: number | undefined,
+    targetEventId?: string | undefined
+  ): Promise<StateContext> {
     const attemptId = new AttemptId().value;
     this.stateMachine.setAttemptId(attemptId);
 
-    this.logger.info('StartMonitoringUseCase starting monitoring', {
+    this.logger?.info('StartMonitoringUseCase starting monitoring', {
       attemptId,
       eventUrl,
+      targetTabId,
+      targetEventId,
     });
 
     const context = this.stateMachine.transition({ type: 'MONITORING_STARTED' });
-    await this.storage.saveCurrentState(context);
+    if (this.storage.saveLifecycleState) {
+      await this.storage.saveLifecycleState(context);
+    } else {
+      await this.storage.saveCurrentState(context);
+    }
 
     await this.eventBus.publish({
       type: 'START_MONITORING',
@@ -31,6 +41,8 @@ export class StartMonitoringUseCase {
       attemptId,
       state: context.currentState,
       eventUrl,
+      ...(targetTabId !== undefined ? { targetTabId } : {}),
+      ...(targetEventId !== undefined ? { targetEventId, eventId: targetEventId } : {}),
     });
 
     await this.eventBus.publish({
@@ -39,6 +51,8 @@ export class StartMonitoringUseCase {
       attemptId,
       state: context.currentState,
       context,
+      ...(targetTabId !== undefined ? { targetTabId } : {}),
+      ...(targetEventId !== undefined ? { targetEventId, eventId: targetEventId } : {}),
     });
 
     return context;
