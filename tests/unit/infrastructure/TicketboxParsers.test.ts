@@ -384,4 +384,123 @@ describe('Ticketbox Parsers', () => {
       expect(wasClicked).toBe(false);
     });
   });
+
+  // P2-9: URL-based page guard and per-page keyword allowlist
+  describe('proceedToNextStep — P2-9 page guard (URL-based allowlist)', () => {
+    it('should return false WITHOUT scanning DOM when URL is /payment', async () => {
+      let wasClicked = false;
+      const html = `
+        <div class="sidebar-footer">
+          <button id="btn-continue"><span>Thanh toán</span></button>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const btn = root.querySelector('#btn-continue');
+      if (btn) {
+        btn.click = () => {
+          wasClicked = true;
+        };
+      }
+
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+      adapter.setCustomUrl('https://ticketbox.vn/payment/order-abc');
+      const result = await adapter.proceedToNextStep();
+
+      expect(result).toBe(false);
+      expect(wasClicked).toBe(false);
+    });
+
+    it('should return false WITHOUT scanning DOM when URL is /checkout', async () => {
+      let wasClicked = false;
+      const html = `
+        <div class="sidebar-footer">
+          <button id="btn-continue"><span>Tiếp tục</span></button>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const btn = root.querySelector('#btn-continue');
+      if (btn) {
+        btn.click = () => {
+          wasClicked = true;
+        };
+      }
+
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+      adapter.setCustomUrl('https://ticketbox.vn/checkout/confirm');
+      const result = await adapter.proceedToNextStep();
+
+      expect(result).toBe(false);
+      expect(wasClicked).toBe(false);
+    });
+
+    it('should NOT click a "Thanh toán" button on /select-ticket page', async () => {
+      let wasClicked = false;
+      const html = `
+        <div class="sidebar-footer">
+          <button id="btn-pay"><span>Thanh toán</span></button>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const btn = root.querySelector('#btn-pay');
+      if (btn) {
+        btn.click = () => {
+          wasClicked = true;
+        };
+      }
+
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+      adapter.setCustomUrl('https://ticketbox.vn/event/abc/select-ticket');
+      const result = await adapter.proceedToNextStep();
+
+      expect(result).toBe(false);
+      expect(wasClicked).toBe(false);
+    });
+
+    it('should click "Tiếp tục" on /select-ticket page', async () => {
+      let wasClicked = false;
+      const html = `
+        <div class="sidebar-footer">
+          <button id="btn-continue"><span>Tiếp tục</span></button>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const btn = root.querySelector('#btn-continue');
+      if (btn) {
+        btn.click = () => {
+          wasClicked = true;
+        };
+      }
+
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+      adapter.setCustomUrl('https://ticketbox.vn/event/abc/select-ticket');
+      const result = await adapter.proceedToNextStep();
+
+      expect(result).toBe(true);
+      expect(wasClicked).toBe(true);
+    });
+
+    it('should click "Tiếp tục" on /question-form page but NOT "Thanh toán"', async () => {
+      let payClicked = false;
+      let continueClicked = false;
+      const html = `
+        <div class="sidebar-footer">
+          <button id="btn-pay"><span>Thanh toán</span></button>
+          <button id="btn-continue"><span>Tiếp tục</span></button>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+      const payBtn = root.querySelector('#btn-pay');
+      const continueBtn = root.querySelector('#btn-continue');
+      if (payBtn) payBtn.click = () => { payClicked = true; };
+      if (continueBtn) continueBtn.click = () => { continueClicked = true; };
+
+      const adapter = new TicketboxJourneyAdapter(undefined, root);
+      adapter.setCustomUrl('https://ticketbox.vn/event/abc/question-form');
+      const result = await adapter.proceedToNextStep();
+
+      expect(result).toBe(true);
+      expect(payClicked).toBe(false);
+      expect(continueClicked).toBe(true);
+    });
+  });
 });

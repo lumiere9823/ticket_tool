@@ -2153,35 +2153,34 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const root = this.getRoot();
     if (!root) return false;
 
-    // Forward navigation action verbs ONLY
-    const targetKeywords = [
-      'tiếp tục',
-      'tiếp theo',
-      'bước tiếp theo',
-      'thanh toán',
-      'tiếp tục thanh toán',
-      'thanh toán ngay',
-      'đặt vé',
-      'mua vé',
-      'mua ngay',
-      'đặt ngay',
-      'xác nhận',
-      'xác nhận vé',
-      'xác nhận đặt vé',
-      'xác nhận chọn ghế',
-      'xác nhận ghế',
-      'chọn vé này',
-      'hoàn tất',
-      'giữ vé',
-      'đặt chỗ',
-      'continue',
-      'next',
-      'next step',
-      'checkout',
-      'proceed',
-      'pay',
-      'confirm',
-    ];
+    // P2-9: URL-based page guard — resolve pathname using URL constructor, not string .includes()
+    const rawUrl = this.getPageUrl();
+    let pathname = '';
+    try {
+      pathname = new URL(rawUrl).pathname.toLowerCase();
+    } catch {
+      // rawUrl is not a valid absolute URL (e.g. empty string or relative): treat it as unknown page
+      pathname = rawUrl.toLowerCase();
+    }
+
+    // ABSOLUTE BLOCK: never click any button on /payment or /checkout pages
+    if (pathname.includes('/payment') || pathname.includes('/checkout')) {
+      this.logger?.warn('proceedToNextStep blocked: page is /payment or /checkout', {
+        url: rawUrl,
+      });
+      return false;
+    }
+
+    // P2-9: Per-page keyword allowlist — only safe forward-navigation labels, NO payment keywords
+    let targetKeywords: string[];
+    if (pathname.includes('/select-ticket')) {
+      targetKeywords = ['tiếp tục', 'tiếp theo'];
+    } else if (pathname.includes('/question-form')) {
+      targetKeywords = ['tiếp tục'];
+    } else {
+      // Unknown page: conservative safe subset — no payment or confirm keywords
+      targetKeywords = ['tiếp tục', 'tiếp theo', 'bước tiếp theo', 'continue', 'next', 'next step'];
+    }
 
     // Phrases that indicate instructions, prompts, step names, or backwards navigation
     const promptOrBackPhrases = [
