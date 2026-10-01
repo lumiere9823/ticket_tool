@@ -236,7 +236,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     }
   }
 
-  private getRoot(): DOMElementLike | null {
+  public getRoot(): DOMElementLike | null {
     if (this.customRoot) return this.customRoot;
     if (typeof document !== 'undefined') {
       return wrapBrowserElement(document);

@@ -15,10 +15,13 @@ import {
   ScopedPurchasePlan,
 } from '../../domain/entities/ScopedPurchasePlan';
 
+import { DomSecurityChallengeDetector } from '../../infrastructure/security/DomSecurityChallengeDetector';
+
 const logger = new SanitizedLogger({ state: 'CONTENT_SCRIPT' });
 const messageBus = new ChromeMessageBus(logger);
 const adapter = new TicketboxJourneyAdapter(logger);
 const storage = new ChromeStorageRepository();
+const challengeDetector = new DomSecurityChallengeDetector();
 const stateMachine = new PurchaseStateMachine(PurchaseState.MONITORING);
 adapter.setCurrentStateProvider(() => stateMachine.state);
 
@@ -47,7 +50,14 @@ stateMachine.subscribe(async (context: StateContext) => {
   }
 });
 
-const journeyUseCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, messageBus, logger);
+const journeyUseCase = new ExecuteBookingJourneyUseCase(
+  stateMachine,
+  adapter,
+  messageBus,
+  logger,
+  undefined,
+  challengeDetector
+);
 
 let isMonitoringActive = false;
 let userExplicitlyStopped = false;
@@ -680,6 +690,34 @@ async function runMonitoringCycle(): Promise<void> {
 
     const stopped = await checkLimitsAndStopIfNeeded(scopedPlan);
     if (stopped) return;
+
+    const challenge = challengeDetector.detectChallenge();
+    if (challenge.detected) {
+      logger.warn(
+        'Passive challenge detector triggered during monitoring cycle; pausing monitoring',
+        {
+          type: challenge.type,
+          targetState: challenge.targetState,
+        }
+      );
+      isMonitoringActive = false;
+      const targetState = challenge.targetState ?? PurchaseState.HUMAN_INTERVENTION_REQUIRED;
+      if (targetState === PurchaseState.CAPTCHA_REQUIRED) {
+        stateMachine.transition({ type: 'CAPTCHA_REQUIRED' });
+      } else if (targetState === PurchaseState.OTP_REQUIRED) {
+        stateMachine.transition({ type: 'OTP_REQUIRED' });
+      } else if (targetState === PurchaseState.SESSION_REAUTH_REQUIRED) {
+        stateMachine.transition({ type: 'SESSION_REAUTH_REQUIRED' });
+      } else if (targetState === PurchaseState.RATE_LIMITED) {
+        stateMachine.transition({ type: 'RATE_LIMITED' });
+      } else {
+        stateMachine.transition({
+          type: 'SECURITY_CHALLENGE_DETECTED',
+          challengeType: challenge.type,
+        });
+      }
+      return;
+    }
 
     await performDiscoveryScan();
 
@@ -1623,6 +1661,38 @@ messageBus.subscribe((message: ExtensionMessage) => {
       if (monitoringTimeout) {
         window.clearTimeout(monitoringTimeout);
         monitoringTimeout = null;
+      }
+      break;
+    }
+
+    case 'USER_COMPLETED_INTERVENTION': {
+      logger.info('Content script received USER_COMPLETED_INTERVENTION; initiating STATE_RECHECK');
+      try {
+        stateMachine.transition({ type: 'USER_COMPLETED_CHALLENGE' });
+        const challengeResult = challengeDetector.detectChallenge();
+        if (challengeResult.detected) {
+          logger.warn('Security challenge is still present in DOM after user intervention', {
+            type: challengeResult.type,
+          });
+          stateMachine.transition({
+            type: 'STATE_UNVERIFIED',
+            reason: 'Security challenge is still present on page',
+          });
+        } else {
+          logger.info(
+            'Security challenge cleared; verifying safe state and returning to MONITORING'
+          );
+          stateMachine.transition({
+            type: 'STATE_VERIFIED',
+            verifiedState: PurchaseState.MONITORING,
+          });
+          isMonitoringActive = true;
+          scheduleNextPoll(500);
+        }
+      } catch (err) {
+        logger.warn('Failed during USER_COMPLETED_INTERVENTION resume workflow', {
+          err: String(err),
+        });
       }
       break;
     }

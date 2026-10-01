@@ -3,6 +3,7 @@ import { TicketboxPageAdapter } from '../ports/TicketboxPageAdapter';
 import { EventBus } from '../ports/EventBus';
 import { LoggerPort } from '../ports/LoggerPort';
 import { LatencyTracker } from '../services/LatencyTracker';
+import { SecurityChallengeDetector } from '../ports/SecurityChallengeDetector';
 import { PurchaseState, FailureReason, canAutoReset } from '../../domain/states/PurchaseState';
 import {
   BookingPreferences,
@@ -47,7 +48,8 @@ export class ExecuteBookingJourneyUseCase {
     private readonly adapter: TicketboxPageAdapter,
     private readonly eventBus: EventBus,
     private readonly logger: LoggerPort,
-    config?: JourneyUseCaseConfig
+    config?: JourneyUseCaseConfig,
+    private readonly challengeDetector?: SecurityChallengeDetector
   ) {
     this.MAX_RETRIES = config?.maxRetries ?? 8;
     this.MAX_AREA_COLLISIONS = config?.maxAreaCollisions ?? 2;
@@ -65,6 +67,19 @@ export class ExecuteBookingJourneyUseCase {
 
   private getState(): PurchaseState {
     return this.stateMachine.state;
+  }
+
+  private detectChallenge(): import('../ports/SecurityChallengeDetector').SecurityChallengeResult {
+    if (!this.challengeDetector) {
+      return { detected: false };
+    }
+    const root =
+      this.adapter &&
+      'getRoot' in this.adapter &&
+      typeof (this.adapter as { getRoot?: () => unknown }).getRoot === 'function'
+        ? (this.adapter as { getRoot: () => unknown }).getRoot()
+        : undefined;
+    return this.challengeDetector.detectChallenge(root);
   }
 
   /**
@@ -146,6 +161,40 @@ export class ExecuteBookingJourneyUseCase {
         },
       });
 
+      if (this.challengeDetector) {
+        const challenge = this.detectChallenge();
+        if (challenge.detected) {
+          this.logger.warn(
+            'Security challenge detected before journey execution; halting automation',
+            {
+              type: challenge.type,
+              targetState: challenge.targetState,
+            }
+          );
+          const targetState = challenge.targetState ?? PurchaseState.HUMAN_INTERVENTION_REQUIRED;
+          if (targetState === PurchaseState.CAPTCHA_REQUIRED) {
+            this.stateMachine.transition({ type: 'CAPTCHA_REQUIRED' });
+          } else if (targetState === PurchaseState.OTP_REQUIRED) {
+            this.stateMachine.transition({ type: 'OTP_REQUIRED' });
+          } else if (targetState === PurchaseState.SESSION_REAUTH_REQUIRED) {
+            this.stateMachine.transition({ type: 'SESSION_REAUTH_REQUIRED' });
+          } else if (targetState === PurchaseState.RATE_LIMITED) {
+            this.stateMachine.transition({ type: 'RATE_LIMITED' });
+          } else {
+            this.stateMachine.transition({
+              type: 'SECURITY_CHALLENGE_DETECTED',
+              challengeType: challenge.type,
+            });
+          }
+          return {
+            success: true,
+            finalState: this.stateMachine.state,
+            requiresUserAction: true,
+            actionRequiredReason: challenge.details ?? 'Security challenge detected',
+          };
+        }
+      }
+
       const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
       const isOnPaymentPage = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
       const currentState = this.getState();
@@ -212,6 +261,41 @@ export class ExecuteBookingJourneyUseCase {
               finalState: retryState,
               requiresUserAction: true,
             };
+          }
+
+          if (this.challengeDetector) {
+            const retryChallenge = this.detectChallenge();
+            if (retryChallenge.detected) {
+              this.logger.warn(
+                'Security challenge detected during journey retries; halting automation',
+                {
+                  type: retryChallenge.type,
+                  targetState: retryChallenge.targetState,
+                }
+              );
+              const targetState =
+                retryChallenge.targetState ?? PurchaseState.HUMAN_INTERVENTION_REQUIRED;
+              if (targetState === PurchaseState.CAPTCHA_REQUIRED) {
+                this.stateMachine.transition({ type: 'CAPTCHA_REQUIRED' });
+              } else if (targetState === PurchaseState.OTP_REQUIRED) {
+                this.stateMachine.transition({ type: 'OTP_REQUIRED' });
+              } else if (targetState === PurchaseState.SESSION_REAUTH_REQUIRED) {
+                this.stateMachine.transition({ type: 'SESSION_REAUTH_REQUIRED' });
+              } else if (targetState === PurchaseState.RATE_LIMITED) {
+                this.stateMachine.transition({ type: 'RATE_LIMITED' });
+              } else {
+                this.stateMachine.transition({
+                  type: 'SECURITY_CHALLENGE_DETECTED',
+                  challengeType: retryChallenge.type,
+                });
+              }
+              return {
+                success: true,
+                finalState: this.stateMachine.state,
+                requiresUserAction: true,
+                actionRequiredReason: retryChallenge.details ?? 'Security challenge detected',
+              };
+            }
           }
 
           try {
