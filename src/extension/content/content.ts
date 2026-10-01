@@ -22,7 +22,7 @@ const messageBus = new ChromeMessageBus(logger);
 const adapter = new TicketboxJourneyAdapter(logger);
 const storage = new ChromeStorageRepository();
 const challengeDetector = new DomSecurityChallengeDetector();
-const stateMachine = new PurchaseStateMachine(PurchaseState.MONITORING);
+const stateMachine = new PurchaseStateMachine(PurchaseState.READY);
 adapter.setCurrentStateProvider(() => stateMachine.state);
 
 function isExtensionContextValid(): boolean {
@@ -36,7 +36,7 @@ function isExtensionContextValid(): boolean {
 stateMachine.subscribe(async (context: StateContext) => {
   if (!isExtensionContextValid()) return;
   try {
-    await storage.saveCurrentState(context);
+    await storage.saveJourneyState(context);
     await messageBus.publish({
       type: 'STATE_CHANGED',
       timestamp: new Date().toISOString(),
@@ -1381,22 +1381,69 @@ async function checkRehydration(): Promise<void> {
       return;
     }
 
-    const lastState = await storage.getLastState();
-    if (
-      lastState &&
-      (lastState.currentState === PurchaseState.ARMED ||
-        lastState.currentState === PurchaseState.MONITORING ||
-        lastState.currentState === PurchaseState.SELECTING ||
-        lastState.currentState === PurchaseState.RESERVING ||
-        lastState.currentState === PurchaseState.TICKET_SELECTED ||
-        lastState.currentState === PurchaseState.SEATS_SELECTED ||
-        lastState.currentState === PurchaseState.QUESTION_FORM_DETECTED ||
-        lastState.currentState === PurchaseState.FILLING_ATTENDEE_FORM ||
-        lastState.currentState === PurchaseState.FORM_VALIDATED)
-    ) {
-      logger.info('Rehydrating active monitoring state in content script', {
-        state: lastState.currentState,
-      });
+    const journeyState = (await storage.getJourneyState()) ?? (await storage.getLastState());
+    if (journeyState && journeyState.currentState) {
+      try {
+        stateMachine.restore(journeyState);
+        logger.info('Restored journey state machine from persistent storage', {
+          state: stateMachine.state,
+          attemptId: stateMachine.attemptId,
+        });
+      } catch (restoreErr) {
+        logger.warn('Failed to restore journey state machine; falling back to safe state', {
+          err: String(restoreErr),
+        });
+      }
+
+      const activeMonitoringStates = new Set<PurchaseState>([
+        PurchaseState.ARMED,
+        PurchaseState.MONITORING,
+        PurchaseState.SELECTING,
+        PurchaseState.RESERVING,
+        PurchaseState.TICKET_SELECTED,
+        PurchaseState.SEATS_SELECTED,
+        PurchaseState.QUESTION_FORM_DETECTED,
+        PurchaseState.FILLING_ATTENDEE_FORM,
+        PurchaseState.FORM_VALIDATED,
+      ]);
+
+      if (activeMonitoringStates.has(stateMachine.state)) {
+        logger.info('Rehydrating active monitoring state in content script', {
+          state: stateMachine.state,
+        });
+        isMonitoringActive = true;
+        scheduleDiscoveryScan(200);
+        scheduleNextPoll(1500);
+      } else if (
+        stateMachine.state === PurchaseState.HELD ||
+        stateMachine.state === PurchaseState.CHECKOUT ||
+        stateMachine.state === PurchaseState.PAYMENT_GATE ||
+        stateMachine.state === PurchaseState.CONFIRMED ||
+        stateMachine.state === PurchaseState.HUMAN_INTERVENTION_REQUIRED ||
+        stateMachine.state === PurchaseState.CAPTCHA_REQUIRED ||
+        stateMachine.state === PurchaseState.OTP_REQUIRED ||
+        stateMachine.state === PurchaseState.UNKNOWN_SECURITY_CHALLENGE
+      ) {
+        logger.info(
+          'Restored protected/terminal journey state; preserving state without auto-reset',
+          {
+            state: stateMachine.state,
+          }
+        );
+        isMonitoringActive = false;
+      }
+    } else if (pState?.currentPhase === 'ARMED' || pState?.currentPhase === 'MONITORING') {
+      try {
+        if (
+          stateMachine.state === PurchaseState.READY ||
+          stateMachine.state === PurchaseState.INIT
+        ) {
+          stateMachine.transition({ type: 'ARM' });
+          stateMachine.transition({ type: 'MONITORING_STARTED' });
+        }
+      } catch {
+        // ignore
+      }
       isMonitoringActive = true;
       scheduleDiscoveryScan(200);
       scheduleNextPoll(1500);

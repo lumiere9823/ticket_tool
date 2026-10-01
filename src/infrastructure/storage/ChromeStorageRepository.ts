@@ -11,6 +11,8 @@ import { ProfileId } from '../../domain/value-objects/ProfileId';
 const STORAGE_KEYS = {
   CONFIG: 'ticketbox_assistant_config',
   STATE: 'ticketbox_assistant_last_state',
+  JOURNEY_STATE: 'ticketbox_assistant_journey_state',
+  LIFECYCLE_STATE: 'ticketbox_assistant_lifecycle_state',
   PERSISTENT_STATE: 'ticketbox_assistant_persistent_state',
   PROFILES: 'ticketbox_assistant_profiles',
   INTERVENTIONS: 'ticketbox_assistant_interventions',
@@ -117,6 +119,52 @@ export class ChromeStorageRepository implements StorageRepository {
     this.inMemoryMap.set(STORAGE_KEYS.STATE, safeState);
   }
 
+  public async getJourneyState(): Promise<StateContext | null> {
+    if (this.isChromeStorageAvailable()) {
+      return new Promise((resolve) => {
+        chrome.storage.local.get(STORAGE_KEYS.JOURNEY_STATE, (res) => {
+          resolve((res[STORAGE_KEYS.JOURNEY_STATE] as StateContext) ?? null);
+        });
+      });
+    }
+    return (this.inMemoryMap.get(STORAGE_KEYS.JOURNEY_STATE) as StateContext) ?? null;
+  }
+
+  public async saveJourneyState(state: StateContext): Promise<void> {
+    const safeState = this.sanitizeData(state);
+    if (this.isChromeStorageAvailable()) {
+      return new Promise((resolve) => {
+        chrome.storage.local.set({ [STORAGE_KEYS.JOURNEY_STATE]: safeState }, () => {
+          resolve();
+        });
+      });
+    }
+    this.inMemoryMap.set(STORAGE_KEYS.JOURNEY_STATE, safeState);
+  }
+
+  public async getLifecycleState(): Promise<StateContext | null> {
+    if (this.isChromeStorageAvailable()) {
+      return new Promise((resolve) => {
+        chrome.storage.local.get(STORAGE_KEYS.LIFECYCLE_STATE, (res) => {
+          resolve((res[STORAGE_KEYS.LIFECYCLE_STATE] as StateContext) ?? null);
+        });
+      });
+    }
+    return (this.inMemoryMap.get(STORAGE_KEYS.LIFECYCLE_STATE) as StateContext) ?? null;
+  }
+
+  public async saveLifecycleState(state: StateContext): Promise<void> {
+    const safeState = this.sanitizeData(state);
+    if (this.isChromeStorageAvailable()) {
+      return new Promise((resolve) => {
+        chrome.storage.local.set({ [STORAGE_KEYS.LIFECYCLE_STATE]: safeState }, () => {
+          resolve();
+        });
+      });
+    }
+    this.inMemoryMap.set(STORAGE_KEYS.LIFECYCLE_STATE, safeState);
+  }
+
   public async getPersistentState(): Promise<PersistentExecutionState | null> {
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
@@ -173,7 +221,13 @@ export class ChromeStorageRepository implements StorageRepository {
    * Profiles are intentionally preserved.
    */
   public async clearConfiguration(): Promise<void> {
-    const keysToRemove = [STORAGE_KEYS.CONFIG, STORAGE_KEYS.STATE, STORAGE_KEYS.PERSISTENT_STATE];
+    const keysToRemove = [
+      STORAGE_KEYS.CONFIG,
+      STORAGE_KEYS.STATE,
+      STORAGE_KEYS.JOURNEY_STATE,
+      STORAGE_KEYS.LIFECYCLE_STATE,
+      STORAGE_KEYS.PERSISTENT_STATE,
+    ];
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.remove(keysToRemove, () => resolve());
@@ -255,14 +309,19 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   public async clearSession(): Promise<void> {
+    const keysToRemove = [
+      STORAGE_KEYS.STATE,
+      STORAGE_KEYS.CONFIG,
+      STORAGE_KEYS.JOURNEY_STATE,
+      STORAGE_KEYS.LIFECYCLE_STATE,
+    ];
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
-        chrome.storage.local.remove([STORAGE_KEYS.STATE, STORAGE_KEYS.CONFIG], () => {
+        chrome.storage.local.remove(keysToRemove, () => {
           resolve();
         });
       });
     }
-    this.inMemoryMap.delete(STORAGE_KEYS.STATE);
-    this.inMemoryMap.delete(STORAGE_KEYS.CONFIG);
+    keysToRemove.forEach((k) => this.inMemoryMap.delete(k));
   }
 }

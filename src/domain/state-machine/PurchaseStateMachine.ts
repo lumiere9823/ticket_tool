@@ -873,6 +873,107 @@ export class PurchaseStateMachine {
   }
 
   /**
+   * Safely restores state machine from persistent context (e.g. across page reload/navigation).
+   * Validates state invariants:
+   * - Restoring to CONFIRMED requires authoritative payment confirmation evidence.
+   * - Restoring to HELD requires authoritative reservation hold evidence.
+   * - State must belong to valid PurchaseState enum values.
+   */
+  public restore(context: StateContext): StateContext {
+    if (!context || typeof context !== 'object') {
+      throw new StateTransitionError(
+        this._state,
+        'UNKNOWN',
+        'STATE_RESTORE',
+        'Cannot restore state machine from invalid or null context'
+      );
+    }
+
+    const targetState = context.currentState;
+    if (!Object.values(PurchaseState).includes(targetState)) {
+      throw new StateTransitionError(
+        this._state,
+        targetState as unknown as PurchaseState,
+        'STATE_RESTORE',
+        `Cannot restore to unknown or corrupted state '${String(targetState)}'`
+      );
+    }
+
+    // Invariant 3 / Rule 06: CONFIRMED requires authoritative payment evidence
+    if (targetState === PurchaseState.CONFIRMED) {
+      const orderId =
+        typeof context.evidence?.orderId === 'string' ? context.evidence.orderId.trim() : undefined;
+      const ref =
+        typeof context.evidence?.confirmationReference === 'string'
+          ? context.evidence.confirmationReference.trim()
+          : undefined;
+      if (!orderId && !ref) {
+        throw new StateTransitionError(
+          this._state,
+          PurchaseState.CONFIRMED,
+          'STATE_RESTORE',
+          'Cannot restore to CONFIRMED without authoritative confirmation evidence (orderId or confirmationReference)'
+        );
+      }
+    }
+
+    // Invariant / Rule 06: HELD requires authoritative reservation hold evidence
+    if (targetState === PurchaseState.HELD) {
+      const resId =
+        typeof context.evidence?.reservationId === 'string'
+          ? context.evidence.reservationId.trim()
+          : undefined;
+      if (!resId) {
+        throw new StateTransitionError(
+          this._state,
+          PurchaseState.HELD,
+          'STATE_RESTORE',
+          'Cannot restore to HELD without authoritative reservation evidence (reservationId)'
+        );
+      }
+    }
+
+    this._state = targetState;
+    if (context.previousState !== undefined) {
+      this._previousState = context.previousState;
+    }
+    if (context.attemptId !== undefined) {
+      this._attemptId = context.attemptId;
+    }
+    if (context.workflowId !== undefined) {
+      this._workflowId = context.workflowId;
+    }
+    if (context.accountId !== undefined) {
+      this._accountId = context.accountId;
+    }
+    if (context.profileId !== undefined) {
+      this._profileId = context.profileId;
+    }
+    if (context.eventId !== undefined) {
+      this._eventId = context.eventId;
+    }
+    if (context.retryCount !== undefined) {
+      this._retryCount = context.retryCount;
+    }
+    this._failureReason = context.failureReason;
+    this._failureMessage = context.failureMessage;
+    this._humanInterventionId = context.humanInterventionId;
+    this._evidence = context.evidence;
+    this._transitionEvent = context.transitionEvent ?? 'STATE_RESTORE';
+    this._updatedAt = context.updatedAt ?? new Date().toISOString();
+
+    const restoredContext = this.getContext();
+    this.notifyListeners(restoredContext);
+    return restoredContext;
+  }
+
+  public static restore(context: StateContext): PurchaseStateMachine {
+    const sm = new PurchaseStateMachine(context.currentState);
+    sm.restore(context);
+    return sm;
+  }
+
+  /**
    * Applies an event and transitions to the next state.
    * Throws StateTransitionError if the transition is illegal.
    */

@@ -1,4 +1,4 @@
-import { EventBus, MessageHandler } from '../../application/ports/EventBus';
+import { EventBus, MessageHandler, MessageSenderInfo } from '../../application/ports/EventBus';
 import { ExtensionMessage } from '../../extension/shared/messages';
 import { LoggerPort } from '../../application/ports/LoggerPort';
 
@@ -111,25 +111,36 @@ export class ChromeMessageBus implements EventBus {
     // Attach Chrome runtime listener once
     if (this.isChromeRuntimeAvailable() && !this.chromeListenerAttached) {
       this.chromeListenerAttached = true;
-      chrome.runtime.onMessage.addListener((message: unknown) => {
-        if (this.isValidMessage(message)) {
-          for (const listener of this.inMemoryListeners) {
-            try {
-              listener(message as ExtensionMessage);
-            } catch (err) {
-              this.logger?.error('Error in chrome message listener', err);
+      chrome.runtime.onMessage.addListener(
+        (message: unknown, sender?: chrome.runtime.MessageSender) => {
+          if (this.isValidMessage(message)) {
+            const senderInfo: MessageSenderInfo | undefined = sender
+              ? {
+                  tabId: sender.tab?.id,
+                  frameId: sender.frameId,
+                  id: sender.id,
+                  url: sender.url,
+                  origin: sender.origin,
+                }
+              : undefined;
+            for (const listener of this.inMemoryListeners) {
+              try {
+                listener(message as ExtensionMessage, senderInfo);
+              } catch (err) {
+                this.logger?.error('Error in chrome message listener', err);
+              }
+            }
+          } else {
+            const msgType = (message as Record<string, unknown>)?.type;
+            if (typeof msgType === 'string' && VALID_MESSAGE_TYPES.has(msgType)) {
+              this.logger?.warn('Ignored invalid message received via chrome.runtime', {
+                type: msgType,
+                message,
+              });
             }
           }
-        } else {
-          const msgType = (message as Record<string, unknown>)?.type;
-          if (typeof msgType === 'string' && VALID_MESSAGE_TYPES.has(msgType)) {
-            this.logger?.warn('Ignored invalid message received via chrome.runtime', {
-              type: msgType,
-              message,
-            });
-          }
         }
-      });
+      );
     }
 
     return () => this.inMemoryListeners.delete(handler);

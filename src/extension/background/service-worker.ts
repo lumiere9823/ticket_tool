@@ -7,6 +7,7 @@ import { ArmAssistantUseCase } from '../../application/use-cases/ArmAssistantUse
 import { StartMonitoringUseCase } from '../../application/use-cases/StartMonitoringUseCase';
 import { StopAssistantUseCase } from '../../application/use-cases/StopAssistantUseCase';
 import { ExtensionMessage } from '../shared/messages';
+import { MessageSenderInfo } from '../../application/ports/EventBus';
 
 const logger = new SanitizedLogger({ state: 'SERVICE_WORKER' });
 const storage = new ChromeStorageRepository();
@@ -30,10 +31,20 @@ async function advanceToReady(): Promise<void> {
   if (stateMachine.state === PurchaseState.EVENT_CHECK) {
     stateMachine.transition({ type: 'EVENT_READY' });
   }
-  await storage.saveCurrentState(stateMachine.getContext());
+  await storage.saveLifecycleState(stateMachine.getContext());
 }
 
 const failedSeatmapShowings = new Map<string, number>();
+
+let mirroredJourneyContext: StateContext | null = null;
+
+function getMirroredJourneyContext(): StateContext | null {
+  return mirroredJourneyContext;
+}
+
+function resetMirroredJourneyContext(): void {
+  mirroredJourneyContext = null;
+}
 
 async function updateExtensionBadge(state?: string, scheduled?: boolean): Promise<void> {
   if (typeof chrome === 'undefined' || !chrome.action) return;
@@ -67,6 +78,9 @@ async function updateExtensionBadge(state?: string, scheduled?: boolean): Promis
         await chrome.action.setBadgeBackgroundColor({ color: '#ec4899' });
         break;
       case PurchaseState.HUMAN_INTERVENTION_REQUIRED:
+      case PurchaseState.CAPTCHA_REQUIRED:
+      case PurchaseState.OTP_REQUIRED:
+      case PurchaseState.UNKNOWN_SECURITY_CHALLENGE:
         await chrome.action.setBadgeText({ text: 'CAPT' });
         await chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
         break;
@@ -96,7 +110,7 @@ async function initializeWorker(): Promise<void> {
   logger.info('Service Worker initializing');
 
   try {
-    const lastState = await storage.getLastState();
+    const lastState = (await storage.getLifecycleState()) ?? (await storage.getLastState());
     if (lastState && lastState.currentState) {
       logger.info('Rehydrating last known state', {
         state: lastState.currentState,
@@ -458,10 +472,44 @@ if (typeof chrome !== 'undefined' && chrome.alarms && chrome.alarms.onAlarm) {
 }
 
 // Subscribe to messages from popup or content script
-eventBus.subscribe(async (message: ExtensionMessage) => {
+async function handleServiceWorkerMessage(
+  message: ExtensionMessage,
+  sender?: MessageSenderInfo
+): Promise<void> {
   logger.debug('Received extension message in Service Worker', { type: message.type });
 
   switch (message.type) {
+    case 'STATE_CHANGED': {
+      if (sender) {
+        if (typeof chrome !== 'undefined' && chrome.runtime?.id) {
+          if (sender.id && sender.id !== chrome.runtime.id) {
+            logger.warn('Rejected STATE_CHANGED from untrusted sender id', { senderId: sender.id });
+            break;
+          }
+        }
+        if (sender.frameId !== undefined && sender.frameId !== 0) {
+          logger.warn('Rejected STATE_CHANGED from non-top-level frame', {
+            frameId: sender.frameId,
+          });
+          break;
+        }
+      }
+
+      const journeyContext = message.context;
+      if (!journeyContext || !journeyContext.currentState) {
+        break;
+      }
+
+      mirroredJourneyContext = journeyContext;
+      logger.info('Service Worker mirrored journey state from content script', {
+        state: journeyContext.currentState,
+        attemptId: journeyContext.attemptId,
+      });
+
+      await updateExtensionBadge(journeyContext.currentState, false);
+      break;
+    }
+
     case 'SYNC_STATE_REQUEST': {
       if (
         stateMachine.state === PurchaseState.INIT ||
@@ -471,17 +519,21 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
         await advanceToReady();
       }
 
+      const activeState = mirroredJourneyContext?.currentState ?? stateMachine.state;
+      const activeContext = mirroredJourneyContext ?? stateMachine.getContext();
+
       await eventBus.publish({
         type: 'SYNC_STATE_RESPONSE',
         timestamp: new Date().toISOString(),
-        attemptId: stateMachine.attemptId,
-        state: stateMachine.state,
-        context: stateMachine.getContext(),
+        attemptId: activeContext.attemptId ?? stateMachine.attemptId,
+        state: activeState,
+        context: activeContext,
       });
       break;
     }
 
     case 'STOP_REQUESTED': {
+      mirroredJourneyContext = null;
       if (
         stateMachine.state === PurchaseState.STOPPED ||
         stateMachine.state === PurchaseState.STOPPED_LIMIT_REACHED ||
@@ -812,6 +864,7 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
 
     case 'RESET_CONFIG_REQUESTED': {
       logger.info('Reset config requested by user');
+      mirroredJourneyContext = null;
       // Stop any active monitoring first
       await stopUseCase.execute('Config reset by user');
       // Cancel any pending scheduled ARM alarm
@@ -866,11 +919,15 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
     default:
       break;
   }
+}
+
+eventBus.subscribe(async (message: ExtensionMessage, sender?: MessageSenderInfo) => {
+  await handleServiceWorkerMessage(message, sender);
 });
 
 // Sync state machine transitions back to storage and update extension badge
 stateMachine.subscribe(async (context: StateContext) => {
-  await storage.saveCurrentState(context);
+  await storage.saveLifecycleState(context);
   const persistent = await storage.getPersistentState();
   const isScheduled = persistent?.currentPhase === 'SCHEDULED';
   await updateExtensionBadge(context.currentState, isScheduled);
@@ -879,4 +936,14 @@ stateMachine.subscribe(async (context: StateContext) => {
 // Run initialization
 initializeWorker();
 
-export { stateMachine, storage, eventBus, armUseCase, stopUseCase };
+export {
+  stateMachine,
+  storage,
+  eventBus,
+  armUseCase,
+  stopUseCase,
+  handleServiceWorkerMessage,
+  updateExtensionBadge,
+  getMirroredJourneyContext,
+  resetMirroredJourneyContext,
+};

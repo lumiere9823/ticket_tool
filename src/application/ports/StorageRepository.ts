@@ -44,6 +44,14 @@ export interface StorageRepository {
   getLastState(): Promise<StateContext | null>;
   saveCurrentState(state: StateContext): Promise<void>;
 
+  /** Journey execution state — owned exclusively by the content script */
+  getJourneyState(): Promise<StateContext | null>;
+  saveJourneyState(state: StateContext): Promise<void>;
+
+  /** Lifecycle execution state — owned exclusively by the background service worker */
+  getLifecycleState(): Promise<StateContext | null>;
+  saveLifecycleState(state: StateContext): Promise<void>;
+
   getPersistentState(): Promise<PersistentExecutionState | null>;
   savePersistentState(state: Partial<PersistentExecutionState>): Promise<void>;
   clearPersistentState(): Promise<void>;
