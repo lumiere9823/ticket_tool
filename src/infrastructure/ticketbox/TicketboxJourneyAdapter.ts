@@ -44,6 +44,28 @@ import {
   isValidBridgeResponse,
   BridgeRequestMessage,
 } from '../../extension/shared/BridgeProtocol';
+import { safeTicketboxFetch } from '../../extension/shared/NetworkSafety';
+
+export const MAX_SEAT_SET_SIZE = 500;
+
+export function addBoundedSetItem<T>(
+  set: Set<T>,
+  item: T,
+  maxSize: number = MAX_SEAT_SET_SIZE
+): void {
+  if (set.has(item)) {
+    return;
+  }
+  while (set.size >= maxSize) {
+    const oldest = set.values().next().value;
+    if (oldest !== undefined) {
+      set.delete(oldest);
+    } else {
+      break;
+    }
+  }
+  set.add(item);
+}
 
 export type CancelOrderConfirmationResult =
   { status: 'confirmed' } | { status: 'blocked'; reason: string } | { status: 'not_found' };
@@ -207,8 +229,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const raw = seatIdOrLabel.trim();
     const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (norm) {
-      this.blacklistedSeatKeys.add(norm);
-      this.blacklistedSeatKeys.add(raw.toUpperCase());
+      addBoundedSetItem(this.blacklistedSeatKeys, norm);
+      addBoundedSetItem(this.blacklistedSeatKeys, raw.toUpperCase());
       this.selectedSeatIds.delete(raw);
       this.selectedSeatIds.delete(norm);
       this.logger?.info('Blacklisted unavailable seat from selection', {
@@ -316,7 +338,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     // 1. Direct fetch if in browser or node
     if (typeof fetch !== 'undefined') {
       try {
-        const res = await fetch(url);
+        const res = await safeTicketboxFetch(url);
         if (res.ok) {
           const json = (await res.json()) as SeatmapApiResponse;
           if (json && json.data?.result?.sections) {
@@ -404,7 +426,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     // 1. Direct fetch if in browser or node
     if (typeof fetch !== 'undefined') {
       try {
-        const res = await fetch(url, { credentials: 'omit' });
+        const res = await safeTicketboxFetch(url);
         if (res.ok) {
           const json = (await res.json()) as TicketboxShowingApiResponse;
           if (json && json.data?.result?.ticketTypes) {
@@ -477,7 +499,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const url = `https://api-v2.ticketbox.vn/gin/api/v2/events/${eventId}`;
     this.logger?.info('Fetching Event API for showings', { eventId, url });
     try {
-      const res = await fetch(url, { credentials: 'omit' });
+      const res = await safeTicketboxFetch(url);
       if (res.ok) {
         const json = (await res.json()) as TicketboxEventApiResponse;
         if (json?.data?.result?.showings) {
@@ -508,7 +530,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const url = `https://api-v2.ticketbox.vn/event/api/v1/events/${eventId}/question-form`;
     this.logger?.info('Fetching Question Form API', { eventId, url });
     try {
-      const res = await fetch(url, { credentials: 'omit' });
+      const res = await safeTicketboxFetch(url);
       if (res.ok) {
         const json = (await res.json()) as TicketboxQuestionFormApiResponse;
         if (json?.data?.result?.questionCollection) {
@@ -3893,8 +3915,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         }
       }
 
-      this.selectedSeatIds.add(seatId);
-      if (seat?.label) this.selectedSeatIds.add(seat.label);
+      addBoundedSetItem(this.selectedSeatIds, seatId);
+      if (seat?.label) addBoundedSetItem(this.selectedSeatIds, seat.label);
       if (seat) seat.status = 'SELECTED';
 
       this.logger?.info('Seat selection clicked and verified', { seatId, label: seat?.label });

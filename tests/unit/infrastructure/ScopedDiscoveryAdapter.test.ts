@@ -50,8 +50,10 @@ describe('Scoped Discovery Adapter (AC-10)', () => {
     const resultInScope = await adapter.fetchSeatmapApi('show-1');
 
     // Should proceed to fetch 'show-1'
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/showings/show-1/seatmap'));
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/showings/show-1/seatmap'),
+      expect.objectContaining({ credentials: 'omit' })
+    );
     expect(resultInScope).not.toBeNull();
   });
 

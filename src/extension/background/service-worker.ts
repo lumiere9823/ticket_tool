@@ -10,6 +10,7 @@ import { ExtensionMessage } from '../shared/messages';
 import { MessageSenderInfo } from '../../application/ports/EventBus';
 import { extractEventIdFromUrl } from '../../domain/entities/ScopedPurchasePlan';
 import { ScheduledArmManager, AlarmProvider } from '../../application/services/ScheduledArmManager';
+import { safeTicketboxFetch } from '../shared/NetworkSafety';
 
 const logger = new SanitizedLogger({ state: 'SERVICE_WORKER' });
 const storage = new ChromeStorageRepository();
@@ -908,7 +909,7 @@ async function handleServiceWorkerMessage(
           showingId: message.showingId,
           url,
         });
-        const res = await fetch(url, { credentials: 'omit' });
+        const res = await safeTicketboxFetch(url);
         if (!res.ok) {
           failedSeatmapShowings.set(message.showingId, Date.now());
           logger.debug('Seatmap API returned non-OK status', {
@@ -976,7 +977,7 @@ async function handleServiceWorkerMessage(
           showingId: message.showingId,
           url,
         });
-        const res = await fetch(url, { credentials: 'omit' });
+        const res = await safeTicketboxFetch(url);
         if (!res.ok) {
           logger.debug('Showing API returned non-OK status', {
             showingId: message.showingId,
