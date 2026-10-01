@@ -853,22 +853,19 @@ export class ExecuteBookingJourneyUseCase {
           this.stateMachine.transition({ type: 'AREA_SELECTION_REQUIRED' });
           const matchingAreas = areas.filter(
             (a) =>
-              (a.ticketTypeId === chosenTicket.id ||
-                a.id === chosenTicket.id ||
-                (a.ticketTypeName &&
-                  a.ticketTypeName.toLowerCase().trim() ===
-                    chosenTicket.name.toLowerCase().trim()) ||
-                a.name.toLowerCase().trim() === chosenTicket.name.toLowerCase().trim() ||
-                a.name.replace(/_/g, ' ').toLowerCase().trim() ===
-                  chosenTicket.name.toLowerCase().trim() ||
-                a.name.toLowerCase().includes(chosenTicket.name.toLowerCase()) ||
-                chosenTicket.name.toLowerCase().includes(a.name.toLowerCase())) &&
+              PriorityCategoryEngine.isAreaMatchingTier(
+                a.name,
+                chosenTicket.name,
+                a.ticketTypeId,
+                chosenTicket.id,
+                a.ticketTypeName
+              ) &&
               a.selectable &&
               a.availability === 'AVAILABLE'
           );
 
           // Select first available area that has not failed or been exhausted in this cycle
-          let targetArea = matchingAreas.find(
+          const targetArea = matchingAreas.find(
             (a) =>
               !retryContext?.failedAreaIds.has(a.id) && !retryContext?.failedAreaIds.has(a.name)
           );
@@ -888,15 +885,6 @@ export class ExecuteBookingJourneyUseCase {
               state: this.stateMachine.state,
               recoverable: true,
             });
-          }
-
-          if (!targetArea) {
-            targetArea = areas.find(
-              (a) =>
-                a.selectable &&
-                a.availability === 'AVAILABLE' &&
-                !retryContext?.failedAreaIds.has(a.id)
-            );
           }
 
           if (!targetArea) {

@@ -79,6 +79,94 @@ export interface ScopeFilterResult {
   }>;
 }
 
+export interface TicketScopeMatchContext {
+  uniqueShowingCount?: number;
+  isNameAmbiguousWithinShowing?: boolean;
+}
+
+export interface TicketScopeMatchResult {
+  matched: boolean;
+  matchedTarget?: ScopedTarget;
+  rejectionReason?: string;
+}
+
+/**
+ * Pure domain authoritative matching function for a ticket against a ScopedPurchasePlan.
+ * Reused across filterByScope and PriorityCategoryEngine to guarantee fail-closed consistency (P2-2).
+ */
+export function matchTicketToScope(
+  ticket: { id: string | null; name: string; showingId: string | null },
+  plan: ScopedPurchasePlan,
+  context?: TicketScopeMatchContext
+): TicketScopeMatchResult {
+  if (!plan.targets || plan.targets.length === 0) {
+    return { matched: true };
+  }
+
+  // Rule 1: Fail-closed on missing showingId (P2-2)
+  if (!ticket.showingId) {
+    return {
+      matched: false,
+      rejectionReason: `SHOWING_ID_MISSING: Ticket '${ticket.name}' has no showingId and scopedPlan is active`,
+    };
+  }
+
+  const showingId = ticket.showingId;
+  const uniqueShowings = context?.uniqueShowingCount ?? 1;
+
+  // Rule 2: Find target for this showing (showingId match or 'default' only if uniqueShowings === 1)
+  const matchingTargets = plan.targets.filter((target) => {
+    if (target.showingId === showingId) return true;
+    if (target.showingId === 'default' && uniqueShowings === 1) return true;
+    return false;
+  });
+
+  if (matchingTargets.length === 0) {
+    return {
+      matched: false,
+      rejectionReason: `SHOWING_NOT_IN_WHITELIST: Showing '${showingId}' is outside scoped targets (target default disallowed when multiple showings exist)`,
+    };
+  }
+
+  const normName = ticket.name.trim().toLowerCase();
+
+  // Rule 3: Check matching target by ticket ID or name
+  for (const target of matchingTargets) {
+    const matchedById = Boolean(
+      ticket.id &&
+        target.ticketTypeIds.some(
+          (id) =>
+            id === ticket.id || id.toLowerCase().trim() === ticket.id!.toLowerCase().trim()
+        ) &&
+        ticket.id !== ticket.name
+    );
+
+    if (matchedById) {
+      return { matched: true, matchedTarget: target };
+    }
+
+    const matchedByName =
+      target.ticketTypeIds.includes(ticket.name) ||
+      target.ticketTypeIds.some((id) => id.toLowerCase().trim() === normName);
+
+    if (matchedByName) {
+      // Rule 4: If matched only by name, verify name is not ambiguous within the showing
+      if (context?.isNameAmbiguousWithinShowing) {
+        return {
+          matched: false,
+          rejectionReason: `AMBIGUOUS_MATCH: Ticket name '${ticket.name}' is not unique within showing '${showingId}'`,
+        };
+      }
+      return { matched: true, matchedTarget: target };
+    }
+  }
+
+  return {
+    matched: false,
+    rejectionReason: `TICKET_NOT_IN_WHITELIST: Ticket '${ticket.name}' (${ticket.id}) is outside scoped targets for showing '${showingId}'`,
+  };
+}
+
 /**
  * Pure domain function to filter an EventCatalog strictly according to a ScopedPurchasePlan.
  * Zero Chrome/DOM dependencies.
@@ -92,31 +180,17 @@ export function filterByScope(catalog: EventCatalog, plan: ScopedPurchasePlan): 
   const inScopeCandidates: ScopeCandidate[] = [];
   const rejectedCandidates: ScopeFilterResult['rejectedCandidates'] = [];
 
-  // Index targets by showingId
-  const targetsByShowing = new Map<string, ScopedTarget[]>();
-  for (const target of plan.targets) {
-    const list = targetsByShowing.get(target.showingId) ?? [];
-    list.push(target);
-    targetsByShowing.set(target.showingId, list);
-  }
+  const totalShowings = catalog.showings.length;
 
   for (const showing of catalog.showings) {
     const showingId = showing.id;
-    let matchingTargets = showingId ? targetsByShowing.get(showingId) : undefined;
-
-    // Fallback: If target was saved with 'default' showing ID
-    if (!matchingTargets && targetsByShowing.has('default')) {
-      matchingTargets = targetsByShowing.get('default');
-    }
-
-    if (!showingId || !matchingTargets || matchingTargets.length === 0) {
-      // Entire showing is outside whitelist
+    if (!showingId) {
       for (const ticket of showing.ticketTypes) {
         rejectedCandidates.push({
-          showingId,
+          showingId: '',
           ticketId: ticket.id,
           ticketName: ticket.name,
-          reason: `SHOWING_NOT_IN_WHITELIST: Showing '${showing.name ?? showingId ?? 'unknown'}' (${showingId}) is outside scoped targets`,
+          reason: `SHOWING_ID_MISSING: Showing '${showing.name ?? 'unknown'}' has no showingId`,
         });
       }
       continue;
@@ -129,48 +203,31 @@ export function filterByScope(catalog: EventCatalog, plan: ScopedPurchasePlan): 
       ticketNameCounts.set(norm, (ticketNameCounts.get(norm) ?? 0) + 1);
     }
 
-    // Showing is in whitelist: evaluate each ticket type
+    // Showing evaluation for each ticket type
     for (const ticket of showing.ticketTypes) {
       const normName = ticket.name.trim().toLowerCase();
       const isNameAmbiguous = (ticketNameCounts.get(normName) ?? 0) > 1;
 
-      // Primary key matching: check if target matched by ID or by Name
-      const matchingTarget = matchingTargets.find((t) => {
-        if (ticket.id && t.ticketTypeIds.includes(ticket.id)) {
-          return true;
+      const matchResult = matchTicketToScope(
+        { id: ticket.id, name: ticket.name, showingId },
+        plan,
+        {
+          uniqueShowingCount: totalShowings,
+          isNameAmbiguousWithinShowing: isNameAmbiguous,
         }
-        if (t.ticketTypeIds.includes(ticket.name)) {
-          return true;
-        }
-        if (t.ticketTypeIds.some((id) => id.toLowerCase().trim() === normName)) {
-          return true;
-        }
-        return false;
-      });
-
-      if (!matchingTarget) {
-        rejectedCandidates.push({
-          showingId,
-          ticketId: ticket.id,
-          ticketName: ticket.name,
-          reason: `TICKET_NOT_IN_WHITELIST: Ticket '${ticket.name}' (${ticket.id}) is outside scoped targets for showing ${showingId}`,
-        });
-        continue;
-      }
-
-      // If matched by name (or ticket.id equals name/missing), reject if ambiguous in this showing
-      const matchedById = Boolean(
-        ticket.id && matchingTarget.ticketTypeIds.includes(ticket.id) && ticket.id !== ticket.name
       );
-      if (!matchedById && isNameAmbiguous) {
+
+      if (!matchResult.matched || !matchResult.matchedTarget) {
         rejectedCandidates.push({
           showingId,
           ticketId: ticket.id,
           ticketName: ticket.name,
-          reason: `AMBIGUOUS_MATCH: Ticket name '${ticket.name}' is not unique within showing '${showing.name ?? showingId}' (${showingId})`,
+          reason: matchResult.rejectionReason ?? 'TICKET_NOT_IN_WHITELIST',
         });
         continue;
       }
+
+      const matchingTarget = matchResult.matchedTarget;
 
       // Ticket is in whitelist
       const ticketId = ticket.id ?? ticket.name;
