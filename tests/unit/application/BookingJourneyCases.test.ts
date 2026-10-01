@@ -348,22 +348,29 @@ describe('Booking Journey Cases and Flows (Cases A - L & Flows 1 - 7)', () => {
 
   // FLOW 6 & CASE L: Unsupported Flow Fail-Safe
   it('Flow 6 & Case L: should fail safely when DOM has unsupported structure', async () => {
-    const root = parseHtmlToDOMElementLike(BOOKING_JOURNEY_FIXTURES.CASE_L_UNSUPPORTED_STRUCTURE);
-    const adapter = new TicketboxJourneyAdapter(logger, root);
-    const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, logger);
+    vi.useFakeTimers();
+    try {
+      const root = parseHtmlToDOMElementLike(BOOKING_JOURNEY_FIXTURES.CASE_L_UNSUPPORTED_STRUCTURE);
+      const adapter = new TicketboxJourneyAdapter(logger, root);
+      const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, logger);
 
-    const preferences: BookingPreferences = {
-      categoryPriority: ['Any Ticket'],
-      quantity: 1,
-      allowFallback: false,
-    };
+      const preferences: BookingPreferences = {
+        categoryPriority: ['Any Ticket'],
+        quantity: 1,
+        allowFallback: false,
+      };
 
-    const result = await useCase.execute(preferences);
+      const promise = useCase.execute(preferences);
+      await vi.runAllTimersAsync();
+      const result = await promise;
 
-    expect(result.success).toBe(false);
-    expect(result.finalState).toBe(PurchaseState.FAILED);
-    expect(result.error).toContain('No ticket tiers detected');
-  }, 15_000); // MAX_RETRIES=8 with backoff requires more than 5s
+      expect(result.success).toBe(false);
+      expect(result.finalState).toBe(PurchaseState.FAILED);
+      expect(result.error).toContain('No ticket tiers detected');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   // REGRESSION: a detected question form must never be treated as validated without a profile
   it('should stop for the user (not claim PAYMENT_GATE) when a question form has no configured profile', async () => {

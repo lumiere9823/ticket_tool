@@ -209,10 +209,12 @@ describe('Retry Exhaustion → FAILED state', () => {
     logger = new SanitizedLogger({ state: 'TEST' });
     stateMachine = new PurchaseStateMachine(PurchaseState.READY);
     eventBus = new ChromeMessageBus(logger);
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('should reach FAILED after MAX_RETRIES on empty DOM', async () => {
@@ -220,47 +222,53 @@ describe('Retry Exhaustion → FAILED state', () => {
     const adapter = new TicketboxJourneyAdapter(logger, root);
     const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, logger);
 
-    const result = await useCase.execute({
+    const promise = useCase.execute({
       categoryPriority: ['Any Ticket'],
       quantity: 1,
       allowFallback: false,
     });
+    await vi.runAllTimersAsync();
+    const result = await promise;
 
     expect(result.success).toBe(false);
     expect(result.finalState).toBe(PurchaseState.FAILED);
     expect(result.error).toBeDefined();
-  }, 30_000); // 8 retries with backoff need generous timeout
+  });
 
   it('should NOT reach PAYMENT_GATE on empty DOM', async () => {
     const root = parseHtmlToDOMElementLike(EMPTY_DOM_HTML);
     const adapter = new TicketboxJourneyAdapter(logger, root);
     const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, logger);
 
-    const result = await useCase.execute({
+    const promise = useCase.execute({
       categoryPriority: ['Any Ticket'],
       quantity: 1,
       allowFallback: false,
     });
+    await vi.runAllTimersAsync();
+    const result = await promise;
 
     expect(result.finalState).not.toBe(PurchaseState.PAYMENT_GATE);
     expect(result.finalState).not.toBe(PurchaseState.CONFIRMED);
-  }, 30_000);
+  });
 
   it('should set result.error to a non-empty string on failure', async () => {
     const root = parseHtmlToDOMElementLike(EMPTY_DOM_HTML);
     const adapter = new TicketboxJourneyAdapter(logger, root);
     const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, logger);
 
-    const result = await useCase.execute({
+    const promise = useCase.execute({
       categoryPriority: ['Ghost Ticket'],
       quantity: 1,
       allowFallback: false,
     });
+    await vi.runAllTimersAsync();
+    const result = await promise;
 
     expect(result.error).toBeTruthy();
     expect(typeof result.error).toBe('string');
     expect(result.error!.length).toBeGreaterThan(0);
-  }, 30_000);
+  });
 });
 
 // ─── 3. Seat Label Normalization (norm()) ─────────────────────────────────────
@@ -1089,27 +1097,34 @@ describe('JourneyUseCaseConfig — maxRetries injectable for test control', () =
   });
 
   it('should use injected maxRetries=2 to fail faster on empty DOM', async () => {
-    const stateMachine = new PurchaseStateMachine(PurchaseState.READY);
-    const eventBus = new ChromeMessageBus(logger);
-    const root = parseHtmlToDOMElementLike('<div></div>');
-    const adapter = new TicketboxJourneyAdapter(logger, root);
-    const useCase = new ExecuteBookingJourneyUseCase(
-      stateMachine,
-      adapter,
-      eventBus,
-      logger,
-      { maxRetries: 2 }
-    );
+    vi.useFakeTimers();
+    try {
+      const stateMachine = new PurchaseStateMachine(PurchaseState.READY);
+      const eventBus = new ChromeMessageBus(logger);
+      const root = parseHtmlToDOMElementLike('<div></div>');
+      const adapter = new TicketboxJourneyAdapter(logger, root);
+      const useCase = new ExecuteBookingJourneyUseCase(
+        stateMachine,
+        adapter,
+        eventBus,
+        logger,
+        { maxRetries: 2 }
+      );
 
-    const result = await useCase.execute({
-      categoryPriority: ['Any Ticket'],
-      quantity: 1,
-      allowFallback: false,
-    });
+      const promise = useCase.execute({
+        categoryPriority: ['Any Ticket'],
+        quantity: 1,
+        allowFallback: false,
+      });
+      await vi.runAllTimersAsync();
+      const result = await promise;
 
-    expect(result.success).toBe(false);
-    expect(result.finalState).toBe(PurchaseState.FAILED);
-  }, 10_000);
+      expect(result.success).toBe(false);
+      expect(result.finalState).toBe(PurchaseState.FAILED);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── 17. Stop Guard — userExplicitlyStopped prevents auto-reactivation ─────────
