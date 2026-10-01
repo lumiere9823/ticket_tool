@@ -77,7 +77,14 @@ export interface TicketboxPageAdapter {
     areaId: string,
     areaName?: string | undefined,
     ticketTypeId?: string | undefined,
-    coords?: { x?: number | undefined; y?: number | undefined; width?: number | undefined; height?: number | undefined } | undefined
+    coords?:
+      | {
+          x?: number | undefined;
+          y?: number | undefined;
+          width?: number | undefined;
+          height?: number | undefined;
+        }
+      | undefined
   ): Promise<boolean>;
   selectSpecificSeats?(seatIds: string[]): Promise<boolean>;
   getBookingSummary?(): Promise<

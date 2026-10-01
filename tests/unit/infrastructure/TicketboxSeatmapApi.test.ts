@@ -604,7 +604,9 @@ describe('Authoritative Ticketbox Seatmap API Integration', () => {
     };
 
     it('should parse area-based sections with ticketTypeId and non-reserving seat attributes', () => {
-      const areas = TicketboxSeatMapParser.parseAreasFromSeatmapApi(MOCK_AREA_BASED_SEATMAP_RESPONSE);
+      const areas = TicketboxSeatMapParser.parseAreasFromSeatmapApi(
+        MOCK_AREA_BASED_SEATMAP_RESPONSE
+      );
       expect(areas).toHaveLength(2); // stage skipped, 2 salable zones kept
 
       const ultraVip = areas.find((a) => a.id === '12768');
@@ -648,7 +650,12 @@ describe('Authoritative Ticketbox Seatmap API Integration', () => {
         adapter.setSeatmapData(MOCK_AREA_BASED_SEATMAP_RESPONSE);
 
         const eventBus = new ChromeMessageBus();
-        const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, new SanitizedLogger());
+        const useCase = new ExecuteBookingJourneyUseCase(
+          stateMachine,
+          adapter,
+          eventBus,
+          new SanitizedLogger()
+        );
 
         const result = await useCase.execute({
           categoryPriority: ['ULTRA VIP - L2', '1086256'],
@@ -666,4 +673,3 @@ describe('Authoritative Ticketbox Seatmap API Integration', () => {
     });
   });
 });
-

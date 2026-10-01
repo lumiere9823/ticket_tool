@@ -266,7 +266,9 @@ export function assertInScope(
       const ticketInScope = targetsForShowing.some(
         (t) =>
           t.ticketTypeIds.includes(ticketTypeId) ||
-          t.ticketTypeIds.some((id) => id.toLowerCase().trim() === ticketTypeId.toLowerCase().trim())
+          t.ticketTypeIds.some(
+            (id) => id.toLowerCase().trim() === ticketTypeId.toLowerCase().trim()
+          )
       );
       if (!ticketInScope) {
         throw new ScopeViolationError(`Ticket ${ticketTypeId} is outside whitelist`);
@@ -320,7 +322,9 @@ export function pickTarget(
       for (const target of sortedTargets) {
         const targetCandidates = eligible.filter(
           (c) =>
-            (c.showingId === target.showingId || target.showingId === 'default' || !target.showingId) &&
+            (c.showingId === target.showingId ||
+              target.showingId === 'default' ||
+              !target.showingId) &&
             (target.ticketTypeIds.includes(c.ticketId) ||
               target.ticketTypeIds.includes(c.ticketName) ||
               target.ticketTypeIds.some(

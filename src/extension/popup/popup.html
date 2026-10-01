@@ -29,7 +29,7 @@
           </button>
         </div>
 
-        <label for="event-url" style="margin-top: 6px;">Target Event URL</label>
+        <label for="event-url" style="margin-top: 6px">Target Event URL</label>
         <input type="text" id="event-url" placeholder="https://ticketbox.vn/event/..." />
 
         <!-- ============================================================
@@ -71,16 +71,34 @@
           <div class="basic-card">
             <div class="basic-section-title">
               <span>1. CHỌN HẠNG VÉ MUỐN MUA</span>
-              <div style="display: flex; gap: 6px;">
-                <button type="button" id="btn-basic-select-all" class="btn-cancel-small" style="background: rgba(59, 130, 246, 0.15); color: #93c5fd; border-color: rgba(59, 130, 246, 0.4);">Tất cả</button>
-                <button type="button" id="btn-basic-deselect-all" class="btn-cancel-small">Bỏ chọn</button>
+              <div style="display: flex; gap: 6px">
+                <button
+                  type="button"
+                  id="btn-basic-select-all"
+                  class="btn-cancel-small"
+                  style="
+                    background: rgba(59, 130, 246, 0.15);
+                    color: #93c5fd;
+                    border-color: rgba(59, 130, 246, 0.4);
+                  "
+                >
+                  Tất cả
+                </button>
+                <button type="button" id="btn-basic-deselect-all" class="btn-cancel-small">
+                  Bỏ chọn
+                </button>
               </div>
             </div>
-            <p class="basic-help-text" style="margin-bottom: 6px;">
-              💡 <em>Cơ chế dự phòng:</em> Trợ lý chỉ mua đúng <strong>Số lượng vé</strong> bạn chọn ở Mục 2. Nếu tick nhiều vé, trợ lý sẽ cố mua vé trên cùng trước; nếu hết vé mới tự động đẩy dần xuống các vé dưới.
+            <p class="basic-help-text" style="margin-bottom: 6px">
+              💡 <em>Cơ chế dự phòng:</em> Trợ lý chỉ mua đúng <strong>Số lượng vé</strong> bạn chọn
+              ở Mục 2. Nếu tick nhiều vé, trợ lý sẽ cố mua vé trên cùng trước; nếu hết vé mới tự
+              động đẩy dần xuống các vé dưới.
             </p>
             <div class="basic-ticket-checklist" id="basic-ticket-checklist">
-              <div class="empty-cell" style="padding: 12px; text-align: center; color: var(--text-muted);">
+              <div
+                class="empty-cell"
+                style="padding: 12px; text-align: center; color: var(--text-muted)"
+              >
                 Chưa phát hiện vé. Vui lòng mở trang sự kiện trên trình duyệt rồi bấm nút ↺ ở trên.
               </div>
             </div>
@@ -89,22 +107,44 @@
           <!-- Số lượng & Hẹn giờ -->
           <div class="basic-card">
             <div class="basic-section-title">2. SỐ LƯỢNG &amp; THỜI GIAN MỞ BÁN</div>
-            
+
             <div class="basic-quantity-row">
               <label for="basic-quantity" class="field-label">Số lượng vé muốn mua:</label>
-              <input type="number" id="basic-quantity" min="1" max="10" value="1" class="input-number" style="width: 70px;" />
+              <input
+                type="number"
+                id="basic-quantity"
+                min="1"
+                max="10"
+                value="1"
+                class="input-number"
+                style="width: 70px"
+              />
             </div>
 
-            <div class="field-group" style="margin-top: 4px;">
-              <label for="basic-scheduled-arm-time" class="field-label">⏰ Giờ mở bán (Để trống nếu vé đã mở và muốn săn ngay):</label>
+            <div class="field-group" style="margin-top: 4px">
+              <label for="basic-scheduled-arm-time" class="field-label"
+                >⏰ Giờ mở bán (Để trống nếu vé đã mở và muốn săn ngay):</label
+              >
               <input type="datetime-local" id="basic-scheduled-arm-time" class="input-datetime" />
-              <p class="basic-help-text" style="margin-top: 4px;">
-                💡 <em>Mẹo hẹn giờ:</em> Cấu hình xong → chọn giờ mở bán → bấm ARM. Extension sẽ tự động bật tab Ticketbox lên và săn vé đúng từng giây!
+              <p class="basic-help-text" style="margin-top: 4px">
+                💡 <em>Mẹo hẹn giờ:</em> Cấu hình xong → chọn giờ mở bán → bấm ARM. Extension sẽ tự
+                động bật tab Ticketbox lên và săn vé đúng từng giây!
               </p>
-              <div id="basic-scheduled-status" class="scheduled-arm-status" style="display: none; margin-top: 6px;">
+              <div
+                id="basic-scheduled-status"
+                class="scheduled-arm-status"
+                style="display: none; margin-top: 6px"
+              >
                 ⏳ Đã hẹn ARM vào: <strong id="basic-scheduled-time-display">-</strong>
-                <span id="basic-scheduled-countdown" class="scheduled-countdown-badge" style="display: none">(Còn lại --:--)</span>
-                <button id="btn-cancel-basic-scheduled" class="btn-cancel-small" type="button">✕ Hủy hẹn</button>
+                <span
+                  id="basic-scheduled-countdown"
+                  class="scheduled-countdown-badge"
+                  style="display: none"
+                  >(Còn lại --:--)</span
+                >
+                <button id="btn-cancel-basic-scheduled" class="btn-cancel-small" type="button">
+                  ✕ Hủy hẹn
+                </button>
               </div>
             </div>
           </div>
@@ -113,21 +153,45 @@
           <details class="user-profile-details" open>
             <summary>3. Thông tin người nhận vé (Profile)</summary>
             <div class="profile-fields">
-              <input type="text" id="basic-profile-name" placeholder="Họ và tên (e.g. Nguyễn Văn A)" />
-              <input type="text" id="basic-profile-phone" placeholder="Số điện thoại (e.g. 0901234567)" />
-              <input type="email" id="basic-profile-email" placeholder="Email nhận vé (e.g. user@example.com)" />
+              <input
+                type="text"
+                id="basic-profile-name"
+                placeholder="Họ và tên (e.g. Nguyễn Văn A)"
+              />
+              <input
+                type="text"
+                id="basic-profile-phone"
+                placeholder="Số điện thoại (e.g. 0901234567)"
+              />
+              <input
+                type="email"
+                id="basic-profile-email"
+                placeholder="Email nhận vé (e.g. user@example.com)"
+              />
               <input type="text" id="basic-profile-id-card" placeholder="Số CCCD / CMND (nếu có)" />
             </div>
           </details>
 
           <!-- Nút hành động chế độ cơ bản -->
-          <div class="actions" style="margin-top: 6px; display: flex; flex-direction: column; gap: 8px;">
+          <div
+            class="actions"
+            style="margin-top: 6px; display: flex; flex-direction: column; gap: 8px"
+          >
             <button id="btn-basic-arm" class="btn-large-arm" type="button">
               🚀 BẮT ĐẦU SĂN VÉ (ARM)
             </button>
-            <div style="display: flex; gap: 8px;">
-              <button id="btn-basic-stop" class="btn btn-danger" type="button" style="flex: 1;">🛑 DỪNG LẠI</button>
-              <button id="btn-basic-reset" class="btn btn-ghost" type="button" title="Xóa toàn bộ cấu hình đã lưu để cài đặt cho sự kiện khác">🗑 RESET CONFIG</button>
+            <div style="display: flex; gap: 8px">
+              <button id="btn-basic-stop" class="btn btn-danger" type="button" style="flex: 1">
+                🛑 DỪNG LẠI
+              </button>
+              <button
+                id="btn-basic-reset"
+                class="btn btn-ghost"
+                type="button"
+                title="Xóa toàn bộ cấu hình đã lưu để cài đặt cho sự kiện khác"
+              >
+                🗑 RESET CONFIG
+              </button>
             </div>
           </div>
         </div>
@@ -200,11 +264,25 @@
               <div class="persistence-fields">
                 <div class="param-row">
                   <label for="param-duration">Trần thời gian (phút, 0 = không giới hạn):</label>
-                  <input type="number" id="param-duration" min="0" max="1440" value="120" placeholder="0 = vô hạn" />
+                  <input
+                    type="number"
+                    id="param-duration"
+                    min="0"
+                    max="1440"
+                    value="120"
+                    placeholder="0 = vô hạn"
+                  />
                 </div>
                 <div class="param-row">
                   <label for="param-attempts">Trần số lần thử (0 = không giới hạn):</label>
-                  <input type="number" id="param-attempts" min="0" max="10000" value="1000" placeholder="0 = vô hạn" />
+                  <input
+                    type="number"
+                    id="param-attempts"
+                    min="0"
+                    max="10000"
+                    value="1000"
+                    placeholder="0 = vô hạn"
+                  />
                 </div>
                 <div class="param-row">
                   <label for="param-poll-interval">Giãn cách poll (ms, sàn 1500):</label>
@@ -219,7 +297,14 @@
                 </div>
                 <div class="param-row">
                   <label for="param-jitter">Tỷ lệ Jitter (0 - 1):</label>
-                  <input type="number" id="param-jitter" min="0" max="0.5" step="0.05" value="0.2" />
+                  <input
+                    type="number"
+                    id="param-jitter"
+                    min="0"
+                    max="0.5"
+                    step="0.05"
+                    value="0.2"
+                  />
                 </div>
                 <div class="param-row full-width-param">
                   <label class="checkbox-label" for="param-allow-partial">
@@ -261,7 +346,9 @@
               class="ticket-rules-container"
               style="margin-top: 8px"
             ></div>
-            <button type="button" id="btn-add-ticket-row" class="btn-add-row">+ Thêm loại vé</button>
+            <button type="button" id="btn-add-ticket-row" class="btn-add-row">
+              + Thêm loại vé
+            </button>
             <div class="fallback-row">
               <label class="checkbox-label">
                 <input type="checkbox" id="allow-fallback" checked />
@@ -326,7 +413,13 @@
           <div class="actions" style="margin-top: 10px">
             <button id="btn-arm" class="btn btn-primary">ARM ASSISTANT</button>
             <button id="btn-stop" class="btn btn-danger">STOP</button>
-            <button id="btn-reset-config" class="btn btn-ghost" title="Xóa toàn bộ cấu hình đã lưu (URL, preference, profile, matrix). Profiles tài khoản vẫn được giữ.">🗑 RESET</button>
+            <button
+              id="btn-reset-config"
+              class="btn btn-ghost"
+              title="Xóa toàn bộ cấu hình đã lưu (URL, preference, profile, matrix). Profiles tài khoản vẫn được giữ."
+            >
+              🗑 RESET
+            </button>
           </div>
 
           <!-- SCHEDULED ARM SECTION -->
@@ -344,8 +437,15 @@
               <div id="scheduled-arm-status" class="scheduled-arm-status" style="display: none">
                 ⏳ Đã hẹn ARM vào:
                 <strong id="scheduled-arm-time-display">-</strong>
-                <span id="scheduled-arm-countdown" class="scheduled-countdown-badge" style="display: none">(Còn lại --:--)</span>
-                <button id="btn-cancel-scheduled-arm" class="btn-cancel-small" type="button">✕ Hủy hẹn</button>
+                <span
+                  id="scheduled-arm-countdown"
+                  class="scheduled-countdown-badge"
+                  style="display: none"
+                  >(Còn lại --:--)</span
+                >
+                <button id="btn-cancel-scheduled-arm" class="btn-cancel-small" type="button">
+                  ✕ Hủy hẹn
+                </button>
               </div>
             </div>
           </details>

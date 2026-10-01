@@ -332,4 +332,3 @@ describe('Service Worker Rehydration Safety (Section 21)', () => {
     });
   });
 });
-

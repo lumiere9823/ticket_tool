@@ -444,11 +444,12 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         }
       }
     } catch (err) {
-      this.logger?.debug('Event API direct fetch failed, falling back to DOM', { err: String(err) });
+      this.logger?.debug('Event API direct fetch failed, falling back to DOM', {
+        err: String(err),
+      });
     }
     return null;
   }
-
 
   /** Fetches question form schema from the authoritative API. Cached per eventId. */
   public async fetchQuestionFormApi(
@@ -653,8 +654,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     }
     const root = this.getRoot();
     const url = typeof window !== 'undefined' ? window.location.href : '';
-    const targetShowingId =
-      showingId && showingId !== 'default' ? showingId : this.getShowingId();
+    const targetShowingId = showingId && showingId !== 'default' ? showingId : this.getShowingId();
 
     // 0. On event landing page: fetch all showings from Event API for multi-showing events
     const isBookingPage =
@@ -1077,8 +1077,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     this.logger?.info('Executing Section 7 Ticket Selection', { candidateId, quantity, showingId });
 
     // Resolve effective showing ID
-    let effectiveShowingId =
-      showingId && showingId !== 'default' ? showingId : this.getShowingId();
+    let effectiveShowingId = showingId && showingId !== 'default' ? showingId : this.getShowingId();
     if (
       (!effectiveShowingId || effectiveShowingId === 'default') &&
       this.cachedEventApiData?.data?.result?.showings
@@ -1378,13 +1377,15 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const isAlreadyOnBookingPage =
       currentUrl.includes('/select-ticket') ||
       currentUrl.includes('/booking') ||
-      root.querySelector('svg.seatmap, [class*="seatmap"], .seat-map, .konvajs-content, [class*="konvajs"]') !== null;
+      root.querySelector(
+        'svg.seatmap, [class*="seatmap"], .seat-map, .konvajs-content, [class*="konvajs"]'
+      ) !== null;
 
     // Fast path: If on seat map page with visual seat map and no stepper controls present,
     // quantity is handled directly by seat/area picking.
     const hasActualSeatMap =
-      root.querySelector('.konvajs-content, [class*="konvajs"], svg.seatmap, [data-seatmap]') !== null ||
-      this.findSeatmapSvg() !== null;
+      root.querySelector('.konvajs-content, [class*="konvajs"], svg.seatmap, [data-seatmap]') !==
+        null || this.findSeatmapSvg() !== null;
 
     const hasAnyQuantityStepper =
       root.querySelector(
@@ -1546,12 +1547,14 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             // 1. In browser world, dispatch directly via Page-World Bridge (MAIN world)
             // which triggers React Fiber synthetic onClick and clicks continue button synchronously!
             if (typeof window !== 'undefined') {
-              const bridgeRes = await this.sendPageBridgeRequest<{ success: boolean; message?: string }>(
-                'CONFIRM_AREA_MODAL',
-                { quantity, ticketName: ticket.name }
-              );
+              const bridgeRes = await this.sendPageBridgeRequest<{
+                success: boolean;
+                message?: string;
+              }>('CONFIRM_AREA_MODAL', { quantity, ticketName: ticket.name });
               if (bridgeRes.success) {
-                this.logger?.info('Area modal confirmed via Page Bridge (Main World)', { quantity });
+                this.logger?.info('Area modal confirmed via Page Bridge (Main World)', {
+                  quantity,
+                });
                 return true;
               }
             }
@@ -1843,9 +1846,13 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             if (!isNaN(p)) return p;
           }
 
-          const fallbackNumbers = Array.from(ticketContainer.querySelectorAll('span, div, p, strong'))
+          const fallbackNumbers = Array.from(
+            ticketContainer.querySelectorAll('span, div, p, strong')
+          )
             .map((el) => ({ el, text: (el.textContent || '').trim() }))
-            .filter((item) => /^\d+$/.test(item.text) && item.el.querySelectorAll('*').length === 0);
+            .filter(
+              (item) => /^\d+$/.test(item.text) && item.el.querySelectorAll('*').length === 0
+            );
           if (fallbackNumbers.length > 0) {
             const p = parseInt(fallbackNumbers[0]!.text, 10);
             if (!isNaN(p)) return p;
@@ -1931,8 +1938,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       if (input) {
         if (input.rawElement && 'value' in input.rawElement) {
           const nativeEl = input.rawElement as HTMLInputElement;
-          const proto =
-            typeof window !== 'undefined' ? window.HTMLInputElement?.prototype : null;
+          const proto = typeof window !== 'undefined' ? window.HTMLInputElement?.prototype : null;
           const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
           if (descriptor && descriptor.set) {
             descriptor.set.call(nativeEl, String(quantity));
@@ -2263,7 +2269,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
       // TIER 2: Other standard button & input elements
       const tier2Candidates: DOMElementLike[] = [];
-      const tier2Selector = 'button, input[type="submit"], a.btn, a[class*="button"], a[role="button"]';
+      const tier2Selector =
+        'button, input[type="submit"], a.btn, a[class*="button"], a[role="button"]';
 
       for (const el of root.querySelectorAll(tier2Selector)) {
         const raw = el.rawElement || el;
@@ -2305,7 +2312,12 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       }
 
       // Evaluate candidate tiers in priority order
-      const candidateDebugInfo: Array<{ tag: string; text: string; disabled: boolean; tier: number }> = [];
+      const candidateDebugInfo: Array<{
+        tag: string;
+        text: string;
+        disabled: boolean;
+        tier: number;
+      }> = [];
 
       for (const tierList of [
         { tier: 1, list: tier1Candidates },
@@ -2313,7 +2325,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         { tier: 3, list: tier3Candidates },
       ]) {
         for (const btn of tierList.list) {
-          const text = (btn.textContent || btn.getAttribute('aria-label') || '').toLowerCase().trim();
+          const text = (btn.textContent || btn.getAttribute('aria-label') || '')
+            .toLowerCase()
+            .trim();
           const disabled = this.isElementDisabled(btn);
 
           if (!isCandidateValid(btn)) {
@@ -2390,12 +2404,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         }
       }
 
-      this.logger?.debug(
-        `Attempt ${attempt}/${maxAttempts}: evaluated continue candidates`,
-        {
-          candidates: candidateDebugInfo.filter((c) => c.text.length > 0).slice(0, 10),
-        }
-      );
+      this.logger?.debug(`Attempt ${attempt}/${maxAttempts}: evaluated continue candidates`, {
+        candidates: candidateDebugInfo.filter((c) => c.text.length > 0).slice(0, 10),
+      });
 
       // If not yet available/enabled, wait 75ms before next attempt
       if (attempt < maxAttempts) {
@@ -2454,7 +2465,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           (text.includes('mất vị trí') || text.includes('hủy đơn') || text.includes('huỷ đơn')));
 
       if (isCancelOrderModal) {
-        this.logger?.info('Detected "Hủy đơn hàng?" confirmation modal, searching for "Hủy đơn" button');
+        this.logger?.info(
+          'Detected "Hủy đơn hàng?" confirmation modal, searching for "Hủy đơn" button'
+        );
         const modalRaw = (modal.rawElement || modal) as HTMLElement;
 
         let cancelBtn: DOMElementLike | HTMLElement | null = null;
@@ -2488,7 +2501,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           const directMatch = clickables.find((el) => {
             const t = (el.textContent || '').trim().toLowerCase();
             return (
-              (t === 'hủy đơn' || t === 'huỷ đơn' || t === 'hủy đơn hàng' || t === 'huỷ đơn hàng') &&
+              (t === 'hủy đơn' ||
+                t === 'huỷ đơn' ||
+                t === 'hủy đơn hàng' ||
+                t === 'huỷ đơn hàng') &&
               !t.includes('ở lại') &&
               !t.includes('?')
             );
@@ -2546,7 +2562,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           const globalMatch = allGlobal.find((el) => {
             const t = (el.textContent || '').trim().toLowerCase();
             return (
-              (t === 'hủy đơn' || t === 'huỷ đơn' || t === 'hủy đơn hàng' || t === 'huỷ đơn hàng') &&
+              (t === 'hủy đơn' ||
+                t === 'huỷ đơn' ||
+                t === 'hủy đơn hàng' ||
+                t === 'huỷ đơn hàng') &&
               !t.includes('ở lại') &&
               !t.includes('?')
             );
@@ -2564,7 +2583,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         };
 
         if (cancelBtn && typeof cancelBtn.click === 'function') {
-          this.logger?.info('Clicking "Hủy đơn" button to cancel order and return to seat selection');
+          this.logger?.info(
+            'Clicking "Hủy đơn" button to cancel order and return to seat selection'
+          );
           this.clickElement(toDOMElementLike(cancelBtn));
           await new Promise((r) => setTimeout(r, 600));
           return true;
@@ -2699,11 +2720,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
           const changeSeatEl = clickables.find((el) => {
             const t = (el.textContent || '').trim().toLowerCase();
-            return (
-              t.includes('chọn ghế khác') ||
-              t.includes('đổi ghế') ||
-              t === 'chọn ghế khác'
-            );
+            return t.includes('chọn ghế khác') || t.includes('đổi ghế') || t === 'chọn ghế khác';
           });
 
           const reselectEl =
@@ -2753,7 +2770,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
         // If on /question-form, clicking "Chọn ghế khác" should navigate back to /select-ticket
         if (typeof window !== 'undefined' && window.location.href.includes('/question-form')) {
-          this.logger?.info('Seat unavailable modal detected on question-form; recovering to seat selection page');
+          this.logger?.info(
+            'Seat unavailable modal detected on question-form; recovering to seat selection page'
+          );
           await new Promise((r) => setTimeout(r, 400));
           if (window.location.href.includes('/question-form')) {
             const docEl = doc || (typeof document !== 'undefined' ? document : null);
@@ -2779,11 +2798,16 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             }
           }
           if (window.location.href.includes('/question-form')) {
-            this.logger?.info('Navigating back to select-ticket page via history.back() / router fallback');
+            this.logger?.info(
+              'Navigating back to select-ticket page via history.back() / router fallback'
+            );
             if (window.history && typeof window.history.back === 'function') {
               window.history.back();
             } else {
-              window.location.href = window.location.href.replace(/\/question-form(\?.*)?$/, '/select-ticket$1');
+              window.location.href = window.location.href.replace(
+                /\/question-form(\?.*)?$/,
+                '/select-ticket$1'
+              );
             }
             await new Promise((r) => setTimeout(r, 800));
           }
@@ -2808,13 +2832,22 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         const modalRaw = (modal.rawElement || modal) as HTMLElement;
         let actionBtn: HTMLElement | null = null;
         if (modalRaw && typeof modalRaw.querySelectorAll === 'function') {
-          const clickables = Array.from(modalRaw.querySelectorAll('button, a, [role="button"]')) as HTMLElement[];
+          const clickables = Array.from(
+            modalRaw.querySelectorAll('button, a, [role="button"]')
+          ) as HTMLElement[];
           actionBtn =
             clickables.find((el) => {
               const t = (el.textContent || '').trim().toLowerCase();
-              return t.includes('đóng') || t.includes('ok') || t.includes('xác nhận') || t.includes('thử lại');
+              return (
+                t.includes('đóng') ||
+                t.includes('ok') ||
+                t.includes('xác nhận') ||
+                t.includes('thử lại')
+              );
             }) ||
-            (modalRaw.querySelector('button.ant-btn-primary, [class*="btn-primary"], button') as HTMLElement | null);
+            (modalRaw.querySelector(
+              'button.ant-btn-primary, [class*="btn-primary"], button'
+            ) as HTMLElement | null);
         }
         if (actionBtn && typeof actionBtn.click === 'function') {
           this.clickElement(wrapBrowserElement(actionBtn));
@@ -2847,7 +2880,14 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     areaId: string,
     areaName?: string | undefined,
     ticketTypeId?: string | undefined,
-    coords?: { x?: number | undefined; y?: number | undefined; width?: number | undefined; height?: number | undefined } | undefined
+    coords?:
+      | {
+          x?: number | undefined;
+          y?: number | undefined;
+          width?: number | undefined;
+          height?: number | undefined;
+        }
+      | undefined
   ): Promise<boolean> {
     const root = this.getRoot();
     if (!root) return false;
@@ -2856,7 +2896,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     const safeAreaId = areaId.replace(/"/g, '\\"');
     const safeAreaName = areaName ? areaName.replace(/"/g, '\\"') : '';
-    const safeAreaNameUnderscore = areaName ? areaName.replace(/[\s-]+/g, '_').replace(/"/g, '\\"') : '';
+    const safeAreaNameUnderscore = areaName
+      ? areaName.replace(/[\s-]+/g, '_').replace(/"/g, '\\"')
+      : '';
     const safeTicketTypeId = ticketTypeId ? ticketTypeId.replace(/"/g, '\\"') : '';
 
     // 1. Attribute matching on DOM elements
@@ -2893,7 +2935,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
             )
           : null) ||
         (safeTicketTypeId
-          ? root.querySelector(`svg [data-ticket-id="${safeTicketTypeId}"], svg [data-ticket-type-id="${safeTicketTypeId}"]`)
+          ? root.querySelector(
+              `svg [data-ticket-id="${safeTicketTypeId}"], svg [data-ticket-type-id="${safeTicketTypeId}"]`
+            )
           : null);
 
       if (svgArea && typeof (svgArea as MutableDOMElement).click === 'function') {
@@ -2908,7 +2952,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         const normName = safeAreaName.toLowerCase();
         for (const t of svgTexts) {
           const content = (t.textContent || '').trim().toLowerCase();
-          if (content && (content === normName || normName.includes(content) || content.includes(normName))) {
+          if (
+            content &&
+            (content === normName || normName.includes(content) || content.includes(normName))
+          ) {
             const clickable = (t.closest('g') || t) as HTMLElement;
             this.logger?.info('Found matching SVG text element, clicking', { text: content });
             this.clickElement(wrapBrowserElement(clickable));
@@ -2979,7 +3026,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         // Fallback: If Konva canvas exists, simulate click on canvas container at coordinates
         const konvaContent = document.querySelector('.konvajs-content') as HTMLElement | null;
         if (konvaContent) {
-          this.logger?.info('Dispatching simulated click to Konva canvas container', { areaId, coords });
+          this.logger?.info('Dispatching simulated click to Konva canvas container', {
+            areaId,
+            coords,
+          });
           this.clickElement(wrapBrowserElement(konvaContent));
           await new Promise((r) => setTimeout(r, 100));
           return true;
@@ -3155,7 +3205,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           totalSeats: apiSeats.length,
           availableCount: apiSeats.filter((s) => s.selectable && s.status === 'AVAILABLE').length,
           selectedCount: apiSeats.filter((s) => s.status === 'SELECTED').length,
-          blacklistedCount: apiSeats.filter((s) => this.isSeatBlacklisted(s.id) || this.isSeatBlacklisted(s.label)).length,
+          blacklistedCount: apiSeats.filter(
+            (s) => this.isSeatBlacklisted(s.id) || this.isSeatBlacklisted(s.label)
+          ).length,
           areaId,
         });
         return apiSeats;
@@ -3724,7 +3776,11 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       this.selectedSeatIds.delete(raw.toUpperCase());
       if (norm) this.selectedSeatIds.delete(norm);
       for (const s of this.cachedSeats) {
-        if (s.id === raw || s.label === raw || (norm && s.label?.toUpperCase().replace(/[^A-Z0-9]/g, '') === norm)) {
+        if (
+          s.id === raw ||
+          s.label === raw ||
+          (norm && s.label?.toUpperCase().replace(/[^A-Z0-9]/g, '') === norm)
+        ) {
           s.status = 'AVAILABLE';
         }
       }
@@ -3759,7 +3815,9 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
         const text = (tag.textContent || '').toUpperCase().trim();
         const textNorm = text.replace(/[^A-Z0-9]/g, '');
         const isMatch =
-          !targetNorm || textNorm.includes(targetNorm) || (seatLabel && text.includes(seatLabel.toUpperCase()));
+          !targetNorm ||
+          textNorm.includes(targetNorm) ||
+          (seatLabel && text.includes(seatLabel.toUpperCase()));
 
         if (isMatch) {
           const rawTag = (tag.rawElement || tag) as HTMLElement;
@@ -3795,12 +3853,17 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       const raw = seatLabel.trim();
       const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
       const seat = this.cachedSeats.find(
-        (s) => s.id === raw || s.label === raw || (norm && s.label?.toUpperCase().replace(/[^A-Z0-9]/g, '') === norm)
+        (s) =>
+          s.id === raw ||
+          s.label === raw ||
+          (norm && s.label?.toUpperCase().replace(/[^A-Z0-9]/g, '') === norm)
       );
       if (seat && typeof seat.x === 'number' && typeof seat.y === 'number') {
         const seatmapSvg = this.findSeatmapSvg();
         if (seatmapSvg) {
-          const shapes = Array.from(seatmapSvg.querySelectorAll('circle, [cx]')).map((el) => wrapBrowserElement(el));
+          const shapes = Array.from(seatmapSvg.querySelectorAll('circle, [cx]')).map((el) =>
+            wrapBrowserElement(el)
+          );
           for (const s of shapes) {
             const cx = parseFloat(s.getAttribute('cx') || '');
             const cy = parseFloat(s.getAttribute('cy') || '');

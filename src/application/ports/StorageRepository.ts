@@ -56,4 +56,3 @@ export interface StorageRepository {
 
   clearSession(): Promise<void>;
 }
-

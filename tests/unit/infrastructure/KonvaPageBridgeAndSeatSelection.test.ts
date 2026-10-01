@@ -8,7 +8,11 @@ import { PurchaseState } from '../../../src/domain/states/PurchaseState';
 import { ExecuteBookingJourneyUseCase } from '../../../src/application/use-cases/ExecuteBookingJourneyUseCase';
 import { ChromeMessageBus } from '../../../src/infrastructure/messaging/ChromeMessageBus';
 import { AdjacentSeatStrategy } from '../../../src/domain/policies/AdjacentSeatStrategy';
-import { Seat, SeatArea, JourneyTicketType } from '../../../src/domain/entities/BookingJourneyModels';
+import {
+  Seat,
+  SeatArea,
+  JourneyTicketType,
+} from '../../../src/domain/entities/BookingJourneyModels';
 
 const MOCK_SEATMAP: SeatmapApiResponse = {
   status: 1,
@@ -763,7 +767,9 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
         changeSeatClicked = true;
       };
 
-      const tagCloseIcon = root.querySelector('.ant-tag-close-icon') as unknown as { click: () => void };
+      const tagCloseIcon = root.querySelector('.ant-tag-close-icon') as unknown as {
+        click: () => void;
+      };
       tagCloseIcon.click = () => {
         tagCloseClicked = true;
       };
@@ -962,8 +968,14 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
 
       let attempt = 0;
       const customAdapter = {
-        getEventState: async () => ({ event: { id: 'evt-1', name: 'Show' }, showing: null, ticketTypes: [] }),
-        discoverShowings: async () => [{ id: 'show-1', name: 'Show', date: '2026-11-01', ticketTypes: [] }],
+        getEventState: async () => ({
+          event: { id: 'evt-1', name: 'Show' },
+          showing: null,
+          ticketTypes: [],
+        }),
+        discoverShowings: async () => [
+          { id: 'show-1', name: 'Show', date: '2026-11-01', ticketTypes: [] },
+        ],
         discoverJourneyTickets: async () => tickets,
         discoverAreas: async () => areas,
         detectSeatMap: async () => ({ hasSeatMap: true }),
@@ -1122,8 +1134,14 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       let collisionDetected = false;
 
       const mockAdapter = {
-        getEventState: async () => ({ event: { id: 'evt-1', name: 'Concert' }, showing: null, ticketTypes: [] }),
-        discoverShowings: async () => [{ id: 'show-1', name: 'Concert', date: '2026-11-01', ticketTypes: [] }],
+        getEventState: async () => ({
+          event: { id: 'evt-1', name: 'Concert' },
+          showing: null,
+          ticketTypes: [],
+        }),
+        discoverShowings: async () => [
+          { id: 'show-1', name: 'Concert', date: '2026-11-01', ticketTypes: [] },
+        ],
         discoverJourneyTickets: async () => tickets,
         discoverAreas: async () => areas,
         detectSeatMap: async () => ({ hasSeatMap: true }),
@@ -1422,12 +1440,7 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
         const stateMachine = new PurchaseStateMachine(PurchaseState.MONITORING);
         const eventBus = new ChromeMessageBus(logger);
 
-        const useCase = new ExecuteBookingJourneyUseCase(
-          stateMachine,
-          adapter,
-          eventBus,
-          logger
-        );
+        const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, logger);
 
         const result = await useCase.execute({
           categoryPriority: ['Hạng Melody'],

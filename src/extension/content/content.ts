@@ -135,7 +135,9 @@ async function triggerScheduledArmInContent(): Promise<void> {
   scheduledArmTargetMs = null;
   if (isMonitoringActive || isExecutingJourney) return;
 
-  logger.info('Scheduled ARM exact target time reached in content script; automatically activating monitoring');
+  logger.info(
+    'Scheduled ARM exact target time reached in content script; automatically activating monitoring'
+  );
   resetStateMachineToMonitoring('Scheduled ARM exact timer');
 
   isMonitoringActive = true;
@@ -231,7 +233,9 @@ async function detectAndRecoverFromStrayPage(): Promise<boolean> {
     const targetParsed = new URL(targetUrl);
     const currentParsed = new URL(currentUrl);
     const onTicketbox = currentParsed.hostname.endsWith('ticketbox.vn');
-    const onTargetEvent = currentParsed.pathname.startsWith(targetParsed.pathname.split('/').slice(0, 3).join('/'));
+    const onTargetEvent = currentParsed.pathname.startsWith(
+      targetParsed.pathname.split('/').slice(0, 3).join('/')
+    );
     const onBookingPath =
       currentParsed.pathname.includes('/bookings/') ||
       currentParsed.pathname.includes('/select-ticket') ||
@@ -311,7 +315,10 @@ function checkUrlChange(): void {
         logger.info('Detected navigation to select-ticket page; ensuring monitoring is active');
         isMonitoringActive = true;
         try {
-          if (stateMachine.state === PurchaseState.FAILED || stateMachine.state === PurchaseState.STOPPED) {
+          if (
+            stateMachine.state === PurchaseState.FAILED ||
+            stateMachine.state === PurchaseState.STOPPED
+          ) {
             stateMachine.transition({ type: 'RESET_REQUESTED' });
             stateMachine.transition({ type: 'ARM' });
             stateMachine.transition({ type: 'MONITORING_STARTED' });
@@ -418,7 +425,11 @@ function startZoomThrashDetector(): void {
       for (const entry of entries) {
         const w = entry.contentRect.width;
         const h = entry.contentRect.height;
-        if (lastCanvasWidth === 0) { lastCanvasWidth = w; lastCanvasHeight = h; continue; }
+        if (lastCanvasWidth === 0) {
+          lastCanvasWidth = w;
+          lastCanvasHeight = h;
+          continue;
+        }
         // Compute synthetic DPR-like ratio from canvas size change
         const ratio = (w * h) / (lastCanvasWidth * lastCanvasHeight);
         if (ratio > 0 && Math.abs(ratio - 1) > 0.02) {
@@ -911,10 +922,15 @@ async function performDiscoveryScan(force = false): Promise<void> {
       !isMonitoringActive &&
       (currentUrl.includes('/select-ticket') || currentUrl.includes('/booking'))
     ) {
-      logger.info('User on select-ticket page; auto-reactivating monitoring to continue seat selection');
+      logger.info(
+        'User on select-ticket page; auto-reactivating monitoring to continue seat selection'
+      );
       isMonitoringActive = true;
       try {
-        if (stateMachine.state === PurchaseState.FAILED || stateMachine.state === PurchaseState.STOPPED) {
+        if (
+          stateMachine.state === PurchaseState.FAILED ||
+          stateMachine.state === PurchaseState.STOPPED
+        ) {
           stateMachine.transition({ type: 'RESET_REQUESTED' });
           stateMachine.transition({ type: 'ARM' });
           stateMachine.transition({ type: 'MONITORING_STARTED' });
@@ -958,286 +974,295 @@ async function attemptBookingJourney(): Promise<void> {
   const journeyPromise = (async () => {
     try {
       const config = await storage.getConfiguration();
-    if (!config) return;
+      if (!config) return;
 
-    const scopedPlan = config.scopedPurchasePlan;
-    if (await checkLimitsAndStopIfNeeded(scopedPlan)) return;
+      const scopedPlan = config.scopedPurchasePlan;
+      if (await checkLimitsAndStopIfNeeded(scopedPlan)) return;
 
-    const plan = config.purchasePlan;
-    const priorities =
-      scopedPlan && scopedPlan.targets.length > 0
-        ? scopedPlan.targets.flatMap((t) => t.ticketTypeIds)
-        : plan
-          ? plan.ticketRules.map((r) => r.ticketName || r.ticketId).filter(Boolean)
-          : config.preferences?.categoryPriority || [];
+      const plan = config.purchasePlan;
+      const priorities =
+        scopedPlan && scopedPlan.targets.length > 0
+          ? scopedPlan.targets.flatMap((t) => t.ticketTypeIds)
+          : plan
+            ? plan.ticketRules.map((r) => r.ticketName || r.ticketId).filter(Boolean)
+            : config.preferences?.categoryPriority || [];
 
-    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
-    const isOnQuestionForm = currentUrl.includes('/question-form');
-    const isOnPayment = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
+      const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+      const isOnQuestionForm = currentUrl.includes('/question-form');
+      const isOnPayment = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
 
-    const isOnSelectTicket = currentUrl.includes('/select-ticket') || currentUrl.includes('/booking');
+      const isOnSelectTicket =
+        currentUrl.includes('/select-ticket') || currentUrl.includes('/booking');
 
-    if (priorities.length === 0 && !isOnQuestionForm && !isOnPayment) {
-      if (isOnSelectTicket) {
-        logger.info('No explicit ticket priorities configured on select-ticket; defaulting to ANY to select available seats');
-        priorities.push('ANY');
-      } else {
-        logger.info('No ticket priorities configured; waiting for user configuration');
-        return;
-      }
-    }
-
-    const scopedShowingIds = scopedPlan?.targets.map((t) => t.showingId).filter(Boolean);
-
-    const preferences: BookingPreferences = {
-      categoryPriority: priorities,
-      quantity:
-        scopedPlan?.quantity ?? plan?.ticketRules[0]?.quantity ?? config.preferences?.quantity ?? 1,
-      allowFallback: scopedPlan
-        ? false
-        : (plan?.allowFallback ?? config.preferences?.allowFallback ?? true),
-      seatPreference: 'ANY_AVAILABLE',
-      nonAdjacentFallback: 'SELECT_NON_ADJACENT',
-      userProfile: config.userProfile,
-      preferredShowingId:
-        scopedShowingIds && scopedShowingIds.length > 0
-          ? scopedShowingIds[0]
-          : (plan?.showingId ?? null),
-      scopedPurchasePlan: scopedPlan,
-      allowPartialQuantity: scopedPlan?.allowPartialQuantity ?? false,
-    };
-
-    let activeTargetKey: string | null = null;
-
-    if (!isOnQuestionForm && !isOnPayment) {
-      // Discover catalog for the preferred showing (or allowed showings only)
-      const catalog = await adapter.discoverTicketCatalog(
-        preferences.preferredShowingId,
-        scopedShowingIds && scopedShowingIds.length > 0 ? scopedShowingIds : null
-      );
-
-      // If scopedPlan is configured, use domain filterByScope and pickTarget
-      if (scopedPlan && scopedPlan.targets.length > 0) {
-        const scopeResult = filterByScope(catalog, scopedPlan);
-        if (scopeResult.validCandidates.length === 0) {
-          if (stateMachine.state === PurchaseState.MONITORING) {
-            try {
-              stateMachine.transition({ type: 'WAITING_FOR_STOCK' });
-            } catch {
-              // ignore
-            }
-          }
-          const now = Date.now();
-          if (now - lastWaitingLogTimestamp > 30000) {
-            lastWaitingLogTimestamp = now;
-            logger.info('No whitelisted tickets currently available. Continuing monitoring...', {
-              inScopeCount: scopeResult.inScopeCandidates.length,
-              rejectedReasons: scopeResult.rejectedCandidates.map(
-                (r) => `${r.ticketName}: ${r.reason}`
-              ),
-            });
-          }
+      if (priorities.length === 0 && !isOnQuestionForm && !isOnPayment) {
+        if (isOnSelectTicket) {
+          logger.info(
+            'No explicit ticket priorities configured on select-ticket; defaulting to ANY to select available seats'
+          );
+          priorities.push('ANY');
+        } else {
+          logger.info('No ticket priorities configured; waiting for user configuration');
           return;
         }
+      }
 
-        // Target cycling (B3): Filter out candidates already tried in current cycle
-        let candidatePool = scopeResult.validCandidates.filter(
-          (c) => !triedCandidateKeysInCycle.has(`${c.showingId}_${c.ticketId}`)
+      const scopedShowingIds = scopedPlan?.targets.map((t) => t.showingId).filter(Boolean);
+
+      const preferences: BookingPreferences = {
+        categoryPriority: priorities,
+        quantity:
+          scopedPlan?.quantity ??
+          plan?.ticketRules[0]?.quantity ??
+          config.preferences?.quantity ??
+          1,
+        allowFallback: scopedPlan
+          ? false
+          : (plan?.allowFallback ?? config.preferences?.allowFallback ?? true),
+        seatPreference: 'ANY_AVAILABLE',
+        nonAdjacentFallback: 'SELECT_NON_ADJACENT',
+        userProfile: config.userProfile,
+        preferredShowingId:
+          scopedShowingIds && scopedShowingIds.length > 0
+            ? scopedShowingIds[0]
+            : (plan?.showingId ?? null),
+        scopedPurchasePlan: scopedPlan,
+        allowPartialQuantity: scopedPlan?.allowPartialQuantity ?? false,
+      };
+
+      let activeTargetKey: string | null = null;
+
+      if (!isOnQuestionForm && !isOnPayment) {
+        // Discover catalog for the preferred showing (or allowed showings only)
+        const catalog = await adapter.discoverTicketCatalog(
+          preferences.preferredShowingId,
+          scopedShowingIds && scopedShowingIds.length > 0 ? scopedShowingIds : null
         );
 
-        if (candidatePool.length === 0) {
-          // Full cycle exhausted for all valid candidates; reset cycle and wait for stock
-          triedCandidateKeysInCycle.clear();
-          candidatePool = scopeResult.validCandidates;
-          if (stateMachine.state !== PurchaseState.WAITING_FOR_STOCK) {
-            try {
-              stateMachine.transition({ type: 'WAITING_FOR_STOCK' });
-            } catch {
-              // ignore
+        // If scopedPlan is configured, use domain filterByScope and pickTarget
+        if (scopedPlan && scopedPlan.targets.length > 0) {
+          const scopeResult = filterByScope(catalog, scopedPlan);
+          if (scopeResult.validCandidates.length === 0) {
+            if (stateMachine.state === PurchaseState.MONITORING) {
+              try {
+                stateMachine.transition({ type: 'WAITING_FOR_STOCK' });
+              } catch {
+                // ignore
+              }
             }
+            const now = Date.now();
+            if (now - lastWaitingLogTimestamp > 30000) {
+              lastWaitingLogTimestamp = now;
+              logger.info('No whitelisted tickets currently available. Continuing monitoring...', {
+                inScopeCount: scopeResult.inScopeCandidates.length,
+                rejectedReasons: scopeResult.rejectedCandidates.map(
+                  (r) => `${r.ticketName}: ${r.reason}`
+                ),
+              });
+            }
+            return;
           }
-          return;
-        }
 
-        const chosenTarget = pickTarget(candidatePool, scopedPlan);
-        if (!chosenTarget) {
-          triedCandidateKeysInCycle.clear();
-          return;
-        }
-
-        activeTargetKey = `${chosenTarget.showingId}_${chosenTarget.ticketId}`;
-
-        // Attempt counting (B3): pure discovery does NOT increment attempts.
-        // Increment attemptsCount only when starting booking journey execution.
-        const pState = await storage.getPersistentState();
-        const newAttempts = (pState?.attemptsCount ?? 0) + 1;
-        await storage.savePersistentState({
-          attemptsCount: newAttempts,
-          lastTarget: {
-            showingId: chosenTarget.showingId,
-            ticketTypeId: chosenTarget.ticketId,
-            ticketName: chosenTarget.ticketName,
-          },
-          currentPhase: 'SELECTING',
-        });
-
-        if (
-          scopedPlan.persistence?.maxAttempts &&
-          newAttempts > scopedPlan.persistence.maxAttempts
-        ) {
-          await stopMonitoringWithLimitReason(
-            `Max attempts limit reached (${newAttempts}/${scopedPlan.persistence.maxAttempts})`
-          );
-          return;
-        }
-
-        preferences.preferredShowingId = chosenTarget.showingId;
-        preferences.categoryPriority = [chosenTarget.ticketName, chosenTarget.ticketId];
-      } else {
-        const relevantShowings = preferences.preferredShowingId
-          ? catalog.showings.filter((s) => s.id === preferences.preferredShowingId)
-          : catalog.showings;
-        const allTickets = (
-          relevantShowings.length > 0 ? relevantShowings : catalog.showings
-        ).flatMap((s) => s.ticketTypes);
-        const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
-
-        if (availableTickets.length === 0) {
-          logger.info('No tickets currently available. Continuing monitoring...');
-          return;
-        }
-
-        // Check if any available ticket matches user priority or fallback
-        const hasMatch =
-          preferences.allowFallback ||
-          availableTickets.some((t) =>
-            priorities.some(
-              (p) =>
-                t.name.toLowerCase().includes(p.toLowerCase()) ||
-                p.toLowerCase().includes(t.name.toLowerCase())
-            )
+          // Target cycling (B3): Filter out candidates already tried in current cycle
+          let candidatePool = scopeResult.validCandidates.filter(
+            (c) => !triedCandidateKeysInCycle.has(`${c.showingId}_${c.ticketId}`)
           );
 
-        if (!hasMatch) {
-          logger.info('Available tickets do not match priority rules. Continuing monitoring...');
-          return;
+          if (candidatePool.length === 0) {
+            // Full cycle exhausted for all valid candidates; reset cycle and wait for stock
+            triedCandidateKeysInCycle.clear();
+            candidatePool = scopeResult.validCandidates;
+            if (stateMachine.state !== PurchaseState.WAITING_FOR_STOCK) {
+              try {
+                stateMachine.transition({ type: 'WAITING_FOR_STOCK' });
+              } catch {
+                // ignore
+              }
+            }
+            return;
+          }
+
+          const chosenTarget = pickTarget(candidatePool, scopedPlan);
+          if (!chosenTarget) {
+            triedCandidateKeysInCycle.clear();
+            return;
+          }
+
+          activeTargetKey = `${chosenTarget.showingId}_${chosenTarget.ticketId}`;
+
+          // Attempt counting (B3): pure discovery does NOT increment attempts.
+          // Increment attemptsCount only when starting booking journey execution.
+          const pState = await storage.getPersistentState();
+          const newAttempts = (pState?.attemptsCount ?? 0) + 1;
+          await storage.savePersistentState({
+            attemptsCount: newAttempts,
+            lastTarget: {
+              showingId: chosenTarget.showingId,
+              ticketTypeId: chosenTarget.ticketId,
+              ticketName: chosenTarget.ticketName,
+            },
+            currentPhase: 'SELECTING',
+          });
+
+          if (
+            scopedPlan.persistence?.maxAttempts &&
+            newAttempts > scopedPlan.persistence.maxAttempts
+          ) {
+            await stopMonitoringWithLimitReason(
+              `Max attempts limit reached (${newAttempts}/${scopedPlan.persistence.maxAttempts})`
+            );
+            return;
+          }
+
+          preferences.preferredShowingId = chosenTarget.showingId;
+          preferences.categoryPriority = [chosenTarget.ticketName, chosenTarget.ticketId];
+        } else {
+          const relevantShowings = preferences.preferredShowingId
+            ? catalog.showings.filter((s) => s.id === preferences.preferredShowingId)
+            : catalog.showings;
+          const allTickets = (
+            relevantShowings.length > 0 ? relevantShowings : catalog.showings
+          ).flatMap((s) => s.ticketTypes);
+          const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
+
+          if (availableTickets.length === 0) {
+            logger.info('No tickets currently available. Continuing monitoring...');
+            return;
+          }
+
+          // Check if any available ticket matches user priority or fallback
+          const hasMatch =
+            preferences.allowFallback ||
+            availableTickets.some((t) =>
+              priorities.some(
+                (p) =>
+                  t.name.toLowerCase().includes(p.toLowerCase()) ||
+                  p.toLowerCase().includes(t.name.toLowerCase())
+              )
+            );
+
+          if (!hasMatch) {
+            logger.info('Available tickets do not match priority rules. Continuing monitoring...');
+            return;
+          }
         }
       }
-    }
 
-    logger.info('Matching ticket detected! Starting booking journey execution...', {
-      priorities: preferences.categoryPriority,
-      quantity: preferences.quantity,
-    });
-
-    const tracker = new LatencyTracker(stateMachine.attemptId || `attempt_${Date.now()}`, logger);
-    tracker.recordT0(Date.now(), true);
-
-    // Remember where the step STARTED. Ticketbox is a SPA: the URL can already have changed by the
-    // time execute() returns, and waiting for a change "from the new URL" would never end.
-    const urlBeforeStep = typeof window !== 'undefined' ? window.location.href : '';
-
-    const result = await journeyUseCase.execute(preferences, tracker);
-
-    logger.info('Booking journey executed', {
-      success: result.success,
-      finalState: result.finalState,
-      requiresUserAction: result.requiresUserAction,
-    });
-
-    if (!result.success) {
-      if (activeTargetKey) {
-        triedCandidateKeysInCycle.add(activeTargetKey);
-        try {
-          stateMachine.transition({ type: 'RETRY_TARGET' });
-        } catch {
-          // ignore
-        }
-        await storage.savePersistentState({
-          currentPhase: 'RETRYING_TARGET',
-        });
-      }
-    } else {
-      triedCandidateKeysInCycle.clear();
-      await storage.savePersistentState({
-        currentPhase: result.finalState,
+      logger.info('Matching ticket detected! Starting booking journey execution...', {
+        priorities: preferences.categoryPriority,
+        quantity: preferences.quantity,
       });
-    }
 
-    // When tickets or seats are selected and navigation is pending, yield and await navigation
-    if (
-      result.success &&
-      (result.finalState === PurchaseState.SEATS_SELECTED ||
-        result.finalState === PurchaseState.TICKET_SELECTED) &&
-      !result.requiresUserAction
-    ) {
-      const urlAfterStep = typeof window !== 'undefined' ? window.location.href : '';
-      if (urlAfterStep !== urlBeforeStep) {
-        logger.info('Page already navigated during the step; no navigation wait needed', {
-          from: urlBeforeStep,
-          to: urlAfterStep,
-        });
-      } else {
-        awaitingNavigationFromUrl = urlAfterStep || null;
-        awaitingNavigationTimestamp = Date.now();
-        logger.info('Step executed and submitted. Waiting for page navigation to next step...', {
-          finalState: result.finalState,
-          currentUrl: awaitingNavigationFromUrl,
-        });
-      }
-    }
+      const tracker = new LatencyTracker(stateMachine.attemptId || `attempt_${Date.now()}`, logger);
+      tracker.recordT0(Date.now(), true);
 
-    // When payment gate, consent, or terminal state is reached requiring user action: pause monitoring
-    if (
-      (result.finalState === PurchaseState.PAYMENT_GATE ||
-        result.finalState === PurchaseState.CONSENT_REQUIRED ||
-        result.finalState === PurchaseState.FILLING_ATTENDEE_FORM ||
-        result.finalState === PurchaseState.HELD ||
-        result.finalState === PurchaseState.CONFIRMED ||
-        result.finalState === PurchaseState.STOPPED) &&
-      result.requiresUserAction
-    ) {
-      logger.info(`Journey reached target state ${result.finalState}. Halting monitoring loop.`);
-      isMonitoringActive = false;
-      if (monitoringTimeout) {
-        window.clearTimeout(monitoringTimeout);
-        monitoringTimeout = null;
-      }
-    } else if (result.finalState === PurchaseState.FAILED) {
-      const currentUrlNow = typeof window !== 'undefined' ? window.location.href : '';
-      const isOnActiveBooking =
-        currentUrlNow.includes('/select-ticket') ||
-        currentUrlNow.includes('/booking') ||
-        currentUrlNow.includes('/question-form');
+      // Remember where the step STARTED. Ticketbox is a SPA: the URL can already have changed by the
+      // time execute() returns, and waiting for a change "from the new URL" would never end.
+      const urlBeforeStep = typeof window !== 'undefined' ? window.location.href : '';
 
-      if (isOnActiveBooking) {
-        logger.info(
-          'Journey encountered failure on active booking page. Backing off 1.5s and maintaining monitoring to allow auto-recovery/reselection.',
-          { url: currentUrlNow }
-        );
-        isMonitoringActive = true;
-        try {
-          if (stateMachine.state === PurchaseState.FAILED || stateMachine.state === PurchaseState.STOPPED) {
-            stateMachine.transition({ type: 'RESET_REQUESTED' });
-            stateMachine.transition({ type: 'ARM' });
-            stateMachine.transition({ type: 'MONITORING_STARTED' });
+      const result = await journeyUseCase.execute(preferences, tracker);
+
+      logger.info('Booking journey executed', {
+        success: result.success,
+        finalState: result.finalState,
+        requiresUserAction: result.requiresUserAction,
+      });
+
+      if (!result.success) {
+        if (activeTargetKey) {
+          triedCandidateKeysInCycle.add(activeTargetKey);
+          try {
+            stateMachine.transition({ type: 'RETRY_TARGET' });
+          } catch {
+            // ignore
           }
-        } catch {
-          // ignore
+          await storage.savePersistentState({
+            currentPhase: 'RETRYING_TARGET',
+          });
         }
-        scheduleNextPoll(1500);
-        scheduleDiscoveryScan(1500);
       } else {
-        logger.info(
-          'Journey execution failed after retries. Halting monitoring loop to prevent retry storm.'
-        );
+        triedCandidateKeysInCycle.clear();
+        await storage.savePersistentState({
+          currentPhase: result.finalState,
+        });
+      }
+
+      // When tickets or seats are selected and navigation is pending, yield and await navigation
+      if (
+        result.success &&
+        (result.finalState === PurchaseState.SEATS_SELECTED ||
+          result.finalState === PurchaseState.TICKET_SELECTED) &&
+        !result.requiresUserAction
+      ) {
+        const urlAfterStep = typeof window !== 'undefined' ? window.location.href : '';
+        if (urlAfterStep !== urlBeforeStep) {
+          logger.info('Page already navigated during the step; no navigation wait needed', {
+            from: urlBeforeStep,
+            to: urlAfterStep,
+          });
+        } else {
+          awaitingNavigationFromUrl = urlAfterStep || null;
+          awaitingNavigationTimestamp = Date.now();
+          logger.info('Step executed and submitted. Waiting for page navigation to next step...', {
+            finalState: result.finalState,
+            currentUrl: awaitingNavigationFromUrl,
+          });
+        }
+      }
+
+      // When payment gate, consent, or terminal state is reached requiring user action: pause monitoring
+      if (
+        (result.finalState === PurchaseState.PAYMENT_GATE ||
+          result.finalState === PurchaseState.CONSENT_REQUIRED ||
+          result.finalState === PurchaseState.FILLING_ATTENDEE_FORM ||
+          result.finalState === PurchaseState.HELD ||
+          result.finalState === PurchaseState.CONFIRMED ||
+          result.finalState === PurchaseState.STOPPED) &&
+        result.requiresUserAction
+      ) {
+        logger.info(`Journey reached target state ${result.finalState}. Halting monitoring loop.`);
         isMonitoringActive = false;
         if (monitoringTimeout) {
           window.clearTimeout(monitoringTimeout);
           monitoringTimeout = null;
         }
+      } else if (result.finalState === PurchaseState.FAILED) {
+        const currentUrlNow = typeof window !== 'undefined' ? window.location.href : '';
+        const isOnActiveBooking =
+          currentUrlNow.includes('/select-ticket') ||
+          currentUrlNow.includes('/booking') ||
+          currentUrlNow.includes('/question-form');
+
+        if (isOnActiveBooking) {
+          logger.info(
+            'Journey encountered failure on active booking page. Backing off 1.5s and maintaining monitoring to allow auto-recovery/reselection.',
+            { url: currentUrlNow }
+          );
+          isMonitoringActive = true;
+          try {
+            if (
+              stateMachine.state === PurchaseState.FAILED ||
+              stateMachine.state === PurchaseState.STOPPED
+            ) {
+              stateMachine.transition({ type: 'RESET_REQUESTED' });
+              stateMachine.transition({ type: 'ARM' });
+              stateMachine.transition({ type: 'MONITORING_STARTED' });
+            }
+          } catch {
+            // ignore
+          }
+          scheduleNextPoll(1500);
+          scheduleDiscoveryScan(1500);
+        } else {
+          logger.info(
+            'Journey execution failed after retries. Halting monitoring loop to prevent retry storm.'
+          );
+          isMonitoringActive = false;
+          if (monitoringTimeout) {
+            window.clearTimeout(monitoringTimeout);
+            monitoringTimeout = null;
+          }
+        }
       }
-    }
     } catch (err: unknown) {
       const msg = String(err);
       if (msg.includes('Extension context invalidated')) {
@@ -1287,9 +1312,12 @@ async function checkRehydration(): Promise<void> {
         });
         scheduledArmTargetMs = schedMs;
         if (scheduledArmTimer) window.clearTimeout(scheduledArmTimer);
-        scheduledArmTimer = window.setTimeout(async () => {
-          await triggerScheduledArmInContent();
-        }, Math.max(0, schedMs - Date.now()));
+        scheduledArmTimer = window.setTimeout(
+          async () => {
+            await triggerScheduledArmInContent();
+          },
+          Math.max(0, schedMs - Date.now())
+        );
         return;
       } else {
         logger.info('Scheduled ARM time has already passed; activating immediately', {
@@ -1530,9 +1558,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
         message.state === PurchaseState.STOPPED_NO_TARGET
       ) {
         const stopReason =
-          message.type === 'STATE_CHANGED'
-            ? message.context?.failureMessage
-            : undefined;
+          message.type === 'STATE_CHANGED' ? message.context?.failureMessage : undefined;
         if (
           stopReason === 'Re-arm reset' ||
           stopReason === 'Start monitoring reset' ||
@@ -1563,9 +1589,12 @@ messageBus.subscribe((message: ExtensionMessage) => {
       ) {
         userExplicitlyStopped = false;
         if (!isMonitoringActive) {
-          logger.info('STATE_CHANGED to active monitoring state; activating content script polling', {
-            state: message.state,
-          });
+          logger.info(
+            'STATE_CHANGED to active monitoring state; activating content script polling',
+            {
+              state: message.state,
+            }
+          );
           isMonitoringActive = true;
           scheduleNextPoll(1000);
         }
@@ -1667,4 +1696,3 @@ if (typeof window !== 'undefined') {
     }
   }, 1000);
 }
-

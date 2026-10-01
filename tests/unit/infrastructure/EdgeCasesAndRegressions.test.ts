@@ -570,7 +570,7 @@ describe('Multi-resolution click ratio correctness', () => {
    */
 
   it('should compute correct ratio for 2:1 resolution scale', () => {
-    const rectWidth = 600;  // CSS display width
+    const rectWidth = 600; // CSS display width
     const stageWidth = 1200; // Konva canvas internal width
     const ratioX = rectWidth / stageWidth;
     expect(ratioX).toBe(0.5);
@@ -854,9 +854,7 @@ describe('AdjacentSeatStrategy — adjacent pair selection', () => {
 
     // Verify seats are sorted by x — adjacent strategy picks smallest x gap
     const sorted = [...seats].sort((a, b) => a.x - b.x);
-    const gaps = sorted
-      .slice(0, -1)
-      .map((s, i) => Math.abs((sorted[i + 1]?.x ?? 0) - s.x));
+    const gaps = sorted.slice(0, -1).map((s, i) => Math.abs((sorted[i + 1]?.x ?? 0) - s.x));
 
     // All gaps should be 10 (uniformly spaced)
     expect(gaps.every((g) => g <= 15)).toBe(true);
@@ -949,8 +947,12 @@ describe('SPA URL change reactivation guard', () => {
   it('should detect /select-ticket URL pattern', () => {
     const isSelectTicketUrl = (url: string) => url.includes('/select-ticket');
 
-    expect(isSelectTicketUrl('https://ticketbox.vn/events/123/bookings/456/select-ticket')).toBe(true);
-    expect(isSelectTicketUrl('https://ticketbox.vn/events/123/bookings/456/select-ticket?s=1')).toBe(true);
+    expect(isSelectTicketUrl('https://ticketbox.vn/events/123/bookings/456/select-ticket')).toBe(
+      true
+    );
+    expect(
+      isSelectTicketUrl('https://ticketbox.vn/events/123/bookings/456/select-ticket?s=1')
+    ).toBe(true);
     expect(isSelectTicketUrl('https://ticketbox.vn/events/123')).toBe(false);
     expect(isSelectTicketUrl('https://ticketbox.vn/')).toBe(false);
   });
@@ -959,8 +961,12 @@ describe('SPA URL change reactivation guard', () => {
     const isActiveBookingPage = (url: string) =>
       url.includes('/bookings/') || url.includes('/select-ticket');
 
-    expect(isActiveBookingPage('https://ticketbox.vn/events/26635/bookings/9920780779135/select-ticket')).toBe(true);
-    expect(isActiveBookingPage('https://ticketbox.vn/events/26635/bookings/9920780779135')).toBe(true);
+    expect(
+      isActiveBookingPage('https://ticketbox.vn/events/26635/bookings/9920780779135/select-ticket')
+    ).toBe(true);
+    expect(isActiveBookingPage('https://ticketbox.vn/events/26635/bookings/9920780779135')).toBe(
+      true
+    );
     expect(isActiveBookingPage('https://ticketbox.vn/events/26635')).toBe(false);
   });
 
@@ -987,11 +993,12 @@ describe('SPA URL change reactivation guard', () => {
   it('should extract showingId from select-ticket URL', () => {
     const extractShowingId = (url: string): string | null => {
       const m = url.match(/\/bookings\/([^/]+)\/select-ticket/);
-      return m ? m[1] ?? null : null;
+      return m ? (m[1] ?? null) : null;
     };
 
-    expect(extractShowingId('https://ticketbox.vn/events/26635/bookings/9920780779135/select-ticket'))
-      .toBe('9920780779135');
+    expect(
+      extractShowingId('https://ticketbox.vn/events/26635/bookings/9920780779135/select-ticket')
+    ).toBe('9920780779135');
     expect(extractShowingId('https://ticketbox.vn/events/26635')).toBeNull();
   });
 });
@@ -1084,13 +1091,9 @@ describe('JourneyUseCaseConfig — maxRetries injectable for test control', () =
     const stateMachine = new PurchaseStateMachine(PurchaseState.READY);
     const eventBus = new ChromeMessageBus(logger);
     const adapter = new TicketboxJourneyAdapter(logger);
-    const useCase = new ExecuteBookingJourneyUseCase(
-      stateMachine,
-      adapter,
-      eventBus,
-      logger,
-      { maxRetries: 2 }
-    );
+    const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, logger, {
+      maxRetries: 2,
+    });
 
     const useCasePrivate = useCase as unknown as Record<string, unknown>;
     expect(useCasePrivate['MAX_RETRIES']).toBe(2);
@@ -1103,13 +1106,9 @@ describe('JourneyUseCaseConfig — maxRetries injectable for test control', () =
       const eventBus = new ChromeMessageBus(logger);
       const root = parseHtmlToDOMElementLike('<div></div>');
       const adapter = new TicketboxJourneyAdapter(logger, root);
-      const useCase = new ExecuteBookingJourneyUseCase(
-        stateMachine,
-        adapter,
-        eventBus,
-        logger,
-        { maxRetries: 2 }
-      );
+      const useCase = new ExecuteBookingJourneyUseCase(stateMachine, adapter, eventBus, logger, {
+        maxRetries: 2,
+      });
 
       const promise = useCase.execute({
         categoryPriority: ['Any Ticket'],

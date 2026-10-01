@@ -133,12 +133,18 @@ export class ChromeStorageRepository implements StorageRepository {
   public async savePersistentState(state: Partial<PersistentExecutionState>): Promise<void> {
     const current = await this.getPersistentState();
     const merged: PersistentExecutionState = {
-      startedAt: state.startedAt !== undefined ? state.startedAt : (current?.startedAt ?? Date.now()),
-      attemptsCount: state.attemptsCount !== undefined ? state.attemptsCount : (current?.attemptsCount ?? 0),
+      startedAt:
+        state.startedAt !== undefined ? state.startedAt : (current?.startedAt ?? Date.now()),
+      attemptsCount:
+        state.attemptsCount !== undefined ? state.attemptsCount : (current?.attemptsCount ?? 0),
       lastTarget: 'lastTarget' in state ? state.lastTarget : current?.lastTarget,
-      currentPhase: state.currentPhase !== undefined ? state.currentPhase : (current?.currentPhase ?? 'INIT'),
+      currentPhase:
+        state.currentPhase !== undefined ? state.currentPhase : (current?.currentPhase ?? 'INIT'),
       stopReason: 'stopReason' in state ? state.stopReason : current?.stopReason,
-      tabHiddenWarning: state.tabHiddenWarning !== undefined ? state.tabHiddenWarning : (current?.tabHiddenWarning ?? false),
+      tabHiddenWarning:
+        state.tabHiddenWarning !== undefined
+          ? state.tabHiddenWarning
+          : (current?.tabHiddenWarning ?? false),
     };
     const safeState = this.sanitizeData(merged);
     if (this.isChromeStorageAvailable()) {
@@ -167,11 +173,7 @@ export class ChromeStorageRepository implements StorageRepository {
    * Profiles are intentionally preserved.
    */
   public async clearConfiguration(): Promise<void> {
-    const keysToRemove = [
-      STORAGE_KEYS.CONFIG,
-      STORAGE_KEYS.STATE,
-      STORAGE_KEYS.PERSISTENT_STATE,
-    ];
+    const keysToRemove = [STORAGE_KEYS.CONFIG, STORAGE_KEYS.STATE, STORAGE_KEYS.PERSISTENT_STATE];
     if (this.isChromeStorageAvailable()) {
       return new Promise((resolve) => {
         chrome.storage.local.remove(keysToRemove, () => resolve());

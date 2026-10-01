@@ -235,7 +235,8 @@ function triggerClick(el: HTMLElement): void {
       (k) => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$')
     );
     if (reactKey) {
-      const props = (el as unknown as Record<string, unknown>)[reactKey] as Record<string, unknown> | undefined;
+      const props = (el as unknown as Record<string, unknown>)[reactKey] as
+        Record<string, unknown> | undefined;
       if (typeof props?.onClick === 'function') {
         props.onClick({
           type: 'click',
@@ -277,9 +278,7 @@ function triggerClick(el: HTMLElement): void {
  */
 function findAreaModal(): HTMLElement | null {
   if (typeof document === 'undefined') return null;
-  const modals = document.querySelectorAll(
-    '.ant-modal, [role="dialog"], [class*="modal"]'
-  );
+  const modals = document.querySelectorAll('.ant-modal, [role="dialog"], [class*="modal"]');
   for (const m of Array.from(modals)) {
     const el = m as HTMLElement;
     if (el.offsetParent !== null || window.getComputedStyle(el).display !== 'none') {
@@ -339,7 +338,8 @@ function findModalStepperButton(modal: HTMLElement, type: 'plus' | 'minus'): HTM
   for (const btn of buttons) {
     const text = (btn.textContent || '').trim();
     const aria = btn.getAttribute('aria-label') || '';
-    const cls = btn.className && typeof btn.className === 'string' ? btn.className.toLowerCase() : '';
+    const cls =
+      btn.className && typeof btn.className === 'string' ? btn.className.toLowerCase() : '';
     if (type === 'plus') {
       if (
         text === '+' ||
@@ -372,13 +372,14 @@ function findModalStepperButton(modal: HTMLElement, type: 'plus' | 'minus'): HTM
  * Finds continue button inside a modal.
  */
 function findModalContinueButton(modal: HTMLElement): HTMLElement | null {
-  const candidates = Array.from(
-    modal.querySelectorAll('button, [role="button"], a.ant-btn')
-  );
+  const candidates = Array.from(modal.querySelectorAll('button, [role="button"], a.ant-btn'));
   for (const c of candidates) {
     const text = (c.textContent || '').toLowerCase().trim();
     if (
-      (text.includes('tiếp tục') || text.includes('xác nhận') || text.includes('continue') || text.includes('đồng ý')) &&
+      (text.includes('tiếp tục') ||
+        text.includes('xác nhận') ||
+        text.includes('continue') ||
+        text.includes('đồng ý')) &&
       !c.hasAttribute('disabled') &&
       !c.classList.contains('ant-btn-disabled') &&
       !c.classList.contains('disabled')
@@ -452,9 +453,10 @@ async function handleConfirmAreaModal(
 /**
  * Handles CLICK_ELEMENT from content script in MAIN world.
  */
-function handleClickElement(
-  payload?: BridgeRequestPayload
-): { success: boolean; message?: string } {
+function handleClickElement(payload?: BridgeRequestPayload): {
+  success: boolean;
+  message?: string;
+} {
   if (typeof document === 'undefined') return { success: false, message: 'No document' };
   let el: HTMLElement | null = null;
   if (payload?.selector) {
@@ -490,7 +492,11 @@ async function handleSelectArea(
   const coords = payload?.coords;
 
   if (!areaId && !areaName && !ticketTypeId) {
-    return { success: false, transitioned: false, message: 'Missing areaId, areaName, or ticketTypeId' };
+    return {
+      success: false,
+      transitioned: false,
+      message: 'Missing areaId, areaName, or ticketTypeId',
+    };
   }
 
   // If already in section view or area modal is already open, view transition is already fulfilled
@@ -540,7 +546,9 @@ async function handleSelectArea(
   if (ticketTypeId) {
     const safeTtId = String(ticketTypeId).trim();
     for (const g of groups) {
-      const gTtId = g.attrs ? g.attrs['ticketTypeId'] ?? g.attrs['data-ticket-type-id'] ?? g.attrs['data-ticket-id'] : undefined;
+      const gTtId = g.attrs
+        ? (g.attrs['ticketTypeId'] ?? g.attrs['data-ticket-type-id'] ?? g.attrs['data-ticket-id'])
+        : undefined;
       const matched = String(gTtId ?? '').trim();
       if (matched && matched === safeTtId) {
         targetGroup = g;
@@ -553,7 +561,9 @@ async function handleSelectArea(
   if (!targetGroup && areaId) {
     const safeId = String(areaId).trim();
     for (const g of groups) {
-      const gSectionId = g.attrs ? g.attrs['data-section-id'] ?? g.attrs['sectionId'] ?? g.attrs['id'] : undefined;
+      const gSectionId = g.attrs
+        ? (g.attrs['data-section-id'] ?? g.attrs['sectionId'] ?? g.attrs['id'])
+        : undefined;
       const directAttr = typeof g.getAttr === 'function' ? g.getAttr('data-section-id') : undefined;
       const matched = String(gSectionId ?? directAttr ?? '').trim();
       if (matched && (matched === safeId || matched.includes(safeId) || safeId.includes(matched))) {
@@ -578,8 +588,10 @@ async function handleSelectArea(
         gId === safeNameSpaced ||
         gId === safeNameCompact ||
         (safeName.length > 3 && (gName.includes(safeName) || safeName.includes(gName))) ||
-        (safeNameClean.length > 3 && (gName.includes(safeNameClean) || safeNameClean.includes(gName))) ||
-        (safeNameSpaced.length > 3 && (gName.includes(safeNameSpaced) || safeNameSpaced.includes(gName)))
+        (safeNameClean.length > 3 &&
+          (gName.includes(safeNameClean) || safeNameClean.includes(gName))) ||
+        (safeNameSpaced.length > 3 &&
+          (gName.includes(safeNameSpaced) || safeNameSpaced.includes(gName)))
       ) {
         targetGroup = g;
         break;
@@ -588,7 +600,10 @@ async function handleSelectArea(
       if (typeof g.getChildren === 'function') {
         const children = g.getChildren();
         const hasMatchingText = children.some((c) => {
-          const txt = typeof c.text === 'function' ? c.text().toLowerCase() : String(c.attrs?.text ?? '').toLowerCase();
+          const txt =
+            typeof c.text === 'function'
+              ? c.text().toLowerCase()
+              : String(c.attrs?.text ?? '').toLowerCase();
           const cleanTxt = txt.replace(/[\s_-]+/g, ' ');
           const compactTxt = txt.replace(/[\s_-]+/g, '');
           return (
@@ -635,7 +650,11 @@ async function handleSelectArea(
       const clientX = cRect.left + cx * scaleX;
       const clientY = cRect.top + cy * scaleY;
       dispatchNativeEvents(stage, clientX, clientY);
-      return { success: true, transitioned: false, message: 'Dispatched simulated coordinate click to canvas' };
+      return {
+        success: true,
+        transitioned: false,
+        message: 'Dispatched simulated coordinate click to canvas',
+      };
     }
   }
 
@@ -735,7 +754,6 @@ async function waitForSignatureOrDomChange(
   return false;
 }
 
-
 /** Checks if the DOM footer, checkout bar, or summary reflects seat selection. */
 function hasDomSelectionIndicator(label?: string): boolean {
   if (typeof document === 'undefined') return false;
@@ -803,7 +821,9 @@ function findSeatCandidates(
   for (const circle of circles) {
     const attrs = circle.attrs || {};
     const cId = norm(attrs.id ?? (typeof circle.id === 'function' ? circle.id() : ''));
-    const cSeatId = norm(attrs.seatId ?? attrs['data-seat-id'] ?? attrs['data-id'] ?? attrs.seat_id);
+    const cSeatId = norm(
+      attrs.seatId ?? attrs['data-seat-id'] ?? attrs['data-id'] ?? attrs.seat_id
+    );
     const cName = norm(attrs.name ?? (typeof circle.name === 'function' ? circle.name() : ''));
     const cLabel = norm(
       attrs.label ??
@@ -821,9 +841,10 @@ function findSeatCandidates(
       ) || 0;
 
     // Check data sub-object if present
-    const dataObj = (attrs.data && typeof attrs.data === 'object'
-      ? attrs.data
-      : null) as Record<string, unknown> | null;
+    const dataObj = (attrs.data && typeof attrs.data === 'object' ? attrs.data : null) as Record<
+      string,
+      unknown
+    > | null;
     const dId = dataObj ? norm(dataObj.id ?? dataObj.seatId ?? dataObj.seat_id) : '';
     const dLabel = dataObj
       ? norm(dataObj.label ?? dataObj.name ?? dataObj.seatCode ?? dataObj.code)
@@ -1009,17 +1030,9 @@ async function clickSeatNode(
   const ratioY = stageH > 0 ? rect.height / stageH : 1;
 
   const nodeAbsX =
-    abs && typeof abs.x === 'number'
-      ? abs.x
-      : typeof node.x === 'function'
-        ? node.x()
-        : 0;
+    abs && typeof abs.x === 'number' ? abs.x : typeof node.x === 'function' ? node.x() : 0;
   const nodeAbsY =
-    abs && typeof abs.y === 'number'
-      ? abs.y
-      : typeof node.y === 'function'
-        ? node.y()
-        : 0;
+    abs && typeof abs.y === 'number' ? abs.y : typeof node.y === 'function' ? node.y() : 0;
 
   const clientX = rect.left + nodeAbsX * ratioX;
   const clientY = rect.top + nodeAbsY * ratioY;
@@ -1199,8 +1212,7 @@ async function handleDeselectSeats(payload?: BridgeRequestPayload): Promise<{
 
     for (const tag of tags) {
       const text = (tag.textContent || '').toUpperCase().trim();
-      const isMatch =
-        targetLabels.length === 0 || targetLabels.some((l) => text.includes(l));
+      const isMatch = targetLabels.length === 0 || targetLabels.some((l) => text.includes(l));
       if (isMatch) {
         const closeIcon = tag.querySelector(
           '.ant-tag-close-icon, [aria-label="close"], [class*="close"], [class*="remove"], [class*="delete"], svg'

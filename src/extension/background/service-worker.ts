@@ -214,7 +214,11 @@ async function checkHeartbeatLimits(): Promise<void> {
     const elapsedMinutes = (Date.now() - startedAtMs) / 60000;
 
     // Check duration ceiling (0 or undefined = unlimited / no limit)
-    if (policy.maxDurationMinutes && policy.maxDurationMinutes > 0 && elapsedMinutes >= policy.maxDurationMinutes) {
+    if (
+      policy.maxDurationMinutes &&
+      policy.maxDurationMinutes > 0 &&
+      elapsedMinutes >= policy.maxDurationMinutes
+    ) {
       const reason = `PERSISTENCE_LIMIT_EXCEEDED: Maximum duration reached (${policy.maxDurationMinutes}m)`;
       logger.warn(reason);
       if (stateMachine.state !== PurchaseState.STOPPED_LIMIT_REACHED) {
@@ -244,7 +248,11 @@ async function checkHeartbeatLimits(): Promise<void> {
     }
 
     // Check max attempts limit (0 or undefined = unlimited / no limit)
-    if (policy.maxAttempts && policy.maxAttempts > 0 && persistentState.attemptsCount >= policy.maxAttempts) {
+    if (
+      policy.maxAttempts &&
+      policy.maxAttempts > 0 &&
+      persistentState.attemptsCount >= policy.maxAttempts
+    ) {
       const reason = `PERSISTENCE_MAX_ATTEMPTS_REACHED: Maximum attempts reached (${policy.maxAttempts})`;
       logger.warn(reason);
       if (stateMachine.state !== PurchaseState.STOPPED_LIMIT_REACHED) {
@@ -262,14 +270,15 @@ async function checkHeartbeatLimits(): Promise<void> {
   }
 }
 
-
 async function checkScheduledArmWakeup(): Promise<void> {
   try {
     const config = await storage.getConfiguration();
     if (config?.scheduledArmAt) {
       const schedMs = new Date(config.scheduledArmAt).getTime();
       if (Date.now() >= schedMs) {
-        logger.info('Heartbeat detected scheduled ARM time has arrived; executing scheduled ARM now');
+        logger.info(
+          'Heartbeat detected scheduled ARM time has arrived; executing scheduled ARM now'
+        );
         await executeScheduledArm();
       }
     }
@@ -337,10 +346,7 @@ async function executeScheduledArm(): Promise<void> {
     // Advance state machine to READY if needed
     await advanceToReady();
 
-    if (
-      stateMachine.state === PurchaseState.READY ||
-      stateMachine.state === PurchaseState.IDLE
-    ) {
+    if (stateMachine.state === PurchaseState.READY || stateMachine.state === PurchaseState.IDLE) {
       await armUseCase.execute({
         eventUrl: config.targetEventUrl,
         categoryPriority: config.preferences?.categoryPriority ?? [],
@@ -372,19 +378,31 @@ async function executeScheduledArm(): Promise<void> {
           if (targetTab.windowId) {
             chrome.windows.update(targetTab.windowId, { focused: true });
           }
-          chrome.tabs.sendMessage(targetTab.id, {
-            type: 'START_MONITORING',
-            timestamp: new Date().toISOString(),
-            targetEventUrl: config.targetEventUrl,
-          }, () => {
-            if (chrome.runtime.lastError) { /* ignore */ }
-          });
-          chrome.tabs.sendMessage(targetTab.id, {
-            type: 'REQUEST_DISCOVERY_SCAN',
-            timestamp: new Date().toISOString(),
-          }, () => {
-            if (chrome.runtime.lastError) { /* ignore */ }
-          });
+          chrome.tabs.sendMessage(
+            targetTab.id,
+            {
+              type: 'START_MONITORING',
+              timestamp: new Date().toISOString(),
+              targetEventUrl: config.targetEventUrl,
+            },
+            () => {
+              if (chrome.runtime.lastError) {
+                /* ignore */
+              }
+            }
+          );
+          chrome.tabs.sendMessage(
+            targetTab.id,
+            {
+              type: 'REQUEST_DISCOVERY_SCAN',
+              timestamp: new Date().toISOString(),
+            },
+            () => {
+              if (chrome.runtime.lastError) {
+                /* ignore */
+              }
+            }
+          );
         } else if (config.targetEventUrl) {
           chrome.tabs.create({ url: config.targetEventUrl, active: true });
         }
@@ -423,7 +441,9 @@ if (typeof chrome !== 'undefined' && chrome.alarms && chrome.alarms.onAlarm) {
       if (startAt) {
         const targetMs = new Date(startAt).getTime();
         const remainingMs = Math.max(0, targetMs - Date.now());
-        logger.info(`Pre-wake timer activated. Exact setTimeout armed for remaining ${remainingMs}ms`);
+        logger.info(
+          `Pre-wake timer activated. Exact setTimeout armed for remaining ${remainingMs}ms`
+        );
         setTimeout(async () => {
           logger.info('Pre-wake exact timer fired at target timestamp');
           await executeScheduledArm();
@@ -489,7 +509,10 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
           const startMs = new Date(startAt).getTime();
           const nowMs = Date.now();
           if (startMs > nowMs) {
-            logger.info('ARM deferred — scheduling alarm for future startAt', { startAt, delayMs: startMs - nowMs });
+            logger.info('ARM deferred — scheduling alarm for future startAt', {
+              startAt,
+              delayMs: startMs - nowMs,
+            });
 
             // Save full config so alarm handler can read it later
             const existingConfig = await storage.getConfiguration();
@@ -501,7 +524,9 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
                 quantity: message.quantity,
                 allowFallback: message.allowFallback ?? true,
               },
-              ...(existingConfig?.purchasePlan ? { purchasePlan: existingConfig.purchasePlan } : {}),
+              ...(existingConfig?.purchasePlan
+                ? { purchasePlan: existingConfig.purchasePlan }
+                : {}),
               ...(message.scopedPurchasePlan
                 ? { scopedPurchasePlan: message.scopedPurchasePlan }
                 : existingConfig?.scopedPurchasePlan
@@ -607,7 +632,6 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
       }
       break;
     }
-
 
     case 'START_MONITORING': {
       if (stateMachine.state === PurchaseState.READY || stateMachine.state === PurchaseState.IDLE) {
@@ -815,7 +839,8 @@ eventBus.subscribe(async (message: ExtensionMessage) => {
       // Remove scheduledArmAt from config by omitting the key entirely
       const configForCancel = await storage.getConfiguration();
       if (configForCancel) {
-        const { scheduledArmAt: _omitScheduledArmAt, ...configWithoutScheduledArm } = configForCancel;
+        const { scheduledArmAt: _omitScheduledArmAt, ...configWithoutScheduledArm } =
+          configForCancel;
         if (configWithoutScheduledArm.scopedPurchasePlan?.persistence) {
           const { startAt: _omitStartAt, ...persistenceWithoutStartAt } =
             configWithoutScheduledArm.scopedPurchasePlan.persistence;

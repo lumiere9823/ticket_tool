@@ -1001,7 +1001,10 @@ option.opt-unknown {
   border-radius: 6px;
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 .btn-ghost:hover {
   background: rgba(239, 68, 68, 0.12);
@@ -1196,7 +1199,9 @@ option.opt-unknown {
   border-radius: 6px;
   padding: 8px 10px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 }
 
 .basic-ticket-item:hover {
@@ -1303,4 +1308,3 @@ option.opt-unknown {
   color: var(--text-muted);
   line-height: 1.4;
 }
-

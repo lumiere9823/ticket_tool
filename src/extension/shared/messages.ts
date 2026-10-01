@@ -311,5 +311,3 @@ export type ExtensionMessage =
   | ScheduledArmConfirmedMessage
   | CancelScheduledArmMessage
   | HeartbeatPingMessage;
-
-

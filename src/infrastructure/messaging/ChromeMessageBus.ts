@@ -123,7 +123,10 @@ export class ChromeMessageBus implements EventBus {
         } else {
           const msgType = (message as Record<string, unknown>)?.type;
           if (typeof msgType === 'string' && VALID_MESSAGE_TYPES.has(msgType)) {
-            this.logger?.warn('Ignored invalid message received via chrome.runtime', { type: msgType, message });
+            this.logger?.warn('Ignored invalid message received via chrome.runtime', {
+              type: msgType,
+              message,
+            });
           }
         }
       });
@@ -161,10 +164,7 @@ export class ChromeMessageBus implements EventBus {
           typeof msg['quantity'] === 'number'
         );
       case 'START_MONITORING':
-        return (
-          typeof msg['eventUrl'] === 'string' ||
-          typeof msg['targetEventUrl'] === 'string'
-        );
+        return typeof msg['eventUrl'] === 'string' || typeof msg['targetEventUrl'] === 'string';
       case 'AVAILABILITY_DETECTED':
         return (
           Array.isArray(msg['candidates']) &&
@@ -231,4 +231,3 @@ export class ChromeMessageBus implements EventBus {
     }
   }
 }
-

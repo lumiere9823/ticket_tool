@@ -57,7 +57,9 @@ export class SelectionStrategy {
         if (priorityCategory === 'any') return true;
         const cat = c.categoryName.trim().toLowerCase();
         const cid = c.id.trim().toLowerCase();
-        return cat === priorityCategory || cat.includes(priorityCategory) || cid === priorityCategory;
+        return (
+          cat === priorityCategory || cat.includes(priorityCategory) || cid === priorityCategory
+        );
       });
 
       if (matching.length > 0) {

@@ -39,7 +39,10 @@ describe('Fast Quantity Adjustment & Anti-Bot Zoom Defense', () => {
       const root = parseHtmlToDOMElementLike(html);
       const adapter = new TicketboxJourneyAdapter(logger, root);
 
-      const input = root.querySelector('.qty-input') as { value?: string; getAttribute: (k: string) => string | null };
+      const input = root.querySelector('.qty-input') as {
+        value?: string;
+        getAttribute: (k: string) => string | null;
+      };
       expect(input).toBeDefined();
 
       // Simulate React hydration: the attribute returns '0' (from initial HTML SSR markup)

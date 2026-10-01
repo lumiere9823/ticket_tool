@@ -33,7 +33,11 @@ export class TicketCandidateSelector {
 
     for (const showing of catalog.showings) {
       for (const ticket of showing.ticketTypes) {
-        const priorityIndex = this.findPriorityIndex(ticket.name, preference.categoryPriority, ticket.id);
+        const priorityIndex = this.findPriorityIndex(
+          ticket.name,
+          preference.categoryPriority,
+          ticket.id
+        );
         const rejectionReasons: string[] = [];
 
         // 0. Scope Guard (BR-S01)
@@ -50,7 +54,8 @@ export class TicketCandidateSelector {
               target.ticketTypeIds.includes(ticket.name) ||
               target.ticketTypeIds.some(
                 (id) =>
-                  (ticket.id !== null && id.toLowerCase().trim() === ticket.id.toLowerCase().trim()) ||
+                  (ticket.id !== null &&
+                    id.toLowerCase().trim() === ticket.id.toLowerCase().trim()) ||
                   id.toLowerCase().trim() === ticket.name.toLowerCase().trim()
               );
             return showingMatches && ticketMatches;

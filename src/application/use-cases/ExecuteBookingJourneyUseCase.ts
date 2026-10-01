@@ -112,9 +112,12 @@ export class ExecuteBookingJourneyUseCase {
     latencyTracker?: LatencyTracker
   ): Promise<JourneyExecutionResult> {
     if (this.isExecuting) {
-      this.logger.warn('ExecuteBookingJourneyUseCase is already executing; rejecting concurrent execution', {
-        attemptId: this.stateMachine.attemptId,
-      });
+      this.logger.warn(
+        'ExecuteBookingJourneyUseCase is already executing; rejecting concurrent execution',
+        {
+          attemptId: this.stateMachine.attemptId,
+        }
+      );
       return {
         success: false,
         finalState: this.getState(),
@@ -125,157 +128,157 @@ export class ExecuteBookingJourneyUseCase {
     this.isExecuting = true;
     try {
       this.logger.info('Starting ExecuteBookingJourneyUseCase', {
-      attemptId: this.stateMachine.attemptId,
-      preferences: {
-        priorities: preferences.categoryPriority,
-        quantity: preferences.quantity,
-        allowFallback: preferences.allowFallback,
-      },
-    });
+        attemptId: this.stateMachine.attemptId,
+        preferences: {
+          priorities: preferences.categoryPriority,
+          quantity: preferences.quantity,
+          allowFallback: preferences.allowFallback,
+        },
+      });
 
-    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
-    const isOnPaymentPage = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
-    const currentState = this.getState();
+      const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+      const isOnPaymentPage = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
+      const currentState = this.getState();
 
-    // If on actual payment page and state is PAYMENT_GATE, halt safely
-    if (isOnPaymentPage && currentState === PurchaseState.PAYMENT_GATE) {
-      this.logger.info(`Already on payment page with state ${currentState}. Halting.`);
-      return {
-        success: true,
-        finalState: currentState,
-        requiresUserAction: true,
-      };
-    }
-
-    if (currentState === PurchaseState.CONFIRMED || currentState === PurchaseState.HELD) {
-      this.logger.info(`State machine already ${currentState}. Halting.`);
-      return {
-        success: true,
-        finalState: currentState,
-        requiresUserAction: true,
-      };
-    }
-
-    // Reset if in intermediate or stale state on non-payment page
-    if (
-      currentState !== PurchaseState.READY &&
-      currentState !== PurchaseState.MONITORING &&
-      currentState !== PurchaseState.INIT
-    ) {
-      try {
-        if (currentState !== PurchaseState.STOPPED && currentState !== PurchaseState.FAILED) {
-          this.stateMachine.transition({
-            type: 'STOP_REQUESTED',
-            reason: 'Journey initial clean reset',
-          });
-        }
-        this.stateMachine.transition({ type: 'RESET_REQUESTED' });
-        this.stateMachine.transition({ type: 'ARM' });
-        this.stateMachine.transition({ type: 'MONITORING_STARTED' });
-      } catch {
-        // ignore
+      // If on actual payment page and state is PAYMENT_GATE, halt safely
+      if (isOnPaymentPage && currentState === PurchaseState.PAYMENT_GATE) {
+        this.logger.info(`Already on payment page with state ${currentState}. Halting.`);
+        return {
+          success: true,
+          finalState: currentState,
+          requiresUserAction: true,
+        };
       }
-    }
 
-    let retries = 0;
-    let lastError: unknown;
-    const retryContext: JourneyRetryContext = {
-      failedAreaIds: new Set<string>(),
-      areaCollisionCounts: new Map<string, number>(),
-      exhaustedTierNames: new Set<string>(),
-    };
+      if (currentState === PurchaseState.CONFIRMED || currentState === PurchaseState.HELD) {
+        this.logger.info(`State machine already ${currentState}. Halting.`);
+        return {
+          success: true,
+          finalState: currentState,
+          requiresUserAction: true,
+        };
+      }
 
-    while (retries <= this.MAX_RETRIES) {
-      if (retries > 0) {
-        const retryState = this.getState();
-        if (
-          retryState === PurchaseState.PAYMENT_GATE ||
-          retryState === PurchaseState.CONFIRMED ||
-          retryState === PurchaseState.HELD ||
-          retryState === PurchaseState.CONSENT_REQUIRED
-        ) {
-          this.logger.info(`Target state ${retryState} reached during journey. Halting retries.`);
-          return {
-            success: true,
-            finalState: retryState,
-            requiresUserAction: true,
-          };
-        }
-
+      // Reset if in intermediate or stale state on non-payment page
+      if (
+        currentState !== PurchaseState.READY &&
+        currentState !== PurchaseState.MONITORING &&
+        currentState !== PurchaseState.INIT
+      ) {
         try {
-          if (
-            retryState !== PurchaseState.STOPPED &&
-            retryState !== PurchaseState.FAILED &&
-            retryState !== PurchaseState.RETRYING_TARGET
-          ) {
+          if (currentState !== PurchaseState.STOPPED && currentState !== PurchaseState.FAILED) {
             this.stateMachine.transition({
-              type: 'RETRY_TARGET',
-              reason: `Journey retry attempt ${retries}`,
+              type: 'STOP_REQUESTED',
+              reason: 'Journey initial clean reset',
             });
           }
+          this.stateMachine.transition({ type: 'RESET_REQUESTED' });
+          this.stateMachine.transition({ type: 'ARM' });
+          this.stateMachine.transition({ type: 'MONITORING_STARTED' });
         } catch {
           // ignore
         }
       }
-      try {
-        return await this.runJourney(preferences, latencyTracker, retryContext);
-      } catch (err: unknown) {
-        retries++;
-        lastError = err;
-        this.logger.warn(`Journey execution encountered error on attempt ${retries}`, {
-          error: err instanceof Error ? err.message : String(err),
-          retries,
-        });
 
-        if (err instanceof BookingError && !err.recoverable) {
-          this.stateMachine.transition({
-            type: 'FAILURE_OCCURRED',
-            reason: FailureReason.INVALID_SELECTION,
-            message: err.message,
-          });
-          return {
-            success: false,
-            finalState: this.stateMachine.state,
-            requiresUserAction: false,
-            error: err.message,
-          };
-        }
+      let retries = 0;
+      let lastError: unknown;
+      const retryContext: JourneyRetryContext = {
+        failedAreaIds: new Set<string>(),
+        areaCollisionCounts: new Map<string, number>(),
+        exhaustedTierNames: new Set<string>(),
+      };
 
-        if (retries > this.MAX_RETRIES) {
-          const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
-          this.stateMachine.transition({
-            type: 'FAILURE_OCCURRED',
-            reason: FailureReason.UNKNOWN,
-            message: `Max retries exceeded: ${errMsg}`,
-          });
-          return {
-            success: false,
-            finalState: this.stateMachine.state,
-            requiresUserAction: false,
-            error: errMsg,
-          };
-        }
+      while (retries <= this.MAX_RETRIES) {
+        if (retries > 0) {
+          const retryState = this.getState();
+          if (
+            retryState === PurchaseState.PAYMENT_GATE ||
+            retryState === PurchaseState.CONFIRMED ||
+            retryState === PurchaseState.HELD ||
+            retryState === PurchaseState.CONSENT_REQUIRED
+          ) {
+            this.logger.info(`Target state ${retryState} reached during journey. Halting retries.`);
+            return {
+              success: true,
+              finalState: retryState,
+              requiresUserAction: true,
+            };
+          }
 
-        // Delay before retry to allow DOM / React state to settle
-        await new Promise((r) => setTimeout(r, 200 * retries));
-
-        // Attempt clean transition to RETRY_TARGET
-        if (
-          this.stateMachine.state !== PurchaseState.STOPPED &&
-          this.stateMachine.state !== PurchaseState.FAILED &&
-          this.stateMachine.state !== PurchaseState.RETRYING_TARGET
-        ) {
           try {
-            this.stateMachine.transition({
-              type: 'RETRY_TARGET',
-              reason: `Preparing retry attempt ${retries}`,
-            });
+            if (
+              retryState !== PurchaseState.STOPPED &&
+              retryState !== PurchaseState.FAILED &&
+              retryState !== PurchaseState.RETRYING_TARGET
+            ) {
+              this.stateMachine.transition({
+                type: 'RETRY_TARGET',
+                reason: `Journey retry attempt ${retries}`,
+              });
+            }
           } catch {
-            // ignore if invalid transition
+            // ignore
+          }
+        }
+        try {
+          return await this.runJourney(preferences, latencyTracker, retryContext);
+        } catch (err: unknown) {
+          retries++;
+          lastError = err;
+          this.logger.warn(`Journey execution encountered error on attempt ${retries}`, {
+            error: err instanceof Error ? err.message : String(err),
+            retries,
+          });
+
+          if (err instanceof BookingError && !err.recoverable) {
+            this.stateMachine.transition({
+              type: 'FAILURE_OCCURRED',
+              reason: FailureReason.INVALID_SELECTION,
+              message: err.message,
+            });
+            return {
+              success: false,
+              finalState: this.stateMachine.state,
+              requiresUserAction: false,
+              error: err.message,
+            };
+          }
+
+          if (retries > this.MAX_RETRIES) {
+            const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
+            this.stateMachine.transition({
+              type: 'FAILURE_OCCURRED',
+              reason: FailureReason.UNKNOWN,
+              message: `Max retries exceeded: ${errMsg}`,
+            });
+            return {
+              success: false,
+              finalState: this.stateMachine.state,
+              requiresUserAction: false,
+              error: errMsg,
+            };
+          }
+
+          // Delay before retry to allow DOM / React state to settle
+          await new Promise((r) => setTimeout(r, 200 * retries));
+
+          // Attempt clean transition to RETRY_TARGET
+          if (
+            this.stateMachine.state !== PurchaseState.STOPPED &&
+            this.stateMachine.state !== PurchaseState.FAILED &&
+            this.stateMachine.state !== PurchaseState.RETRYING_TARGET
+          ) {
+            try {
+              this.stateMachine.transition({
+                type: 'RETRY_TARGET',
+                reason: `Preparing retry attempt ${retries}`,
+              });
+            } catch {
+              // ignore if invalid transition
+            }
           }
         }
       }
-    }
 
       return {
         success: false,
@@ -760,7 +763,8 @@ export class ExecuteBookingJourneyUseCase {
               (a.ticketTypeId === chosenTicket.id ||
                 a.id === chosenTicket.id ||
                 (a.ticketTypeName &&
-                  a.ticketTypeName.toLowerCase().trim() === chosenTicket.name.toLowerCase().trim()) ||
+                  a.ticketTypeName.toLowerCase().trim() ===
+                    chosenTicket.name.toLowerCase().trim()) ||
                 a.name.toLowerCase().trim() === chosenTicket.name.toLowerCase().trim() ||
                 a.name.replace(/_/g, ' ').toLowerCase().trim() ===
                   chosenTicket.name.toLowerCase().trim() ||
@@ -773,8 +777,7 @@ export class ExecuteBookingJourneyUseCase {
           // Select first available area that has not failed or been exhausted in this cycle
           let targetArea = matchingAreas.find(
             (a) =>
-              !retryContext?.failedAreaIds.has(a.id) &&
-              !retryContext?.failedAreaIds.has(a.name)
+              !retryContext?.failedAreaIds.has(a.id) && !retryContext?.failedAreaIds.has(a.name)
           );
 
           // If all matching areas for this ticket tier are exhausted, fall back to next ticket tier
@@ -926,8 +929,7 @@ export class ExecuteBookingJourneyUseCase {
 
         const validAvailableSeats = availableSeats.filter(
           (s) =>
-            !this.adapter.isSeatBlacklisted?.(s.id) &&
-            !this.adapter.isSeatBlacklisted?.(s.label)
+            !this.adapter.isSeatBlacklisted?.(s.id) && !this.adapter.isSeatBlacklisted?.(s.label)
         );
 
         if (validAvailableSeats.length === 0) {
@@ -985,72 +987,72 @@ export class ExecuteBookingJourneyUseCase {
             blacklisted
           );
 
-        if (seatDecision.status === 'WAIT') {
-          const waitType = preferences.scopedPurchasePlan ? 'WAITING_FOR_STOCK' : 'WAITING';
-          const waitState = preferences.scopedPurchasePlan
-            ? PurchaseState.WAITING_FOR_STOCK
-            : PurchaseState.WAITING;
-          this.stateMachine.transition({
-            type: waitType,
-            reason: seatDecision.reason,
-          });
-          return {
-            success: false,
-            finalState: waitState,
-            requiresUserAction: false,
-            actionRequiredReason: seatDecision.reason,
-          };
-        }
-
-        if (seatDecision.status !== 'SUCCESS' || seatDecision.selectedSeats.length === 0) {
-          if (retryContext && currentSelection.areaId) {
-            retryContext.failedAreaIds.add(currentSelection.areaId);
-            if (currentSelection.areaName) {
-              retryContext.failedAreaIds.add(currentSelection.areaName);
-            }
+          if (seatDecision.status === 'WAIT') {
+            const waitType = preferences.scopedPurchasePlan ? 'WAITING_FOR_STOCK' : 'WAITING';
+            const waitState = preferences.scopedPurchasePlan
+              ? PurchaseState.WAITING_FOR_STOCK
+              : PurchaseState.WAITING;
+            this.stateMachine.transition({
+              type: waitType,
+              reason: seatDecision.reason,
+            });
+            return {
+              success: false,
+              finalState: waitState,
+              requiresUserAction: false,
+              actionRequiredReason: seatDecision.reason,
+            };
           }
-          throw new BookingError({
-            code: 'SEAT_SELECTION_FAILED',
-            message: seatDecision.reason,
-            state: this.stateMachine.state,
-            recoverable: true,
-          });
-        }
 
-        const seatIds = seatDecision.selectedSeats.map((s) => s.id);
-        const seatLabels = seatDecision.selectedSeats.map((s) => s.label);
-
-        if (this.adapter.selectSpecificSeats) {
-          const seatsOk = await this.adapter.selectSpecificSeats(seatIds);
-          if (!seatsOk) {
+          if (seatDecision.status !== 'SUCCESS' || seatDecision.selectedSeats.length === 0) {
+            if (retryContext && currentSelection.areaId) {
+              retryContext.failedAreaIds.add(currentSelection.areaId);
+              if (currentSelection.areaName) {
+                retryContext.failedAreaIds.add(currentSelection.areaName);
+              }
+            }
             throw new BookingError({
               code: 'SEAT_SELECTION_FAILED',
-              message: 'Seat selection click or verification failed',
+              message: seatDecision.reason,
               state: this.stateMachine.state,
               recoverable: true,
             });
           }
+
+          const seatIds = seatDecision.selectedSeats.map((s) => s.id);
+          const seatLabels = seatDecision.selectedSeats.map((s) => s.label);
+
+          if (this.adapter.selectSpecificSeats) {
+            const seatsOk = await this.adapter.selectSpecificSeats(seatIds);
+            if (!seatsOk) {
+              throw new BookingError({
+                code: 'SEAT_SELECTION_FAILED',
+                message: 'Seat selection click or verification failed',
+                state: this.stateMachine.state,
+                recoverable: true,
+              });
+            }
+          }
+
+          latencyTracker?.recordSeatSelection(Date.now() - tSeatSelStart);
+          currentSelection.seats = seatLabels;
+
+          this.stateMachine.transition({
+            type: 'SEATS_SELECTED',
+            seats: seatLabels,
+          });
+          this.logger.info(`Seats selected: ${seatLabels.join(', ')}`);
+
+          await this.eventBus.publish({
+            type: 'NOTIFICATION_EVENT',
+            timestamp: new Date().toISOString(),
+            category: 'SEATS_SELECTED',
+            title: 'Ticketbox Assistant',
+            body: `Seats selected: ${seatLabels.join(', ')}`,
+          });
         }
-
-        latencyTracker?.recordSeatSelection(Date.now() - tSeatSelStart);
-        currentSelection.seats = seatLabels;
-
-        this.stateMachine.transition({
-          type: 'SEATS_SELECTED',
-          seats: seatLabels,
-        });
-        this.logger.info(`Seats selected: ${seatLabels.join(', ')}`);
-
-        await this.eventBus.publish({
-          type: 'NOTIFICATION_EVENT',
-          timestamp: new Date().toISOString(),
-          category: 'SEATS_SELECTED',
-          title: 'Ticketbox Assistant',
-          body: `Seats selected: ${seatLabels.join(', ')}`,
-        });
       }
     }
-  }
 
     // Advance to next step if applicable (e.g. click "Tiếp tục" / "Đặt vé")
     if (this.adapter.proceedToNextStep) {

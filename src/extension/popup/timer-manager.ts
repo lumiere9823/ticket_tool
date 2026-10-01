@@ -8,12 +8,7 @@
  */
 
 /** Phases that indicate monitoring has stopped — timer should halt. */
-export const STOPPED_PHASES = new Set([
-  'STOPPED',
-  'STOPPED_LIMIT_REACHED',
-  'CONFIRMED',
-  'FAILED',
-]);
+export const STOPPED_PHASES = new Set(['STOPPED', 'STOPPED_LIMIT_REACHED', 'CONFIRMED', 'FAILED']);
 
 export interface TimerRefs {
   persistentElapsedDisplay: HTMLElement | null;
@@ -159,7 +154,8 @@ export class PopupTimerManager {
   private tickCountdown(): void {
     if (!this.activeScheduledTargetMs) {
       if (this.refs.scheduledArmCountdown) this.refs.scheduledArmCountdown.style.display = 'none';
-      if (this.refs.basicScheduledCountdown) this.refs.basicScheduledCountdown.style.display = 'none';
+      if (this.refs.basicScheduledCountdown)
+        this.refs.basicScheduledCountdown.style.display = 'none';
       return;
     }
 

@@ -117,9 +117,15 @@ const btnResetConfig = document.getElementById('btn-reset-config') as HTMLButton
 // Scheduled ARM DOM references
 const scheduledArmTimeInput = document.getElementById('scheduled-arm-time') as HTMLInputElement;
 const scheduledArmStatus = document.getElementById('scheduled-arm-status') as HTMLElement;
-const scheduledArmTimeDisplay = document.getElementById('scheduled-arm-time-display') as HTMLElement;
-const scheduledArmCountdown = document.getElementById('scheduled-arm-countdown') as HTMLElement | null;
-const btnCancelScheduledArm = document.getElementById('btn-cancel-scheduled-arm') as HTMLButtonElement;
+const scheduledArmTimeDisplay = document.getElementById(
+  'scheduled-arm-time-display'
+) as HTMLElement;
+const scheduledArmCountdown = document.getElementById(
+  'scheduled-arm-countdown'
+) as HTMLElement | null;
+const btnCancelScheduledArm = document.getElementById(
+  'btn-cancel-scheduled-arm'
+) as HTMLButtonElement;
 
 // Mode Switcher DOM references
 const tabModeBasic = document.getElementById('tab-mode-basic') as HTMLButtonElement | null;
@@ -129,23 +135,43 @@ const panelHardcore = document.getElementById('panel-hardcore') as HTMLElement |
 
 // Basic Mode DOM references
 const basicShowingGroup = document.getElementById('basic-showing-group') as HTMLElement | null;
-const basicShowingSelect = document.getElementById('basic-showing-select') as HTMLSelectElement | null;
-const basicTicketChecklist = document.getElementById('basic-ticket-checklist') as HTMLElement | null;
+const basicShowingSelect = document.getElementById(
+  'basic-showing-select'
+) as HTMLSelectElement | null;
+const basicTicketChecklist = document.getElementById(
+  'basic-ticket-checklist'
+) as HTMLElement | null;
 const basicQuantityInput = document.getElementById('basic-quantity') as HTMLInputElement | null;
-const basicScheduledArmTime = document.getElementById('basic-scheduled-arm-time') as HTMLInputElement | null;
-const basicScheduledStatus = document.getElementById('basic-scheduled-status') as HTMLElement | null;
-const basicScheduledTimeDisplay = document.getElementById('basic-scheduled-time-display') as HTMLElement | null;
-const basicScheduledCountdown = document.getElementById('basic-scheduled-countdown') as HTMLElement | null;
-const btnCancelBasicScheduled = document.getElementById('btn-cancel-basic-scheduled') as HTMLButtonElement | null;
+const basicScheduledArmTime = document.getElementById(
+  'basic-scheduled-arm-time'
+) as HTMLInputElement | null;
+const basicScheduledStatus = document.getElementById(
+  'basic-scheduled-status'
+) as HTMLElement | null;
+const basicScheduledTimeDisplay = document.getElementById(
+  'basic-scheduled-time-display'
+) as HTMLElement | null;
+const basicScheduledCountdown = document.getElementById(
+  'basic-scheduled-countdown'
+) as HTMLElement | null;
+const btnCancelBasicScheduled = document.getElementById(
+  'btn-cancel-basic-scheduled'
+) as HTMLButtonElement | null;
 const basicProfileName = document.getElementById('basic-profile-name') as HTMLInputElement | null;
 const basicProfilePhone = document.getElementById('basic-profile-phone') as HTMLInputElement | null;
 const basicProfileEmail = document.getElementById('basic-profile-email') as HTMLInputElement | null;
-const basicProfileIdCard = document.getElementById('basic-profile-id-card') as HTMLInputElement | null;
+const basicProfileIdCard = document.getElementById(
+  'basic-profile-id-card'
+) as HTMLInputElement | null;
 const btnBasicArm = document.getElementById('btn-basic-arm') as HTMLButtonElement | null;
 const btnBasicStop = document.getElementById('btn-basic-stop') as HTMLButtonElement | null;
 const btnBasicReset = document.getElementById('btn-basic-reset') as HTMLButtonElement | null;
-const btnBasicSelectAll = document.getElementById('btn-basic-select-all') as HTMLButtonElement | null;
-const btnBasicDeselectAll = document.getElementById('btn-basic-deselect-all') as HTMLButtonElement | null;
+const btnBasicSelectAll = document.getElementById(
+  'btn-basic-select-all'
+) as HTMLButtonElement | null;
+const btnBasicDeselectAll = document.getElementById(
+  'btn-basic-deselect-all'
+) as HTMLButtonElement | null;
 
 const ticketsTbody = document.getElementById('tickets-tbody') as HTMLElement;
 
@@ -179,7 +205,9 @@ function addLog(text: string, save = true): void {
 
   if (save && typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
     chrome.storage.local.get('ticketbox_recent_logs', (res) => {
-      const logs: string[] = Array.isArray(res?.ticketbox_recent_logs) ? res.ticketbox_recent_logs : [];
+      const logs: string[] = Array.isArray(res?.ticketbox_recent_logs)
+        ? res.ticketbox_recent_logs
+        : [];
       logs.push(`[${time}] ${text}`);
       if (logs.length > MAX_LOG_LINES) logs.splice(0, logs.length - MAX_LOG_LINES);
       chrome.storage.local.set({ ticketbox_recent_logs: logs });
@@ -1218,7 +1246,9 @@ async function handleBasicArm(): Promise<void> {
   });
 
   if (selectedTicketIds.length === 0) {
-    alert('ARM bị chặn: Bạn chưa tick chọn hạng vé nào!\n\nVui lòng tick chọn ít nhất một hạng vé muốn mua trong danh sách.');
+    alert(
+      'ARM bị chặn: Bạn chưa tick chọn hạng vé nào!\n\nVui lòng tick chọn ít nhất một hạng vé muốn mua trong danh sách.'
+    );
     return;
   }
 
@@ -1290,8 +1320,12 @@ async function handleBasicArm(): Promise<void> {
   };
 
   if (isScheduled) {
-    addLog(`⏰ [CƠ BẢN] Đã hẹn giờ ARM vào: ${new Date(plan.persistence.startAt!).toLocaleString('vi-VN')}. Đến giờ sẽ tự động mở tab săn vé!`);
-    alert(`Đã đặt lịch hẹn ARM thành công!\n\n• Thời gian: ${new Date(plan.persistence.startAt!).toLocaleString('vi-VN')}\n• Hạng vé: ${selectedTicketIds.join(', ')}\n• Số lượng: ${quantity} vé.\n\nĐến giờ mở bán, trợ lý sẽ tự động đưa tab Ticketbox lên và săn vé!`);
+    addLog(
+      `⏰ [CƠ BẢN] Đã hẹn giờ ARM vào: ${new Date(plan.persistence.startAt!).toLocaleString('vi-VN')}. Đến giờ sẽ tự động mở tab săn vé!`
+    );
+    alert(
+      `Đã đặt lịch hẹn ARM thành công!\n\n• Thời gian: ${new Date(plan.persistence.startAt!).toLocaleString('vi-VN')}\n• Hạng vé: ${selectedTicketIds.join(', ')}\n• Số lượng: ${quantity} vé.\n\nĐến giờ mở bán, trợ lý sẽ tự động đưa tab Ticketbox lên và săn vé!`
+    );
   } else {
     updateStateBadge(PurchaseState.ARMED);
     addLog(`🚀 [CƠ BẢN] Đã ARM săn vé: ${selectedTicketIds.join(', ')} (${quantity} vé)...`);
@@ -1561,7 +1595,6 @@ async function updatePersistentMonitoringDisplay(
     }
   }
 
-
   if (persistentStopReasonRow && persistentStopReasonDisplay) {
     if (pState?.stopReason) {
       persistentStopReasonRow.style.display = 'flex';
@@ -1583,7 +1616,8 @@ async function savePlan(): Promise<void> {
   const config = await storage.getConfiguration();
   const targetUrl = eventUrlInput.value.trim() || config?.targetEventUrl || '';
   const scheduledArmAt = currentScopedPlan?.persistence?.startAt || config?.scheduledArmAt;
-  const ticketCatalogSnapshot = currentCatalog.tickets.length > 0 ? currentCatalog : config?.ticketCatalogSnapshot;
+  const ticketCatalogSnapshot =
+    currentCatalog.tickets.length > 0 ? currentCatalog : config?.ticketCatalogSnapshot;
 
   await storage.saveConfiguration({
     targetEventUrl: targetUrl,
@@ -1807,10 +1841,12 @@ function updateLiveTimes(): void {
         basicScheduledCountdown.style.display = 'inline-flex';
       }
       activeScheduledTargetMs = null;
-      messageBus.publish({
-        type: 'SYNC_STATE_REQUEST',
-        timestamp: new Date().toISOString(),
-      }).catch(() => {});
+      messageBus
+        .publish({
+          type: 'SYNC_STATE_REQUEST',
+          timestamp: new Date().toISOString(),
+        })
+        .catch(() => {});
     }
   } else {
     if (scheduledArmCountdown) scheduledArmCountdown.style.display = 'none';
@@ -1906,7 +1942,15 @@ function resetPopupToBlank(): void {
   if (logBox) logBox.innerHTML = '';
 
   // Catalog, basic checklist & matrix
-  currentCatalog = { eventId: null, eventTitle: null, showings: [], tickets: [], loadState: 'IDLE', loadMessage: 'Config đã được xóa. Vui lòng mở tab Ticketbox và quét lại.', discoveredAt: null };
+  currentCatalog = {
+    eventId: null,
+    eventTitle: null,
+    showings: [],
+    tickets: [],
+    loadState: 'IDLE',
+    loadMessage: 'Config đã được xóa. Vui lòng mở tab Ticketbox và quét lại.',
+    discoveredAt: null,
+  };
   renderCatalogTable([]);
   renderBasicTicketChecklist();
   if (matrixEmpty) matrixEmpty.style.display = 'block';
@@ -2031,7 +2075,6 @@ async function loadInitialData(): Promise<void> {
     }
   }
 
-
   // Render rule cards (if no catalog yet, renders with empty dropdowns)
   refreshAllRuleCards();
 
@@ -2065,7 +2108,9 @@ async function loadInitialData(): Promise<void> {
     showScheduledArmStatus(config.scheduledArmAt);
     if (basicScheduledStatus && basicScheduledTimeDisplay) {
       basicScheduledStatus.style.display = 'flex';
-      basicScheduledTimeDisplay.textContent = new Date(config.scheduledArmAt).toLocaleString('vi-VN');
+      basicScheduledTimeDisplay.textContent = new Date(config.scheduledArmAt).toLocaleString(
+        'vi-VN'
+      );
       const startAtMs = new Date(config.scheduledArmAt).getTime();
       if (startAtMs > Date.now() && basicScheduledCountdown) {
         const rem = Math.max(0, startAtMs - Date.now());
@@ -2075,7 +2120,9 @@ async function loadInitialData(): Promise<void> {
     }
   } else if (
     (persistentState?.currentPhase === 'ARMED' || persistentState?.currentPhase === 'MONITORING') &&
-    (!lastState?.currentState || lastState.currentState === PurchaseState.IDLE || lastState.currentState === PurchaseState.READY)
+    (!lastState?.currentState ||
+      lastState.currentState === PurchaseState.IDLE ||
+      lastState.currentState === PurchaseState.READY)
   ) {
     updateStateBadge(PurchaseState.ARMED);
   }
@@ -2144,12 +2191,16 @@ async function loadInitialData(): Promise<void> {
   if (typeof window !== 'undefined' && !liveTimerInterval) {
     liveTimerInterval = window.setInterval(updateLiveTimes, 1000);
     // Cleanup on popup unload to prevent memory leaks across popup re-opens
-    window.addEventListener('unload', () => {
-      if (liveTimerInterval !== null) {
-        window.clearInterval(liveTimerInterval);
-        liveTimerInterval = null;
-      }
-    }, { once: true });
+    window.addEventListener(
+      'unload',
+      () => {
+        if (liveTimerInterval !== null) {
+          window.clearInterval(liveTimerInterval);
+          liveTimerInterval = null;
+        }
+      },
+      { once: true }
+    );
   }
 }
 
@@ -2326,9 +2377,13 @@ btnArm.addEventListener('click', async () => {
     scopedPlan.targets.every((t) => t.ticketTypeIds.length === 0)
   ) {
     const isScheduled = Boolean(scheduledArmTimeInput?.value);
-    const hasCatalog = currentCatalog.tickets.length > 0 ||
-      (currentCatalog.showings ?? []).some((s) =>
-        'tickets' in s && Array.isArray((s as { tickets?: unknown[] }).tickets) && ((s as { tickets?: unknown[] }).tickets?.length ?? 0) > 0
+    const hasCatalog =
+      currentCatalog.tickets.length > 0 ||
+      (currentCatalog.showings ?? []).some(
+        (s) =>
+          'tickets' in s &&
+          Array.isArray((s as { tickets?: unknown[] }).tickets) &&
+          ((s as { tickets?: unknown[] }).tickets?.length ?? 0) > 0
       );
 
     let errorMsg: string;
@@ -2347,7 +2402,8 @@ btnArm.addEventListener('click', async () => {
           '3. Tick ✅ hạng vé muốn mua → ARM';
     } else {
       // Catalog có nhưng chưa tick
-      errorMsg = 'ARM bị chặn: Whitelist rỗng!\n\nDanh mục vé đã được quét nhưng bạn chưa tick ✅ hạng vé nào trong bảng "SĂN VÉ CÓ PHẠM VI (SCOPED MATRIX)".\n\nVui lòng tick ít nhất một hạng vé trước khi ARM.';
+      errorMsg =
+        'ARM bị chặn: Whitelist rỗng!\n\nDanh mục vé đã được quét nhưng bạn chưa tick ✅ hạng vé nào trong bảng "SĂN VÉ CÓ PHẠM VI (SCOPED MATRIX)".\n\nVui lòng tick ít nhất một hạng vé trước khi ARM.';
     }
 
     if (scopedValidationError) {
@@ -2406,7 +2462,9 @@ btnArm.addEventListener('click', async () => {
     );
   } else {
     updateStateBadge(PurchaseState.ARMED);
-    addLog('Đã kích hoạt trợ lý với Scope Guard cứng (ARMED)... Đang chuẩn bị săn vé theo phạm vi.');
+    addLog(
+      'Đã kích hoạt trợ lý với Scope Guard cứng (ARMED)... Đang chuẩn bị săn vé theo phạm vi.'
+    );
   }
 
   const userProfile = {
@@ -2440,7 +2498,6 @@ btnArm.addEventListener('click', async () => {
     userProfile,
   });
 });
-
 
 btnStop.addEventListener('click', async () => {
   addLog('Đã dừng trợ lý theo yêu cầu.');
@@ -2677,12 +2734,7 @@ if (basicShowingSelect) {
 }
 
 // Auto-save basic profile fields
-[
-  basicProfileName,
-  basicProfilePhone,
-  basicProfileEmail,
-  basicProfileIdCard,
-].forEach((el) => {
+[basicProfileName, basicProfilePhone, basicProfileEmail, basicProfileIdCard].forEach((el) => {
   if (el) {
     el.addEventListener('change', () => {
       syncProfileFields('hardcore');
