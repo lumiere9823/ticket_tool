@@ -3,8 +3,14 @@
   "name": "Ticketbox Purchase Assistant",
   "version": "0.1.0",
   "description": "Browser-based purchase assistant for Ticketbox with strict reservation boundary and platform-safe architecture",
-  "permissions": ["storage", "activeTab", "alarms", "scripting"],
+  "permissions": ["storage", "activeTab", "alarms", "scripting", "notifications"],
   "host_permissions": ["*://*.ticketbox.vn/*"],
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -30,6 +36,12 @@
   ],
   "action": {
     "default_popup": "src/extension/popup/popup.html",
-    "default_title": "Ticketbox Purchase Assistant"
+    "default_title": "Ticketbox Purchase Assistant",
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
   }
 }

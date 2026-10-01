@@ -811,6 +811,7 @@ async function handleServiceWorkerMessage(
           title: message.title,
           message: formattedBody,
           priority: 2,
+          requireInteraction: message.category === 'PAYMENT_REQUIRED',
         });
       }
       break;
