@@ -9,6 +9,7 @@ import { StopAssistantUseCase } from '../../application/use-cases/StopAssistantU
 import { ExtensionMessage } from '../shared/messages';
 import { MessageSenderInfo } from '../../application/ports/EventBus';
 import { extractEventIdFromUrl } from '../../domain/entities/ScopedPurchasePlan';
+import { ScheduledArmManager, AlarmProvider } from '../../application/services/ScheduledArmManager';
 
 const logger = new SanitizedLogger({ state: 'SERVICE_WORKER' });
 const storage = new ChromeStorageRepository();
@@ -18,6 +19,21 @@ const stateMachine = new PurchaseStateMachine(PurchaseState.INIT);
 const armUseCase = new ArmAssistantUseCase(stateMachine, storage, eventBus, logger);
 const startMonitoringUseCase = new StartMonitoringUseCase(stateMachine, storage, eventBus, logger);
 const stopUseCase = new StopAssistantUseCase(stateMachine, storage, eventBus, logger);
+
+const chromeAlarmProvider: AlarmProvider = {
+  clear: (name: string) => {
+    if (typeof chrome !== 'undefined' && chrome.alarms) {
+      chrome.alarms.clear(name);
+    }
+  },
+  create: (name: string, info: { when: number }) => {
+    if (typeof chrome !== 'undefined' && chrome.alarms) {
+      chrome.alarms.create(name, info);
+    }
+  },
+};
+
+const scheduledArmManager = new ScheduledArmManager(chromeAlarmProvider);
 
 /**
  * Advances initialization state machine to READY through canonical auth and event check.
@@ -328,21 +344,8 @@ async function broadcastHeartbeatPing(): Promise<void> {
   }
 }
 
-let isScheduledArmExecuting = false;
-
 async function executeScheduledArm(): Promise<void> {
-  if (isScheduledArmExecuting) {
-    logger.debug('executeScheduledArm already running; skipping duplicate execution');
-    return;
-  }
-  isScheduledArmExecuting = true;
-
-  try {
-    if (typeof chrome !== 'undefined' && chrome.alarms) {
-      chrome.alarms.clear('SCHEDULED_ARM');
-      chrome.alarms.clear('SCHEDULED_ARM_PREWAKE');
-    }
-
+  const executed = await scheduledArmManager.execute(async () => {
     const config = await storage.getConfiguration();
     if (!config) {
       logger.warn('SCHEDULED_ARM fired but no config found; skipping');
@@ -456,10 +459,10 @@ async function executeScheduledArm(): Promise<void> {
         priority: 2,
       });
     }
-  } catch (err) {
-    logger.error('Error during scheduled ARM execution', err);
-  } finally {
-    isScheduledArmExecuting = false;
+  });
+
+  if (!executed) {
+    logger.debug('executeScheduledArm already running; skipping duplicate execution');
   }
 }
 
@@ -570,6 +573,7 @@ async function handleServiceWorkerMessage(
 
     case 'STOP_REQUESTED': {
       mirroredJourneyContext = null;
+      scheduledArmManager.cancel();
       if (
         stateMachine.state === PurchaseState.STOPPED ||
         stateMachine.state === PurchaseState.STOPPED_LIMIT_REACHED ||
@@ -643,24 +647,14 @@ async function handleServiceWorkerMessage(
               scheduledArmAt: startAt,
             });
 
-            const delayMs = startMs - nowMs;
-            if (typeof chrome !== 'undefined' && chrome.alarms) {
-              chrome.alarms.clear('SCHEDULED_ARM');
-              chrome.alarms.clear('SCHEDULED_ARM_PREWAKE');
-              chrome.alarms.create('SCHEDULED_ARM', { when: startMs });
-              // If delay is more than 30 seconds, create a pre-wake alarm 25 seconds before start
-              if (delayMs > 30_000) {
-                chrome.alarms.create('SCHEDULED_ARM_PREWAKE', { when: startMs - 25_000 });
-              }
-            }
-
-            // Fallback timer for delays up to 5 minutes (300,000 ms) where active setTimeout provides sub-second accuracy
-            if (delayMs <= 300_000) {
-              setTimeout(async () => {
+            scheduledArmManager.schedule(
+              startMs,
+              async () => {
                 logger.info('Short-delay scheduled ARM timer fired');
                 await executeScheduledArm();
-              }, delayMs);
-            }
+              },
+              nowMs
+            );
 
             await storage.savePersistentState({
               currentPhase: 'SCHEDULED',
@@ -961,11 +955,8 @@ async function handleServiceWorkerMessage(
       mirroredJourneyContext = null;
       // Stop any active monitoring first
       await stopUseCase.execute('Config reset by user');
-      // Cancel any pending scheduled ARM alarm
-      if (typeof chrome !== 'undefined' && chrome.alarms) {
-        chrome.alarms.clear('SCHEDULED_ARM');
-        chrome.alarms.clear('SCHEDULED_ARM_PREWAKE');
-      }
+      // Cancel any pending scheduled ARM alarm and active handle
+      scheduledArmManager.cancel();
       // Clear config, last state, and persistent state (profiles preserved)
       await storage.clearConfiguration();
       await updateExtensionBadge('', false);
@@ -979,10 +970,7 @@ async function handleServiceWorkerMessage(
 
     case 'CANCEL_SCHEDULED_ARM': {
       logger.info('Cancelling scheduled ARM alarm');
-      if (typeof chrome !== 'undefined' && chrome.alarms) {
-        chrome.alarms.clear('SCHEDULED_ARM');
-        chrome.alarms.clear('SCHEDULED_ARM_PREWAKE');
-      }
+      scheduledArmManager.cancel();
       // Remove scheduledArmAt from config by omitting the key entirely
       const configForCancel = await storage.getConfiguration();
       if (configForCancel) {

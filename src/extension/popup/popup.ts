@@ -1232,11 +1232,16 @@ function syncBasicChecklistToScopedPlan(): void {
   };
 }
 
+let isArmingInProgress = false;
+
 async function handleBasicArm(): Promise<void> {
-  if (btnBasicArm?.classList.contains('running-active')) {
-    btnStop.click();
-    return;
-  }
+  if (isArmingInProgress) return;
+  isArmingInProgress = true;
+  try {
+    if (btnBasicArm?.classList.contains('running-active')) {
+      btnStop.click();
+      return;
+    }
   const url = eventUrlInput.value.trim();
   if (!url) {
     alert('Vui lòng nhập hoặc mở URL sự kiện Ticketbox!');
@@ -1368,6 +1373,9 @@ async function handleBasicArm(): Promise<void> {
     eventId,
     targetEventId: eventId,
   });
+  } finally {
+    isArmingInProgress = false;
+  }
 }
 
 // ─── Catalog Update Handler ───────────────────────────────────────────────────
@@ -2380,10 +2388,13 @@ messageBus.subscribe((message: ExtensionMessage) => {
 // ─── Button Handlers ──────────────────────────────────────────────────────────
 
 btnArm.addEventListener('click', async () => {
-  if (btnArm?.classList.contains('running-active')) {
-    btnStop.click();
-    return;
-  }
+  if (isArmingInProgress) return;
+  isArmingInProgress = true;
+  try {
+    if (btnArm?.classList.contains('running-active')) {
+      btnStop.click();
+      return;
+    }
   const url = eventUrlInput.value.trim();
   if (!url) {
     alert('Please enter a target Ticketbox event URL');
@@ -2535,6 +2546,9 @@ btnArm.addEventListener('click', async () => {
     eventId,
     targetEventId: eventId,
   });
+  } finally {
+    isArmingInProgress = false;
+  }
 });
 
 btnStop.addEventListener('click', async () => {
