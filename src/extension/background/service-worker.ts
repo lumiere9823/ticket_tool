@@ -233,24 +233,26 @@ async function checkHeartbeatLimits(): Promise<void> {
 
     const config = await storage.getConfiguration();
     const persistentState = await storage.getPersistentState();
-    if (!config?.scopedPurchasePlan || !persistentState || !persistentState.startedAt) {
+    if (!persistentState || !persistentState.startedAt) {
       return;
     }
 
-    const plan = config.scopedPurchasePlan;
-    const policy = plan.persistence;
-    if (!policy) return;
+    // Default mandatory limits applied to ALL plans (both scoped and non-scoped)
+    const policy = config?.scopedPurchasePlan?.persistence;
+    const planLimits = config?.purchasePlan?.limits;
+
+    const maxDurationMinutes =
+      policy?.maxDurationMinutes ?? planLimits?.maxDurationMinutes ?? 120;
+    const maxAttempts =
+      policy?.maxAttempts ?? planLimits?.maxAttempts ?? 1000;
+    const stopAt = policy?.stopAt;
 
     const startedAtMs = new Date(persistentState.startedAt).getTime();
     const elapsedMinutes = (Date.now() - startedAtMs) / 60000;
 
     // Check duration ceiling (0 or undefined = unlimited / no limit)
-    if (
-      policy.maxDurationMinutes &&
-      policy.maxDurationMinutes > 0 &&
-      elapsedMinutes >= policy.maxDurationMinutes
-    ) {
-      const reason = `PERSISTENCE_LIMIT_EXCEEDED: Maximum duration reached (${policy.maxDurationMinutes}m)`;
+    if (maxDurationMinutes > 0 && elapsedMinutes >= maxDurationMinutes) {
+      const reason = `PERSISTENCE_LIMIT_EXCEEDED: Maximum duration reached (${maxDurationMinutes}m)`;
       logger.warn(reason);
       if (stateMachine.state !== PurchaseState.STOPPED_LIMIT_REACHED) {
         stateMachine.transition({ type: 'LIMIT_REACHED', reason });
@@ -264,8 +266,8 @@ async function checkHeartbeatLimits(): Promise<void> {
     }
 
     // Check stopAt ISO timestamp
-    if (policy.stopAt && Date.now() >= new Date(policy.stopAt).getTime()) {
-      const reason = `PERSISTENCE_STOP_AT_REACHED: Configured stop time reached (${policy.stopAt})`;
+    if (stopAt && Date.now() >= new Date(stopAt).getTime()) {
+      const reason = `PERSISTENCE_STOP_AT_REACHED: Configured stop time reached (${stopAt})`;
       logger.warn(reason);
       if (stateMachine.state !== PurchaseState.STOPPED_LIMIT_REACHED) {
         stateMachine.transition({ type: 'LIMIT_REACHED', reason });
@@ -279,12 +281,8 @@ async function checkHeartbeatLimits(): Promise<void> {
     }
 
     // Check max attempts limit (0 or undefined = unlimited / no limit)
-    if (
-      policy.maxAttempts &&
-      policy.maxAttempts > 0 &&
-      persistentState.attemptsCount >= policy.maxAttempts
-    ) {
-      const reason = `PERSISTENCE_MAX_ATTEMPTS_REACHED: Maximum attempts reached (${policy.maxAttempts})`;
+    if (maxAttempts > 0 && persistentState.attemptsCount >= maxAttempts) {
+      const reason = `PERSISTENCE_MAX_ATTEMPTS_REACHED: Maximum attempts reached (${maxAttempts})`;
       logger.warn(reason);
       if (stateMachine.state !== PurchaseState.STOPPED_LIMIT_REACHED) {
         stateMachine.transition({ type: 'LIMIT_REACHED', reason });

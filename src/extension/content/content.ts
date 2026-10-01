@@ -76,6 +76,10 @@ let lastPollTimestamp = Date.now();
 let scheduledArmTargetMs: number | null = null;
 let scheduledArmTimer: number | null = null;
 let watchdogInterval: number | null = null;
+let consecutiveBookingFailures = 0;
+let lastBookingFailureTimestamp = 0;
+const MAX_CONSECUTIVE_AUTO_RECOVERIES = 3;
+const FAILURE_WINDOW_MS = 60_000;
 
 // ── Anti-bot zoom-thrash detection ───────────────────────────────────────────
 // Ticketbox occasionally applies rapid zoom-in / zoom-out CSS transforms on the
@@ -103,6 +107,7 @@ let last404RecoveryMs = 0;
 const RECOVERY_404_COOLDOWN_MS = 8_000;
 
 function resetStateMachineToMonitoring(reason = 'Re-arm reset'): void {
+  consecutiveBookingFailures = 0;
   try {
     const s = stateMachine.state;
     if (s === PurchaseState.MONITORING) return;
@@ -1003,7 +1008,13 @@ async function performDiscoveryScan(force = false): Promise<void> {
             config?.targetEventUrl && currentUrl.includes(config.targetEventUrl.split('?')[0]!)
           );
 
-      if (isArmed && isMatchingEvent && !userExplicitlyStopped && !isMonitoringActive) {
+      if (
+        isArmed &&
+        isMatchingEvent &&
+        !userExplicitlyStopped &&
+        !isMonitoringActive &&
+        consecutiveBookingFailures <= MAX_CONSECUTIVE_AUTO_RECOVERIES
+      ) {
         logger.info(
           'User on select-ticket page for armed event; auto-reactivating monitoring to continue seat selection'
         );
@@ -1316,6 +1327,7 @@ async function attemptBookingJourney(): Promise<void> {
           result.finalState === PurchaseState.STOPPED) &&
         result.requiresUserAction
       ) {
+        consecutiveBookingFailures = 0;
         logger.info(`Journey reached target state ${result.finalState}. Halting monitoring loop.`);
         isMonitoringActive = false;
         if (monitoringTimeout) {
@@ -1329,9 +1341,16 @@ async function attemptBookingJourney(): Promise<void> {
           currentUrlNow.includes('/booking') ||
           currentUrlNow.includes('/question-form');
 
-        if (isOnActiveBooking) {
+        const now = Date.now();
+        if (now - lastBookingFailureTimestamp > FAILURE_WINDOW_MS) {
+          consecutiveBookingFailures = 0;
+        }
+        consecutiveBookingFailures++;
+        lastBookingFailureTimestamp = now;
+
+        if (isOnActiveBooking && consecutiveBookingFailures <= MAX_CONSECUTIVE_AUTO_RECOVERIES) {
           logger.info(
-            'Journey encountered failure on active booking page. Backing off 1.5s and maintaining monitoring to allow auto-recovery/reselection.',
+            `Journey encountered failure on active booking page (recovery attempt ${consecutiveBookingFailures}/${MAX_CONSECUTIVE_AUTO_RECOVERIES}). Backing off 1.5s and maintaining monitoring to allow auto-recovery/reselection.`,
             { url: currentUrlNow }
           );
           isMonitoringActive = true;
@@ -1350,13 +1369,22 @@ async function attemptBookingJourney(): Promise<void> {
           scheduleNextPoll(1500);
           scheduleDiscoveryScan(1500);
         } else {
-          logger.info(
-            'Journey execution failed after retries. Halting monitoring loop to prevent retry storm.'
+          logger.warn(
+            `Journey execution failed (${consecutiveBookingFailures} consecutive failures). Halting monitoring and stopping for user to prevent infinite retry storm.`,
+            { consecutiveFailures: consecutiveBookingFailures, maxAllowed: MAX_CONSECUTIVE_AUTO_RECOVERIES }
           );
           isMonitoringActive = false;
           if (monitoringTimeout) {
             window.clearTimeout(monitoringTimeout);
             monitoringTimeout = null;
+          }
+          try {
+            stateMachine.transition({
+              type: 'STOP_REQUESTED',
+              reason: `Exceeded maximum consecutive booking failure auto-recoveries (${MAX_CONSECUTIVE_AUTO_RECOVERIES}); halted for user`,
+            });
+          } catch (stopErr) {
+            logger.warn('Failed to transition to STOPPED after consecutive failures', { err: String(stopErr) });
           }
         }
       }

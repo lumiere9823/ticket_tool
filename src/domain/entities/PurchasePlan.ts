@@ -79,7 +79,26 @@ export interface PurchasePlan {
    * Whether to allow fallback at all. If false, STOP_AND_NOTIFY is implied.
    */
   allowFallback: boolean;
+
+  /**
+   * Execution limits (duration, attempts, price ceilings) for non-scoped plans.
+   */
+  limits?: PurchasePlanLimits | undefined;
 }
+
+export interface PurchasePlanLimits {
+  maxDurationMinutes?: number | undefined;
+  maxAttempts?: number | undefined;
+  maxPricePerTicket?: number | undefined;
+  maxTotal?: number | undefined;
+}
+
+export const DEFAULT_PURCHASE_PLAN_LIMITS: PurchasePlanLimits = {
+  maxDurationMinutes: 120,
+  maxAttempts: 1000,
+  maxPricePerTicket: 20_000_000,
+  maxTotal: 50_000_000,
+};
 
 /**
  * Validation result for a PurchasePlan against a Ticket Catalog.

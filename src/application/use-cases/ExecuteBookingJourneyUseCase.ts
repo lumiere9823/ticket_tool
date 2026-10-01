@@ -836,6 +836,26 @@ export class ExecuteBookingJourneyUseCase {
     });
     this.logger.info(`Booking mode: ${bookingMode}`);
 
+    const maxPricePerTicket = preferences.scopedPurchasePlan?.persistence?.maxPricePerTicket;
+    const maxTotal = preferences.scopedPurchasePlan?.persistence?.maxTotal;
+
+    if (maxPricePerTicket && maxPricePerTicket > 0 && chosenTicket.price > maxPricePerTicket) {
+      this.logger.warn(
+        `Chosen ticket price (${chosenTicket.price}) exceeds maxPricePerTicket ceiling (${maxPricePerTicket})`
+      );
+      this.stateMachine.transition({
+        type: 'LIMIT_REACHED',
+        reason: `Price ceiling exceeded: ticket price ${chosenTicket.price} > ${maxPricePerTicket}`,
+      });
+      return {
+        success: false,
+        finalState: PurchaseState.STOPPED_LIMIT_REACHED,
+        error: `Price ceiling exceeded for ticket '${chosenTicket.name}'`,
+        requiresUserAction: true,
+        actionRequiredReason: `Price ceiling exceeded for ticket '${chosenTicket.name}'`,
+      };
+    }
+
     const currentSelection: CurrentSelection = {
       ticketId,
       name: chosenTicket.name,
@@ -846,6 +866,8 @@ export class ExecuteBookingJourneyUseCase {
       seats: [],
       selectedAt: new Date().toISOString(),
       allowPartialQuantity: preferences.scopedPurchasePlan?.allowPartialQuantity ?? false,
+      maxPricePerTicket,
+      maxTotal,
     };
 
     // 6. STANDING FLOW vs SEATED FLOW

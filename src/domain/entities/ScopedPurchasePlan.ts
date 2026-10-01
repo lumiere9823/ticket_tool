@@ -16,6 +16,8 @@ export interface PersistencePolicy {
   jitterRatio: number; // default 0.2
   stopAt?: string | undefined; // ISO timestamp string, optional
   startAt?: string | undefined; // ISO timestamp string — scheduled ARM time, optional
+  maxPricePerTicket?: number | undefined; // Price ceiling per ticket in VND
+  maxTotal?: number | undefined; // Price ceiling for total subtotal in VND
 }
 
 export interface ScopedPurchasePlan {

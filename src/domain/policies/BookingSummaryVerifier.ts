@@ -168,6 +168,23 @@ export class BookingSummaryVerifier {
       }
     }
 
+    // 7. Price ceiling checks (fail-closed if ceiling exceeded)
+    if (expected.maxPricePerTicket && expected.maxPricePerTicket > 0) {
+      if (matchedItem.price > expected.maxPricePerTicket) {
+        errors.push(
+          `Summary ticket price ${matchedItem.price} exceeds maxPricePerTicket ceiling (${expected.maxPricePerTicket})`
+        );
+      }
+    }
+
+    if (expected.maxTotal && expected.maxTotal > 0) {
+      if (summary.subtotal > expected.maxTotal) {
+        errors.push(
+          `Summary subtotal ${summary.subtotal} exceeds maxTotal ceiling (${expected.maxTotal})`
+        );
+      }
+    }
+
     return {
       isValid: errors.length === 0,
       errors,

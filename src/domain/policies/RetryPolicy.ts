@@ -63,11 +63,20 @@ export class RetryPolicy {
     return this.currentAttempts;
   }
 
-  public getBackoffDelayMs(): number {
+  public getBackoffDelayMs(applyJitter = false, jitterRatio = 0.2): number {
+    const exponent = Math.max(0, this.currentAttempts - 1);
     const rawDelay =
       this.config.initialDelayMs *
-      Math.pow(this.config.backoffMultiplier, this.currentAttempts - 1);
-    return Math.min(rawDelay, this.config.maxDelayMs);
+      Math.pow(this.config.backoffMultiplier, exponent);
+    const boundedDelay = Math.max(
+      this.config.initialDelayMs,
+      Math.min(rawDelay, this.config.maxDelayMs)
+    );
+    if (applyJitter && jitterRatio > 0) {
+      const jitter = (Math.random() * 2 - 1) * jitterRatio * boundedDelay;
+      return Math.max(this.config.initialDelayMs, Math.round(boundedDelay + jitter));
+    }
+    return boundedDelay;
   }
 
   public reset(): void {

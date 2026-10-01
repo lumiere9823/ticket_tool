@@ -106,6 +106,8 @@ export interface CurrentSelection {
   seats: string[]; // List of seat labels e.g. ["A12", "A13"]
   selectedAt: string;
   allowPartialQuantity?: boolean | undefined;
+  maxPricePerTicket?: number | undefined;
+  maxTotal?: number | undefined;
 }
 
 export interface SummaryItem {

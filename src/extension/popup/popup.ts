@@ -75,6 +75,12 @@ const paramJitterInput = document.getElementById('param-jitter') as HTMLInputEle
 const paramAllowPartialCheckbox = document.getElementById(
   'param-allow-partial'
 ) as HTMLInputElement;
+const paramMaxPricePerTicketInput = document.getElementById(
+  'param-max-price-per-ticket'
+) as HTMLInputElement | null;
+const paramMaxTotalInput = document.getElementById(
+  'param-max-total'
+) as HTMLInputElement | null;
 const persistentTargetDisplay = document.getElementById('persistent-target-display') as HTMLElement;
 const persistentAttemptsDisplay = document.getElementById(
   'persistent-attempts-display'
@@ -953,6 +959,14 @@ function rebuildScopedPlanFromMatrix(): ScopedPurchasePlan {
     jitterRatio: paramJitterInput
       ? parseFloat(paramJitterInput.value) || DEFAULT_PERSISTENCE_POLICY.jitterRatio
       : DEFAULT_PERSISTENCE_POLICY.jitterRatio,
+    maxPricePerTicket:
+      paramMaxPricePerTicketInput && paramMaxPricePerTicketInput.value.trim() !== ''
+        ? Math.max(0, parseInt(paramMaxPricePerTicketInput.value, 10))
+        : undefined,
+    maxTotal:
+      paramMaxTotalInput && paramMaxTotalInput.value.trim() !== ''
+        ? Math.max(0, parseInt(paramMaxTotalInput.value, 10))
+        : undefined,
   };
 
   const allowPartialQuantity = paramAllowPartialCheckbox
@@ -1963,6 +1977,8 @@ function resetPopupToBlank(): void {
   if (paramAttemptsInput) paramAttemptsInput.value = '1000';
   if (paramPollIntervalInput) paramPollIntervalInput.value = '2000';
   if (paramJitterInput) paramJitterInput.value = '0.2';
+  if (paramMaxPricePerTicketInput) paramMaxPricePerTicketInput.value = '0';
+  if (paramMaxTotalInput) paramMaxTotalInput.value = '0';
   if (paramAllowPartialCheckbox) paramAllowPartialCheckbox.checked = false;
   if (summaryConfirmCheckbox) summaryConfirmCheckbox.checked = false;
 
@@ -2089,6 +2105,15 @@ async function loadInitialData(): Promise<void> {
 
         if (paramJitterInput)
           paramJitterInput.value = String(currentScopedPlan.persistence.jitterRatio ?? 0.2);
+
+        if (paramMaxPricePerTicketInput)
+          paramMaxPricePerTicketInput.value = String(
+            currentScopedPlan.persistence.maxPricePerTicket ?? 0
+          );
+        if (paramMaxTotalInput)
+          paramMaxTotalInput.value = String(
+            currentScopedPlan.persistence.maxTotal ?? 0
+          );
 
         // Restore scheduled ARM input and status if a future startAt is saved
         const startAt = currentScopedPlan.persistence.startAt || config.scheduledArmAt;
@@ -2614,6 +2639,8 @@ showingSelect.addEventListener('change', onShowingChange);
   paramAttemptsInput,
   paramPollIntervalInput,
   paramJitterInput,
+  paramMaxPricePerTicketInput,
+  paramMaxTotalInput,
   paramAllowPartialCheckbox,
 ].forEach((el) => {
   if (el) {

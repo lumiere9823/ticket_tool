@@ -50,4 +50,29 @@ describe('RetryPolicy', () => {
     policy.recordAttempt(); // 4: 200 * 2^3 = 1600 -> capped at 1000
     expect(policy.getBackoffDelayMs()).toBe(1000);
   });
+
+  it('should strictly bound backoff delay below by initialDelayMs when currentAttempts is 0', () => {
+    const policy = new RetryPolicy({
+      initialDelayMs: 500,
+      backoffMultiplier: 1.5,
+      maxDelayMs: 3000,
+    });
+    // With 0 attempts, previously 500 * (1.5)^(-1) = 333ms. Must now be >= 500ms
+    expect(policy.attempts).toBe(0);
+    expect(policy.getBackoffDelayMs()).toBeGreaterThanOrEqual(500);
+    expect(policy.getBackoffDelayMs()).toBe(500);
+  });
+
+  it('should apply jitter and maintain lower bound of initialDelayMs', () => {
+    const policy = new RetryPolicy({
+      initialDelayMs: 500,
+      backoffMultiplier: 1.5,
+      maxDelayMs: 3000,
+    });
+    for (let i = 0; i < 50; i++) {
+      const delay = policy.getBackoffDelayMs(true, 0.2);
+      expect(delay).toBeGreaterThanOrEqual(500);
+      expect(delay).toBeLessThanOrEqual(600); // 500 + 20%
+    }
+  });
 });

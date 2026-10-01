@@ -310,6 +310,28 @@
                     value="0.2"
                   />
                 </div>
+                <div class="param-row">
+                  <label for="param-max-price-per-ticket">Trần giá mỗi vé (VND, 0 = vô hạn):</label>
+                  <input
+                    type="number"
+                    id="param-max-price-per-ticket"
+                    min="0"
+                    step="50000"
+                    value="0"
+                    placeholder="0 = không giới hạn"
+                  />
+                </div>
+                <div class="param-row">
+                  <label for="param-max-total">Trần tổng tiền (VND, 0 = vô hạn):</label>
+                  <input
+                    type="number"
+                    id="param-max-total"
+                    min="0"
+                    step="100000"
+                    value="0"
+                    placeholder="0 = không giới hạn"
+                  />
+                </div>
                 <div class="param-row full-width-param">
                   <label class="checkbox-label" for="param-allow-partial">
                     <input type="checkbox" id="param-allow-partial" />

@@ -356,4 +356,42 @@ describe('BookingSummaryVerifier', () => {
     expect(result.isValid).toBe(false);
     expect(result.errors.some((e) => e.includes('Unexpected item') || e.includes('extra items'))).toBe(true);
   });
+
+  it('should reject when ticket price exceeds maxPricePerTicket ceiling', () => {
+    const ceilingSelection: CurrentSelection = {
+      ...validSelection,
+      maxPricePerTicket: 1000000,
+    };
+
+    const summary: BookingSummary = {
+      items: [{ ticket: 'CAT 1 Standing', quantity: 2, price: 1500000 }],
+      subtotal: 3000000,
+      fees: 0,
+      currency: 'VND',
+      total: 3000000,
+    };
+
+    const result = BookingSummaryVerifier.verify(summary, ceilingSelection);
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some((e) => e.includes('maxPricePerTicket ceiling'))).toBe(true);
+  });
+
+  it('should reject when subtotal exceeds maxTotal ceiling', () => {
+    const totalCeilingSelection: CurrentSelection = {
+      ...validSelection,
+      maxTotal: 2500000,
+    };
+
+    const summary: BookingSummary = {
+      items: [{ ticket: 'CAT 1 Standing', quantity: 2, price: 1500000 }],
+      subtotal: 3000000,
+      fees: 0,
+      currency: 'VND',
+      total: 3000000,
+    };
+
+    const result = BookingSummaryVerifier.verify(summary, totalCeilingSelection);
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some((e) => e.includes('maxTotal ceiling'))).toBe(true);
+  });
 });
