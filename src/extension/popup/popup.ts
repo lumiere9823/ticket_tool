@@ -296,7 +296,10 @@ function updateShowingDropdown(snapshot: TicketCatalogSnapshot): void {
     // Auto-select the single showing so ticket filtering still works
     if (validShowings.length === 1 && validShowings[0]?.id) {
       currentPlan.showingId = validShowings[0].id;
-      showingSelect.innerHTML = `<option value="${validShowings[0].id}">${validShowings[0].name || validShowings[0].date || 'Suất diễn'}</option>`;
+      const opt = document.createElement('option');
+      opt.value = validShowings[0].id;
+      opt.textContent = validShowings[0].name || validShowings[0].date || 'Suất diễn';
+      showingSelect.replaceChildren(opt);
       showingSelect.value = validShowings[0].id;
     }
     return;
@@ -745,8 +748,13 @@ function addTicketRuleRow(rule?: Partial<TicketRule>): void {
 
 function renderCatalogTable(tickets: TicketOption[]): void {
   if (!tickets || tickets.length === 0) {
-    ticketsTbody.innerHTML =
-      '<tr><td colspan="4" class="empty-cell">No tickets discovered yet</td></tr>';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.className = 'empty-cell';
+    td.textContent = 'No tickets discovered yet';
+    tr.appendChild(td);
+    ticketsTbody.replaceChildren(tr);
     return;
   }
 
@@ -1003,11 +1011,23 @@ function updateScopedSummaryAndValidation(): void {
     return `• Suất [${t.showingId}] (Ưu tiên Rank ${t.rank}): ${t.ticketTypeIds.join(', ')}`;
   });
   if (summaryAllowed) {
-    summaryAllowed.innerHTML = `<strong>Sẽ chỉ mua (Số lượng: ${plan.quantity} vé):</strong><br>${allowedSummaries.join('<br>')}`;
+    const strong = document.createElement('strong');
+    strong.textContent = `Sẽ chỉ mua (Số lượng: ${plan.quantity} vé):`;
+    const frag = document.createDocumentFragment();
+    frag.appendChild(strong);
+    for (const summaryLine of allowedSummaries) {
+      frag.appendChild(document.createElement('br'));
+      frag.appendChild(document.createTextNode(summaryLine));
+    }
+    summaryAllowed.replaceChildren(frag);
   }
   if (summaryDisallowed) {
-    summaryDisallowed.innerHTML =
-      '<strong>Sẽ KHÔNG mua:</strong> Bất kỳ suất diễn hay hạng vé nào khác ngoài danh sách trên.';
+    const strong = document.createElement('strong');
+    strong.textContent = 'Sẽ KHÔNG mua:';
+    summaryDisallowed.replaceChildren(
+      strong,
+      document.createTextNode(' Bất kỳ suất diễn hay hạng vé nào khác ngoài danh sách trên.')
+    );
   }
   if (scopedSummaryBox) {
     scopedSummaryBox.style.display = 'flex';
@@ -1091,19 +1111,25 @@ function renderBasicTicketChecklist(snapshot?: TicketCatalogSnapshot): void {
   const tickets = current.tickets;
 
   if (!tickets || tickets.length === 0) {
-    basicTicketChecklist.innerHTML = `
-      <div class="empty-cell" style="padding: 12px; text-align: center; color: var(--text-muted);">
-        Chưa phát hiện vé. Vui lòng mở trang sự kiện trên trình duyệt rồi bấm nút ↺ ở trên.
-      </div>
-    `;
+    const emptyDiv = document.createElement('div');
+    emptyDiv.className = 'empty-cell';
+    emptyDiv.style.cssText = 'padding: 12px; text-align: center; color: var(--text-muted);';
+    emptyDiv.textContent =
+      'Chưa phát hiện vé. Vui lòng mở trang sự kiện trên trình duyệt rồi bấm nút ↺ ở trên.';
+    basicTicketChecklist.replaceChildren(emptyDiv);
     return;
   }
 
   // Update showings in basic mode
   if (current.showings && current.showings.length > 0 && basicShowingSelect) {
-    basicShowingSelect.innerHTML = current.showings
-      .map((s) => `<option value="${s.id}">${s.name || s.id}</option>`)
-      .join('');
+    basicShowingSelect.replaceChildren(
+      ...current.showings.map((s) => {
+        const opt = document.createElement('option');
+        opt.value = s.id || '';
+        opt.textContent = s.name || s.id || '';
+        return opt;
+      })
+    );
     if (showingSelect.value) {
       basicShowingSelect.value = showingSelect.value;
     } else if (current.showings[0]?.id) {
@@ -1119,7 +1145,7 @@ function renderBasicTicketChecklist(snapshot?: TicketCatalogSnapshot): void {
     basicShowingGroup.style.display = 'none';
   }
 
-  basicTicketChecklist.innerHTML = '';
+  basicTicketChecklist.replaceChildren();
 
   // Check if user previously had saved selections
   const savedTicketIds = new Set<string>();
@@ -1158,18 +1184,36 @@ function renderBasicTicketChecklist(snapshot?: TicketCatalogSnapshot): void {
 
     const priceFormatted = ticket.price ? `${formatPrice(ticket.price)}` : 'Chưa có giá';
 
-    item.innerHTML = `
-      <div class="basic-ticket-left">
-        <input type="checkbox" class="basic-ticket-cb" ${isChecked ? 'checked' : ''} />
-        <span class="basic-ticket-name" title="${ticket.name}">${ticket.name}</span>
-      </div>
-      <div class="basic-ticket-right">
-        <span class="basic-ticket-price">${priceFormatted}</span>
-        <span class="basic-ticket-badge ${badgeClass}">${badgeText}</span>
-      </div>
-    `;
+    const leftDiv = document.createElement('div');
+    leftDiv.className = 'basic-ticket-left';
 
-    const cb = item.querySelector('.basic-ticket-cb') as HTMLInputElement;
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'basic-ticket-cb';
+    cb.checked = isChecked;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'basic-ticket-name';
+    nameSpan.title = ticket.name;
+    nameSpan.textContent = ticket.name;
+
+    leftDiv.append(cb, nameSpan);
+
+    const rightDiv = document.createElement('div');
+    rightDiv.className = 'basic-ticket-right';
+
+    const priceSpan = document.createElement('span');
+    priceSpan.className = 'basic-ticket-price';
+    priceSpan.textContent = priceFormatted;
+
+    const badgeSpan = document.createElement('span');
+    badgeSpan.className = `basic-ticket-badge ${badgeClass}`;
+    badgeSpan.textContent = badgeText;
+
+    rightDiv.append(priceSpan, badgeSpan);
+
+    item.replaceChildren(leftDiv, rightDiv);
+
     cb.addEventListener('change', (e) => {
       e.stopPropagation();
       if (cb.checked) {
