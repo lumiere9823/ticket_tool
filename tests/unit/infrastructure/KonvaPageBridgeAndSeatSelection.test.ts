@@ -400,7 +400,7 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       expect(clicked).toBe(true);
     });
 
-    it('should dismiss cancel order modal and then proceed with continue button click', async () => {
+    it('should NOT dismiss cancel order modal and proceed with continue button click', async () => {
       const html = `
         <div id="booking-container">
           <!-- Cancel order modal blocking the page -->
@@ -428,14 +428,6 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       if (cancelBtn) {
         cancelBtn.click = () => {
           cancelDismissed = true;
-          // When cancel clicked, modal is dismissed
-          const modal = root.querySelector('.ant-modal');
-          if (modal && modal.parentElement) {
-            const parent = modal.parentElement as { children?: unknown[] };
-            if (parent.children) {
-              parent.children = parent.children.filter((c: unknown) => c !== modal);
-            }
-          }
         };
       }
 
@@ -448,7 +440,7 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
 
       const success = await adapter.proceedToNextStep();
       expect(success).toBe(true);
-      expect(cancelDismissed).toBe(true);
+      expect(cancelDismissed).toBe(false);
       expect(continueClicked).toBe(true);
     });
 
@@ -867,9 +859,11 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       };
 
       const adapter = new TicketboxJourneyAdapter(logger, root);
-      const dismissed = await adapter.dismissCancelOrderModal();
+      adapter.setCustomUrl('https://ticketbox.vn/events/26578/bookings/81077997936830/select-ticket');
+      adapter.markRecoveryInitiated();
+      const res = await adapter.confirmCancelOrderForReselect();
 
-      expect(dismissed).toBe(true);
+      expect(res.status).toBe('confirmed');
       expect(cancelOrderClicked).toBe(true);
       expect(stayClicked).toBe(false);
     });
@@ -910,6 +904,8 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       };
 
       const adapter = new TicketboxJourneyAdapter(logger, root);
+      adapter.setCustomUrl('https://ticketbox.vn/events/26578/bookings/81077997936830/select-ticket');
+      adapter.markRecoveryInitiated();
       const result = await adapter.detectAndHandleErrorModal();
 
       expect(result.hasError).toBe(true);

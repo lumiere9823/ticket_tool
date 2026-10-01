@@ -36,6 +36,12 @@ import { SeatmapApiResponse, TicketboxSeatMapParser } from './parsing/TicketboxS
 import { TicketboxSummaryParser } from './parsing/TicketboxSummaryParser';
 import { TicketboxFormParser } from './parsing/TicketboxFormParser';
 import { FormAutofillPolicy } from '../../domain/policies/FormAutofillPolicy';
+import { PurchaseState } from '../../domain/states/PurchaseState';
+
+export type CancelOrderConfirmationResult =
+  | { status: 'confirmed' }
+  | { status: 'blocked'; reason: string }
+  | { status: 'not_found' };
 
 /**
  * Internal typed interface for DOM elements that support mutations (click, value assignment).
@@ -154,6 +160,30 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   public navigationPending = false;
   private allowedShowingIds?: Set<string> | null = null;
   private scopedPlan?: ScopedPurchasePlan | null = null;
+  private recoveryInitiatedAt: number | null = null;
+  private customUrl?: string;
+  private stateProvider?: () => PurchaseState;
+
+  public markRecoveryInitiated(): void {
+    this.recoveryInitiatedAt = Date.now();
+    this.logger?.info('Assistant recovery initiated (window <= 5000ms for cancel order confirmation)');
+  }
+
+  public setCustomUrl(url: string): void {
+    this.customUrl = url;
+  }
+
+  public setCurrentStateProvider(provider: () => PurchaseState): void {
+    this.stateProvider = provider;
+  }
+
+  public getPageUrl(): string {
+    if (this.customUrl) return this.customUrl;
+    if (typeof window !== 'undefined' && window.location) {
+      return window.location.href;
+    }
+    return '';
+  }
 
   public blacklistSeat(seatIdOrLabel: string): void {
     if (!seatIdOrLabel) return;
@@ -2174,11 +2204,6 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const maxAttempts = typeof window !== 'undefined' || root.rawElement ? 25 : 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      // Auto-dismiss blocking "Hủy đơn hàng?" modal if present
-      if (attempt === 1 || attempt % 5 === 0) {
-        await this.dismissCancelOrderModal();
-      }
-
       const seenRaw = new Set<unknown>();
 
       const isCandidateValid = (el: DOMElementLike): boolean => {
@@ -2419,17 +2444,10 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   }
 
   /**
-   * Detects and dismisses the "Hủy đơn hàng?" confirmation dialog.
-   * On Ticketbox, when returning to seat selection or clicking "Chọn ghế khác" / "Chọn lại vé",
-   * a confirmation dialog appears:
-   * "Hủy đơn hàng?
-   *  Bạn có chắc chắn muốn tiếp tục?
-   *  • Bạn sẽ mất vị trí mình đã lựa chọn.
-   *  • Đơn hàng đang trong quá trình thanh toán hoặc đã thanh toán thành công cũng có thể bị huỷ."
-   * with buttons "Hủy đơn" (cancels current booking and unlocks re-selection) and "Ở lại" (stays on current form).
-   * We must click "Hủy đơn" to proceed with re-selection.
+   * Passive detection of "Hủy đơn hàng?" confirmation dialog.
+   * Strictly reads DOM signals; NEVER clicks any button or mutates page state.
    */
-  public async dismissCancelOrderModal(): Promise<boolean> {
+  public detectCancelOrderModal(): boolean {
     const root = this.getRoot();
     const doc = typeof document !== 'undefined' ? document : null;
 
@@ -2465,135 +2483,256 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           (text.includes('mất vị trí') || text.includes('hủy đơn') || text.includes('huỷ đơn')));
 
       if (isCancelOrderModal) {
-        this.logger?.info(
-          'Detected "Hủy đơn hàng?" confirmation modal, searching for "Hủy đơn" button'
-        );
-        const modalRaw = (modal.rawElement || modal) as HTMLElement;
-
-        let cancelBtn: DOMElementLike | HTMLElement | null = null;
-
-        const getClosestButton = (
-          el: DOMElementLike | HTMLElement
-        ): DOMElementLike | HTMLElement => {
-          let curr: DOMElementLike | HTMLElement | null = el;
-          while (curr) {
-            const tag = (curr.tagName || '').toUpperCase();
-            const role =
-              typeof curr.getAttribute === 'function' ? curr.getAttribute('role') : undefined;
-            if (tag === 'BUTTON' || tag === 'A' || role === 'button') {
-              return curr;
-            }
-            if ('closest' in curr && typeof (curr as HTMLElement).closest === 'function') {
-              const found = (curr as HTMLElement).closest('button, a, [role="button"]');
-              if (found instanceof HTMLElement) return found;
-            }
-            curr = (curr.parentElement as DOMElementLike | HTMLElement | null) ?? null;
-          }
-          return el;
-        };
-
-        if (modalRaw && typeof modalRaw.querySelectorAll === 'function') {
-          const clickables = Array.from(
-            modalRaw.querySelectorAll('button, a, [role="button"], span, div')
-          ) as (DOMElementLike | HTMLElement)[];
-
-          // 1. Direct match: element text is strictly "Hủy đơn" or "Huỷ đơn"
-          const directMatch = clickables.find((el) => {
-            const t = (el.textContent || '').trim().toLowerCase();
-            return (
-              (t === 'hủy đơn' ||
-                t === 'huỷ đơn' ||
-                t === 'hủy đơn hàng' ||
-                t === 'huỷ đơn hàng') &&
-              !t.includes('ở lại') &&
-              !t.includes('?')
-            );
-          });
-
-          if (directMatch) {
-            cancelBtn = getClosestButton(directMatch);
-          }
-
-          // 2. Button element whose text contains "hủy đơn" / "huỷ đơn"
-          if (!cancelBtn) {
-            const btnEl = clickables.find((el) => {
-              const tag = (el.tagName || '').toUpperCase();
-              const isBtn =
-                tag === 'BUTTON' ||
-                tag === 'A' ||
-                (typeof el.getAttribute === 'function' && el.getAttribute('role') === 'button');
-              if (!isBtn) return false;
-              const t = (el.textContent || '').trim().toLowerCase();
-              return (
-                (t.includes('hủy đơn') || t.includes('huỷ đơn')) &&
-                !t.includes('ở lại') &&
-                !t.includes('?') &&
-                !t.includes('chắc chắn')
-              );
-            });
-            if (btnEl) {
-              cancelBtn = btnEl;
-            }
-          }
-
-          // 3. Any element in modal whose text includes "hủy đơn" / "huỷ đơn"
-          if (!cancelBtn) {
-            const anyEl = clickables.find((el) => {
-              const t = (el.textContent || '').trim().toLowerCase();
-              return (
-                (t.includes('hủy đơn') || t.includes('huỷ đơn')) &&
-                !t.includes('ở lại') &&
-                !t.includes('?') &&
-                !t.includes('chắc chắn') &&
-                !t.includes('tiếp tục')
-              );
-            });
-            if (anyEl) {
-              cancelBtn = getClosestButton(anyEl);
-            }
-          }
-        }
-
-        // Global fallback if not found within modal container
-        if (!cancelBtn && doc) {
-          const allGlobal = Array.from(
-            doc.querySelectorAll('button, a, [role="button"]')
-          ) as HTMLElement[];
-          const globalMatch = allGlobal.find((el) => {
-            const t = (el.textContent || '').trim().toLowerCase();
-            return (
-              (t === 'hủy đơn' ||
-                t === 'huỷ đơn' ||
-                t === 'hủy đơn hàng' ||
-                t === 'huỷ đơn hàng') &&
-              !t.includes('ở lại') &&
-              !t.includes('?')
-            );
-          });
-          if (globalMatch) {
-            cancelBtn = globalMatch;
-          }
-        }
-
-        const toDOMElementLike = (el: unknown): DOMElementLike => {
-          if (el && typeof el === 'object' && 'tagName' in el && 'querySelector' in el) {
-            return el as DOMElementLike;
-          }
-          return wrapBrowserElement(el as HTMLElement);
-        };
-
-        if (cancelBtn && typeof cancelBtn.click === 'function') {
-          this.logger?.info(
-            'Clicking "Hủy đơn" button to cancel order and return to seat selection'
-          );
-          this.clickElement(toDOMElementLike(cancelBtn));
-          await new Promise((r) => setTimeout(r, 600));
-          return true;
-        }
+        return true;
       }
     }
 
     return false;
+  }
+
+  /**
+   * Searches for and clicks the "Hủy đơn" button within the modal.
+   * Internal helper; only called after all 4 safety preconditions in confirmCancelOrderForReselect pass.
+   */
+  private async performCancelOrderButtonClick(): Promise<boolean> {
+    const root = this.getRoot();
+    const doc = typeof document !== 'undefined' ? document : null;
+
+    const isExcludedNode = (node: DOMElementLike | Element | null | undefined): boolean => {
+      if (!node) return true;
+      const tag = (node.tagName || '').toUpperCase();
+      return tag === 'BODY' || tag === 'HTML';
+    };
+
+    const modalSelector =
+      '.ant-modal-content, [role="dialog"], .ant-modal, [class*="modal-content"], [class*="modal-body"], [class*="modal-dialog"], [class*="tbox-modal"], [class*="popup"], [class*="alert"]';
+
+    const modalCandidates: DOMElementLike[] = [];
+    if (root && !isExcludedNode(root)) {
+      const inRoot = root.querySelectorAll(modalSelector);
+      modalCandidates.push(...inRoot.filter((el) => !isExcludedNode(el)));
+    }
+    if (doc) {
+      const inDoc = Array.from(doc.querySelectorAll(modalSelector))
+        .filter((el) => !isExcludedNode(el))
+        .map((el) => wrapBrowserElement(el));
+      modalCandidates.push(...inDoc);
+    }
+
+    for (const modal of modalCandidates) {
+      const text = (modal.textContent || '').toLowerCase();
+      if (!text) continue;
+
+      const isCancelOrderModal =
+        text.includes('hủy đơn hàng') ||
+        text.includes('huỷ đơn hàng') ||
+        (text.includes('bạn có chắc chắn muốn tiếp tục') &&
+          (text.includes('mất vị trí') || text.includes('hủy đơn') || text.includes('huỷ đơn')));
+
+      if (!isCancelOrderModal) continue;
+
+      this.logger?.info('Detected "Hủy đơn hàng?" confirmation modal, searching for "Hủy đơn" button');
+      const modalRaw = (modal.rawElement || modal) as HTMLElement;
+      let cancelBtn: DOMElementLike | HTMLElement | null = null;
+
+      const getClosestButton = (
+        el: DOMElementLike | HTMLElement
+      ): DOMElementLike | HTMLElement => {
+        let curr: DOMElementLike | HTMLElement | null = el;
+        while (curr) {
+          const tag = (curr.tagName || '').toUpperCase();
+          const role =
+            typeof curr.getAttribute === 'function' ? curr.getAttribute('role') : undefined;
+          if (tag === 'BUTTON' || tag === 'A' || role === 'button') {
+            return curr;
+          }
+          if ('closest' in curr && typeof (curr as HTMLElement).closest === 'function') {
+            const found = (curr as HTMLElement).closest('button, a, [role="button"]');
+            if (found instanceof HTMLElement) return found;
+          }
+          curr = (curr.parentElement as DOMElementLike | HTMLElement | null) ?? null;
+        }
+        return el;
+      };
+
+      if (modalRaw && typeof modalRaw.querySelectorAll === 'function') {
+        const clickables = Array.from(
+          modalRaw.querySelectorAll('button, a, [role="button"], span, div')
+        ) as (DOMElementLike | HTMLElement)[];
+
+        // 1. Direct match: element text is strictly "Hủy đơn" or "Huỷ đơn"
+        const directMatch = clickables.find((el) => {
+          const t = (el.textContent || '').trim().toLowerCase();
+          return (
+            (t === 'hủy đơn' ||
+              t === 'huỷ đơn' ||
+              t === 'hủy đơn hàng' ||
+              t === 'huỷ đơn hàng') &&
+            !t.includes('ở lại') &&
+            !t.includes('?')
+          );
+        });
+
+        if (directMatch) {
+          cancelBtn = getClosestButton(directMatch);
+        }
+
+        // 2. Button element whose text contains "hủy đơn" / "huỷ đơn"
+        if (!cancelBtn) {
+          const btnEl = clickables.find((el) => {
+            const tag = (el.tagName || '').toUpperCase();
+            const isBtn =
+              tag === 'BUTTON' ||
+              tag === 'A' ||
+              (typeof el.getAttribute === 'function' && el.getAttribute('role') === 'button');
+            if (!isBtn) return false;
+            const t = (el.textContent || '').trim().toLowerCase();
+            return (
+              (t.includes('hủy đơn') || t.includes('huỷ đơn')) &&
+              !t.includes('ở lại') &&
+              !t.includes('?') &&
+              !t.includes('chắc chắn')
+            );
+          });
+          if (btnEl) {
+            cancelBtn = btnEl;
+          }
+        }
+
+        // 3. Any element in modal whose text includes "hủy đơn" / "huỷ đơn"
+        if (!cancelBtn) {
+          const anyEl = clickables.find((el) => {
+            const t = (el.textContent || '').trim().toLowerCase();
+            return (
+              (t.includes('hủy đơn') || t.includes('huỷ đơn')) &&
+              !t.includes('ở lại') &&
+              !t.includes('?') &&
+              !t.includes('chắc chắn') &&
+              !t.includes('tiếp tục')
+            );
+          });
+          if (anyEl) {
+            cancelBtn = getClosestButton(anyEl);
+          }
+        }
+      }
+
+      // Global fallback if not found within modal container
+      if (!cancelBtn && doc) {
+        const allGlobal = Array.from(
+          doc.querySelectorAll('button, a, [role="button"]')
+        ) as HTMLElement[];
+        const globalMatch = allGlobal.find((el) => {
+          const t = (el.textContent || '').trim().toLowerCase();
+          return (
+            (t === 'hủy đơn' ||
+              t === 'huỷ đơn' ||
+              t === 'hủy đơn hàng' ||
+              t === 'huỷ đơn hàng') &&
+            !t.includes('ở lại') &&
+            !t.includes('?')
+          );
+        });
+        if (globalMatch) {
+          cancelBtn = globalMatch;
+        }
+      }
+
+      const toDOMElementLike = (el: unknown): DOMElementLike => {
+        if (el && typeof el === 'object' && 'tagName' in el && 'querySelector' in el) {
+          return el as DOMElementLike;
+        }
+        return wrapBrowserElement(el as HTMLElement);
+      };
+
+      if (cancelBtn && typeof cancelBtn.click === 'function') {
+        this.logger?.info(
+          'Clicking "Hủy đơn" button to cancel order and return to seat selection'
+        );
+        this.clickElement(toDOMElementLike(cancelBtn));
+        await new Promise((r) => setTimeout(r, 600));
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Confirms order cancellation ONLY when all 4 strict safety invariants are satisfied:
+   * (a) URL is /select-ticket or /question-form
+   * (b) URL does NOT contain /payment or /checkout
+   * (c) State machine is not in PAYMENT_GATE, PAYMENT, CONFIRMATION_PENDING, CONFIRMED, HELD, CHECKOUT
+   * (d) Assistant explicitly initiated recovery ("Chọn ghế khác" / "Chọn lại vé") within <= 5000ms
+   */
+  public async confirmCancelOrderForReselect(): Promise<CancelOrderConfirmationResult> {
+    const rawUrl = this.getPageUrl();
+    const url = rawUrl.toLowerCase();
+
+    // Condition (a): URL must be /select-ticket or /question-form
+    const isAllowedPath = url.includes('/select-ticket') || url.includes('/question-form');
+    if (!isAllowedPath) {
+      this.logger?.warn('Cancel order confirmation blocked: URL is not /select-ticket or /question-form', {
+        url: rawUrl,
+      });
+      return { status: 'blocked', reason: 'URL must be /select-ticket or /question-form' };
+    }
+
+    // Condition (b): URL must NOT contain /payment or /checkout
+    const isPaymentPath = url.includes('/payment') || url.includes('/checkout');
+    if (isPaymentPath) {
+      this.logger?.warn('Cancel order confirmation blocked: URL contains /payment or /checkout', {
+        url: rawUrl,
+      });
+      return { status: 'blocked', reason: 'URL cannot contain /payment or /checkout' };
+    }
+
+    // Condition (c): state machine state is NOT in forbidden states
+    const FORBIDDEN_STATES: PurchaseState[] = [
+      PurchaseState.PAYMENT_GATE,
+      PurchaseState.PAYMENT,
+      PurchaseState.CONFIRMATION_PENDING,
+      PurchaseState.CONFIRMED,
+      PurchaseState.HELD,
+      PurchaseState.CHECKOUT,
+    ];
+    const currentState = this.stateProvider ? this.stateProvider() : undefined;
+    if (currentState && FORBIDDEN_STATES.includes(currentState)) {
+      this.logger?.warn('Cancel order confirmation blocked: current state forbids canceling order', {
+        currentState,
+      });
+      return { status: 'blocked', reason: `State ${currentState} forbids canceling order` };
+    }
+
+    // Condition (d): assistant initiated recovery within last 5000ms
+    const now = Date.now();
+    if (!this.recoveryInitiatedAt || now - this.recoveryInitiatedAt > 5000) {
+      this.logger?.warn('Cancel order confirmation blocked: recovery was not initiated by assistant within 5s', {
+        recoveryInitiatedAt: this.recoveryInitiatedAt,
+        elapsedMs: this.recoveryInitiatedAt ? now - this.recoveryInitiatedAt : null,
+      });
+      return { status: 'blocked', reason: 'Assistant recovery was not initiated within last 5 seconds' };
+    }
+
+    if (!this.detectCancelOrderModal()) {
+      return { status: 'not_found' };
+    }
+
+    const clicked = await this.performCancelOrderButtonClick();
+    if (clicked) {
+      this.recoveryInitiatedAt = null;
+      return { status: 'confirmed' };
+    }
+
+    return { status: 'not_found' };
+  }
+
+  /**
+   * Deprecated backward-compatible wrapper. Calls confirmCancelOrderForReselect and returns boolean.
+   */
+  public async dismissCancelOrderModal(): Promise<boolean> {
+    const res = await this.confirmCancelOrderForReselect();
+    return res.status === 'confirmed';
   }
 
   /**
@@ -2610,7 +2749,8 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
     const doc = typeof document !== 'undefined' ? document : null;
 
     // 0. Check if "Hủy đơn hàng?" confirmation dialog is already open on screen
-    const cancelModalDismissed = await this.dismissCancelOrderModal();
+    // (Only dismissed if recovery was explicitly initiated and safety invariants pass)
+    const cancelModalDismissed = (await this.confirmCancelOrderForReselect()).status === 'confirmed';
     if (cancelModalDismissed) {
       let seatLabel: string | undefined;
       const containers: DOMElementLike[] = [];
@@ -2757,13 +2897,14 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
         if (actionBtn && typeof (actionBtn as MutableDOMElement).click === 'function') {
           this.logger?.info('Clicking "Chọn ghế khác" button in error modal to recover');
+          this.markRecoveryInitiated();
           this.clickElement(actionBtn);
           await new Promise((r) => setTimeout(r, 400));
 
           // Check if "Hủy đơn hàng?" confirmation modal pops up after clicking "Chọn ghế khác"
           for (let i = 0; i < 3; i++) {
-            const dismissed = await this.dismissCancelOrderModal();
-            if (dismissed) break;
+            const res = await this.confirmCancelOrderForReselect();
+            if (res.status === 'confirmed' || res.status === 'blocked') break;
             await new Promise((r) => setTimeout(r, 300));
           }
         }
@@ -2785,13 +2926,14 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               });
               if (changeTicketLink) {
                 this.logger?.info('Clicking "Chọn lại vé" in sidebar to return to seat map');
+                this.markRecoveryInitiated();
                 this.clickElement(wrapBrowserElement(changeTicketLink as HTMLElement));
                 await new Promise((r) => setTimeout(r, 500));
 
                 // Check if "Hủy đơn hàng?" confirmation modal pops up after clicking "Chọn lại vé"
                 for (let i = 0; i < 3; i++) {
-                  const dismissed = await this.dismissCancelOrderModal();
-                  if (dismissed) break;
+                  const res = await this.confirmCancelOrderForReselect();
+                  if (res.status === 'confirmed' || res.status === 'blocked') break;
                   await new Promise((r) => setTimeout(r, 300));
                 }
               }

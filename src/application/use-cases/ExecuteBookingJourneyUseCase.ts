@@ -51,6 +51,15 @@ export class ExecuteBookingJourneyUseCase {
   ) {
     this.MAX_RETRIES = config?.maxRetries ?? 8;
     this.MAX_AREA_COLLISIONS = config?.maxAreaCollisions ?? 2;
+    if (
+      this.adapter &&
+      'setCurrentStateProvider' in this.adapter &&
+      typeof (this.adapter as { setCurrentStateProvider?: (fn: () => PurchaseState) => void }).setCurrentStateProvider === 'function'
+    ) {
+      (this.adapter as { setCurrentStateProvider: (fn: () => PurchaseState) => void }).setCurrentStateProvider(
+        () => this.stateMachine.state
+      );
+    }
   }
 
   private getState(): PurchaseState {

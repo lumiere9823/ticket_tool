@@ -20,6 +20,7 @@ const messageBus = new ChromeMessageBus(logger);
 const adapter = new TicketboxJourneyAdapter(logger);
 const storage = new ChromeStorageRepository();
 const stateMachine = new PurchaseStateMachine(PurchaseState.MONITORING);
+adapter.setCurrentStateProvider(() => stateMachine.state);
 
 function isExtensionContextValid(): boolean {
   try {
