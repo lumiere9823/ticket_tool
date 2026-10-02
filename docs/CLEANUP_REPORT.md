@@ -63,19 +63,35 @@ No production credentials, cookies, OTPs, CVVs, tokens, or live PII were added.
 
 ### C — Test cleanup
 
-Pending: test inventory/splitting, performance-test separation, three-run and
-shuffle checks, coverage-scope update, and targeted characterization/negative
-tests.
+- Inventory: `tests/unit` contains 49 files / 595 tests; `tests/performance`
+  contains 11 files / 30 tests. The slowest files are
+  `KonvaPageBridgeAndSeatSelection.test.ts`, `BookingJourneyCases.test.ts`,
+  and `event-to-reservation.test.ts`.
+- Stability: three consecutive full runs and one `--sequence.shuffle` run all
+  passed 60 files / 625 tests. No `.skip`, `.only`, `.todo`, or empty assertion
+  patterns were found.
+- Added `npm run test:perf` for an explicit 11-file / 30-test performance run.
+  Performance tests remain included in `npm test` because repeated runs did not
+  show instability; the separate command is available for focused benchmarking.
+- Coverage scope now includes `src/domain`, `src/application`,
+  `src/infrastructure`, and `src/extension`. The expanded V8 report measured
+  **51.55% statements**, **72.66% branches**, and **72.79% functions** across
+  all included source. No threshold was introduced.
+- No new characterization or negative tests were added in this pass: existing
+  suites already cover bridge nonce/source/origin/action rejection, network
+  host/credential safety, sanitized logging, PII retention, consent/payment
+  gates, and parser/form behavior. Adding tests solely to inflate coverage was
+  avoided.
 
 ## 3. Measured before/after
 
-| Metric            |                                   Baseline | After completed cleanup groups |
-| ----------------- | -----------------------------------------: | -----------------------------: |
-| Test files        |                                         60 |                             60 |
-| Tests             |                                        625 |                            625 |
-| TypeScript errors |                            24 pre-existing |              0 after `242373d` |
-| ESLint errors     |                                          0 |                              0 |
-| Coverage          | Existing V8 report; no mandatory threshold |         To be remeasured in C4 |
+| Metric            |                                   Baseline |                         After completed cleanup groups |
+| ----------------- | -----------------------------------------: | -----------------------------------------------------: |
+| Test files        |                                         60 |                                                     60 |
+| Tests             |                                        625 |                                                    625 |
+| TypeScript errors |                            24 pre-existing |                                      0 after `242373d` |
+| ESLint errors     |                                          0 |                                                      0 |
+| Coverage          | Existing V8 report; no mandatory threshold | 51.55% statements / 72.66% branches / 72.79% functions |
 
 ## 4. Documentation/code discrepancies resolved
 
@@ -117,5 +133,5 @@ npm run build      PASS
 ```
 
 `npm run docs:check` is the documentation validation command and is included in
-`npm run ci`. Final C-section metrics and the final `npm run ci` result will be
-added before this report is marked complete.
+`npm run ci`. The final `npm run ci` result is recorded after the last cleanup
+group is committed.

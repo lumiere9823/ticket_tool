@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:perf": "vitest run tests/performance",
     "test:contracts": "vitest run tests/unit/extension/PopupViews.contract.test.ts",
     "test:coverage": "vitest run --coverage",
     "docs:check": "npx tsx scripts/check-docs.ts",
