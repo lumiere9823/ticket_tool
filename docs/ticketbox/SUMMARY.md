@@ -1,7 +1,8 @@
 # Ticketbox Purchase Assistant — 1-Page Summary
 
-> Full detail lives in `docs/ticketbox/04-state-machine.md` and
-> `docs/ticketbox/08-security-and-compliance.md`. This page is a map, not a
+> Full detail lives in `docs/ticketbox/04-state-machine.md`,
+> `docs/ticketbox/08-security-and-compliance.md`, and the comprehensive
+> **[MASTER_DOCUMENTATION.md](MASTER_DOCUMENTATION.md)**. This page is a map, not a
 > replacement.
 
 ## What this is
