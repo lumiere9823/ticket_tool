@@ -114,4 +114,8 @@ export interface TicketboxPageAdapter {
   isSeatBlacklisted?(seatIdOrLabel?: string | null): boolean;
   getBlacklistedSeats?(): Set<string>;
   getRoot?(): unknown;
+  fetchShowingApi?(showingId: string): Promise<unknown>;
+  fetchSeatmapApi?(showingId: string): Promise<unknown>;
+  fetchEventApi?(eventId: string): Promise<unknown>;
+  fetchQuestionFormApi?(eventId: string): Promise<unknown>;
 }
