@@ -17,7 +17,7 @@ Người dùng cấu hình ma trận phạm vi mục tiêu gồm (Suất diễn/
 
 - **BR-S01 Scope Guard Cứng:** Chỉ chọn cặp `(showingId, ticketTypeId)` nằm trong whitelist. Chỉ còn vé ngoài whitelist thì không mua, ở lại chờ (`WAITING_FOR_STOCK`). Khóa chính là `(showingId, ticketTypeId)`. Khớp tên chỉ được dùng trong cùng `showingId` khi tên là duy nhất; nếu trùng tên hoặc mơ hồ phải loại ứng viên với lý do `AMBIGUOUS_MATCH` (không đoán).
 - **BR-S02 Whitelist Rỗng:** Không cho phép kích hoạt `ARM` khi danh sách mục tiêu rỗng hoặc không chọn vé nào. Không có chế độ "mua tất cả".
-- **BR-S03 Giới Hạn Kiên Trì:** Phải có trần thời gian (`maxDurationMinutes`, mặc định 30), trần số lần thử (`maxAttempts`, mặc định 200), giãn cách poll tối thiểu (`pollIntervalMs`, sàn 1500ms) kèm tỷ lệ biến thiên (`jitterRatio`, mặc định 0.2). Mọi loop đệ quy dùng `setTimeout` với sàn bắt buộc `Math.max(1500, delay)`. Cấm dùng `setInterval`.
+- **BR-S03 Giới Hạn Kiên Trì:** Phải có trần thời gian (`maxDurationMinutes`, mặc định 120, trần cứng 240), trần số lần thử (`maxAttempts`, mặc định 1000, trần cứng 5000), giãn cách poll tối thiểu (`pollIntervalMs`, sàn 1500ms) kèm tỷ lệ biến thiên (`jitterRatio`, mặc định 0.2). Mọi loop đệ quy dùng `setTimeout` với sàn bắt buộc `Math.max(1500, delay)`. Cấm dùng `setInterval`.
 - **BR-S04 Bằng Chứng Máy Chủ:** `SELECTED ≠ RESERVED`. Chỉ ghi nhận giữ chỗ khi có bằng chứng phản hồi máy chủ.
 - **BR-S05 Human Payment Gate:** Luôn dừng lại trước khâu thanh toán tiền cuối cùng (`PAYMENT_GATE`). Không tự thanh toán.
 - **BR-S06 Thử Thách Bảo Mật:** Gặp CAPTCHA / Waiting Room / Queue-it / mất phiên đăng nhập thì chuyển `HUMAN_INTERVENTION_REQUIRED` và dừng tự động.
@@ -42,8 +42,8 @@ export interface ScopedTarget {
 }
 
 export interface PersistencePolicy {
-  maxDurationMinutes: number; // Mặc định 30
-  maxAttempts: number; // Mặc định 200
+  maxDurationMinutes: number; // Mặc định 120 (DEFAULT_PERSISTENCE_POLICY), trần cứng 240
+  maxAttempts: number; // Mặc định 1000 (DEFAULT_PERSISTENCE_POLICY), trần cứng 5000
   pollIntervalMs: number; // Mặc định 2000, sàn tối thiểu 1500
   jitterRatio: number; // Mặc định 0.2
   stopAt?: string; // ISO timestamp string tùy chọn

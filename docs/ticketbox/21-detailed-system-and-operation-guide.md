@@ -435,7 +435,7 @@ npm run build
      - _Theo thứ tự mục tiêu (Rank)_ (Mặc định).
      - _Ưu tiên suất diễn trước_.
      - _Ưu tiên hạng vé trước_.
-   - Mở mục **"Thông số kiên trì"** để điều chỉnh trần thời gian (mặc định 30 phút), trần số lần thử (mặc định 200 lần), giãn cách poll (mặc định 2000ms, sàn tối thiểu 1500ms) và tỷ lệ jitter (0.2).
+   - Mở mục **"Thông số kiên trì"** để điều chỉnh trần thời gian (mặc định 120 phút, trần cứng 240), trần số lần thử (mặc định 1000 lần, trần cứng 5000), giãn cách poll (mặc định 2000ms, sàn tối thiểu 1500ms) và tỷ lệ jitter (0.2).
 3. Đọc kỹ bản tóm tắt tại hộp **"XÁC NHẬN PHẠM VI MUA VÉ"**:
    - `Sẽ chỉ mua:` Danh sách các cặp Suất diễn × Hạng vé bạn đã tick.
    - `Sẽ KHÔNG mua:` Mọi suất diễn hoặc hạng vé còn lại.

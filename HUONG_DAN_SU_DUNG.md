@@ -101,9 +101,9 @@ Chế độ này dành cho các đợt mở bán cực kỳ gay cấn, có nhi�
 
 ### 2. Thông số kiên trì (Persistence Policy):
 
-- **Trần thời gian (phút):** Mặc định 120 phút (hoặc đặt `0` = vô hạn, săn cho tới khi bạn bấm dừng).
-- **Trần số lần thử:** Mặc định 1000 lần thử (hoặc đặt `0` = vô hạn).
-- **Giãn cách poll (ms):** Mặc định `1800ms` (1.8 giây mỗi lần quét để vừa bắt kịp vé nhả vừa không bị Cloudflare / Ticketbox chặn IP).
+- **Trần thời gian (phút):** Mặc định 120 phút, trần cứng 240 phút. Giá trị `0` hoặc để trống sẽ **không** phải là vô hạn — hệ thống tự động dùng lại mặc định 120 phút (Rule 07: không tự động hoá vô hạn).
+- **Trần số lần thử:** Mặc định 1000 lần thử, trần cứng 5000 lần. Giá trị `0` hoặc để trống cũng rơi về mặc định 1000, không phải vô hạn.
+- **Giãn cách poll (ms):** Mặc định `2000ms` (2 giây mỗi lần quét, sàn tối thiểu bắt buộc `1500ms` để vừa bắt kịp vé nhả vừa không bị Cloudflare / Ticketbox chặn IP).
 - **Tỷ lệ Jitter:** Dao động ngẫu nhiên ±20% để mô phỏng hành vi tự nhiên của con người.
 
 ### 3. Scope Confirmation Box:

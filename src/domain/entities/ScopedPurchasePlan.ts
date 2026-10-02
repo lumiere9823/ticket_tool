@@ -10,8 +10,8 @@ export interface ScopedTarget {
 }
 
 export interface PersistencePolicy {
-  maxDurationMinutes: number; // default 30
-  maxAttempts: number; // default 200
+  maxDurationMinutes: number; // default 120 (see DEFAULT_PERSISTENCE_POLICY below)
+  maxAttempts: number; // default 1000 (see DEFAULT_PERSISTENCE_POLICY below)
   pollIntervalMs: number; // default 2000, minimum floor: 1500
   jitterRatio: number; // default 0.2
   stopAt?: string | undefined; // ISO timestamp string, optional
