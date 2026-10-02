@@ -266,4 +266,145 @@ describe('P1-5: Single Source of Truth for State Machine', () => {
       expect(getMirroredJourneyContext()).toBeNull();
     });
   });
+
+  describe('Service Worker Lifecycle & Concurrency Invariants (T5 / ADR-008)', () => {
+    let setBadgeTextMock = vi.fn();
+    let setBadgeBackgroundColorMock = vi.fn();
+    let localStore: Record<string, unknown> = {};
+
+    beforeEach(() => {
+      localStore = {};
+      setBadgeTextMock = vi.fn();
+      setBadgeBackgroundColorMock = vi.fn();
+      vi.stubGlobal('chrome', {
+        runtime: {
+          id: 'test-extension-id',
+          getURL: (path = '') => `chrome-extension://test-extension-id/${path}`,
+        },
+        storage: {
+          local: {
+            get: vi.fn((keys: unknown, cb: (res: Record<string, unknown>) => void) => {
+              if (typeof keys === 'string') {
+                cb({ [keys]: localStore[keys] });
+              } else if (Array.isArray(keys)) {
+                const res: Record<string, unknown> = {};
+                for (const k of keys) res[k] = localStore[k];
+                cb(res);
+              } else {
+                cb({ ...localStore });
+              }
+            }),
+            set: vi.fn((items: Record<string, unknown>, cb?: () => void) => {
+              Object.assign(localStore, items);
+              if (cb) cb();
+            }),
+            remove: vi.fn((keys: string | string[], cb?: () => void) => {
+              const arr = Array.isArray(keys) ? keys : [keys];
+              for (const k of arr) delete localStore[k];
+              if (cb) cb();
+            }),
+          },
+        },
+        action: {
+          setBadgeText: setBadgeTextMock,
+          setBadgeBackgroundColor: setBadgeBackgroundColorMock,
+        },
+        alarms: {
+          create: vi.fn(),
+          clear: vi.fn(),
+        },
+      });
+      resetMirroredJourneyContext();
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('Service Worker restart: halts safely to STOPPED when restarting in critical state (HELD, RESERVING, PAYMENT)', async () => {
+      const storage = new ChromeStorageRepository();
+      const criticalContext: StateContext = {
+        currentState: PurchaseState.RESERVING,
+        attemptId: 'att-crit-restart',
+        updatedAt: new Date().toISOString(),
+      };
+      await storage.saveLifecycleState(criticalContext);
+
+      // Re-initialize worker as if Chrome restarted the background process
+      const { stateMachine: swStateMachine, initializeWorker } = await import(
+        '../../../src/extension/background/service-worker'
+      );
+      await initializeWorker();
+
+      expect(swStateMachine.state).toBe(PurchaseState.STOPPED);
+      expect(swStateMachine.getContext().failureMessage).toContain(
+        "Interrupted during critical state 'RESERVING'"
+      );
+    });
+
+    it('Tab reload: preserves PAYMENT_GATE state and rejects silent downgrade to MONITORING or INIT', async () => {
+      const storage = new ChromeStorageRepository();
+      const paymentContext: StateContext = {
+        currentState: PurchaseState.PAYMENT_GATE,
+        attemptId: 'tab-reload-attempt',
+        eventId: 'event-xyz',
+        updatedAt: new Date().toISOString(),
+      };
+      await storage.saveJourneyState(paymentContext);
+
+      // Emulate fresh Content Script boot on reloaded tab
+      const restoredSm = new PurchaseStateMachine(PurchaseState.INIT);
+      const rehydrated = await storage.getJourneyState();
+      expect(rehydrated).not.toBeNull();
+
+      restoredSm.restore(rehydrated!);
+      expect(restoredSm.state).toBe(PurchaseState.PAYMENT_GATE);
+      expect(restoredSm.state).not.toBe(PurchaseState.MONITORING);
+      expect(restoredSm.state).not.toBe(PurchaseState.INIT);
+    });
+
+    it('Dual-tab arming race: second tab arming registers new tabId and updates configuration safely', async () => {
+      const { storage: swStorage } = await import(
+        '../../../src/extension/background/service-worker'
+      );
+
+      // Tab 1 arms
+      await handleServiceWorkerMessage(
+        {
+          type: 'ARM_REQUESTED',
+          timestamp: new Date().toISOString(),
+          eventUrl: 'https://ticketbox.vn/event/rock-concert-12345',
+          categoryPriority: ['VIP'],
+          quantity: 2,
+          targetTabId: 101,
+        },
+        { id: 'test-extension-id', frameId: 0 }
+      );
+
+      let config = await swStorage.getConfiguration(true);
+      let pState = await swStorage.getPersistentState();
+      expect(config?.armedTabId).toBe(101);
+      expect(pState?.armedTabId).toBe(101);
+
+      // Tab 2 arms for same or different event
+      await handleServiceWorkerMessage(
+        {
+          type: 'ARM_REQUESTED',
+          timestamp: new Date().toISOString(),
+          eventUrl: 'https://ticketbox.vn/event/rock-concert-12345',
+          categoryPriority: ['GA'],
+          quantity: 1,
+          targetTabId: 202,
+        },
+        { id: 'test-extension-id', frameId: 0 }
+      );
+
+      config = await swStorage.getConfiguration(true);
+      pState = await swStorage.getPersistentState();
+      // Coordinator updates ownership to the latest requesting tab cleanly
+      expect(config?.armedTabId).toBe(202);
+      expect(pState?.armedTabId).toBe(202);
+      expect(config?.preferences?.categoryPriority).toEqual(['GA']);
+    });
+  });
 });

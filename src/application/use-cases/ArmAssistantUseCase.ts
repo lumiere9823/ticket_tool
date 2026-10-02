@@ -12,6 +12,8 @@ export interface ArmAssistantRequest {
   categoryPriority: string[];
   quantity: number;
   allowFallback?: boolean | undefined;
+  armedTabId?: number | undefined;
+  armedEventId?: string | undefined;
   userProfile?:
     | {
         fullName: string;
@@ -57,6 +59,16 @@ export class ArmAssistantUseCase {
     const config: AssistantConfiguration = {
       ...existing,
       targetEventUrl: request.eventUrl,
+      ...(request.armedTabId !== undefined
+        ? { armedTabId: request.armedTabId }
+        : existing?.armedTabId !== undefined
+          ? { armedTabId: existing.armedTabId }
+          : {}),
+      ...(request.armedEventId !== undefined
+        ? { armedEventId: request.armedEventId }
+        : existing?.armedEventId !== undefined
+          ? { armedEventId: existing.armedEventId }
+          : {}),
       preferences: {
         categoryPriority: request.categoryPriority,
         quantity: request.quantity,

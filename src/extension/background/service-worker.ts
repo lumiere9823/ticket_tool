@@ -775,6 +775,8 @@ async function handleServiceWorkerMessage(
             allowFallback: message.allowFallback ?? true,
             userProfile: message.userProfile,
             scopedPurchasePlan: message.scopedPurchasePlan,
+            armedTabId,
+            armedEventId,
           });
 
           const existingConfig = await storage.getConfiguration();
@@ -1125,4 +1127,5 @@ export {
   updateExtensionBadge,
   getMirroredJourneyContext,
   resetMirroredJourneyContext,
+  initializeWorker,
 };
