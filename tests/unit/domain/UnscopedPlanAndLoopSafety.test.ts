@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { RetryPolicy } from '../../../src/domain/policies/RetryPolicy';
 import { BookingSummaryVerifier } from '../../../src/domain/policies/BookingSummaryVerifier';
-import { DEFAULT_PURCHASE_PLAN_LIMITS } from '../../../src/domain/entities/PurchasePlan';
+import {
+  DEFAULT_PURCHASE_PLAN_LIMITS,
+  sanitizePurchasePlanLimits,
+} from '../../../src/domain/entities/PurchasePlan';
+import { PurchasePlanValidator } from '../../../src/domain/policies/PurchasePlanValidator';
 import {
   CurrentSelection,
   BookingSummary,
@@ -92,5 +96,84 @@ describe('P2-8: Non-scoped plan limits, retry bounds, and loop safety', () => {
     const result = BookingSummaryVerifier.verify(summary, expected);
     expect(result.isValid).toBe(false);
     expect(result.errors.some((e) => e.includes('maxTotal ceiling'))).toBe(true);
+  });
+
+  describe('T1: PurchasePlanValidator limits validation and sanitizePurchasePlanLimits', () => {
+    const basePlan = {
+      showingId: null,
+      ticketRules: [{ ticketId: 't-1', ticketName: 'Standard', quantity: 1 }],
+      fallbackPolicy: 'STOP_AND_NOTIFY' as const,
+      allowFallback: false,
+    };
+    const catalogTickets = [
+      {
+        id: 't-1',
+        name: 'Standard',
+        price: 1000000,
+        currency: 'VND' as const,
+        mode: 'STANDING' as const,
+        availability: 'AVAILABLE' as const,
+        selectable: true,
+        minQuantity: 1,
+        maxQuantity: 4,
+        source: 'BOOKING_PAGE' as const,
+        evidence: ['test'],
+      },
+    ];
+
+    it('validates and rejects 0, negative, NaN, and exceeding limits in PurchasePlanValidator', () => {
+      // 0 maxDurationMinutes
+      const planZeroDuration = {
+        ...basePlan,
+        limits: { maxDurationMinutes: 0 },
+      };
+      const res1 = PurchasePlanValidator.validate(planZeroDuration, catalogTickets);
+      expect(res1.valid).toBe(false);
+      expect(res1.errors.some((e) => e.includes('maxDurationMinutes'))).toBe(true);
+
+      // maxDurationMinutes > 240
+      const planOverDuration = {
+        ...basePlan,
+        limits: { maxDurationMinutes: 241 },
+      };
+      const res2 = PurchasePlanValidator.validate(planOverDuration, catalogTickets);
+      expect(res2.valid).toBe(false);
+      expect(res2.errors.some((e) => e.includes('exceeds maximum ceiling of 240'))).toBe(true);
+
+      // maxAttempts <= 0 or > 5000
+      const planZeroAttempts = {
+        ...basePlan,
+        limits: { maxAttempts: 0 },
+      };
+      expect(PurchasePlanValidator.validate(planZeroAttempts, catalogTickets).valid).toBe(false);
+
+      const planOverAttempts = {
+        ...basePlan,
+        limits: { maxAttempts: 5001 },
+      };
+      const res3 = PurchasePlanValidator.validate(planOverAttempts, catalogTickets);
+      expect(res3.valid).toBe(false);
+      expect(res3.errors.some((e) => e.includes('exceeds maximum ceiling of 5000'))).toBe(true);
+    });
+
+    it('sanitizePurchasePlanLimits enforces safe defaults and clamps to ceilings', () => {
+      const sanitizedEmpty = sanitizePurchasePlanLimits(undefined);
+      expect(sanitizedEmpty.maxDurationMinutes).toBe(120);
+      expect(sanitizedEmpty.maxAttempts).toBe(1000);
+
+      const sanitizedInvalid = sanitizePurchasePlanLimits({
+        maxDurationMinutes: 0,
+        maxAttempts: -1,
+      });
+      expect(sanitizedInvalid.maxDurationMinutes).toBe(120);
+      expect(sanitizedInvalid.maxAttempts).toBe(1000);
+
+      const sanitizedClamped = sanitizePurchasePlanLimits({
+        maxDurationMinutes: 300,
+        maxAttempts: 9999,
+      });
+      expect(sanitizedClamped.maxDurationMinutes).toBe(240);
+      expect(sanitizedClamped.maxAttempts).toBe(5000);
+    });
   });
 });

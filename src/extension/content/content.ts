@@ -17,6 +17,10 @@ import {
 } from '../../domain/entities/ScopedPurchasePlan';
 
 import { DomSecurityChallengeDetector } from '../../infrastructure/security/DomSecurityChallengeDetector';
+import {
+  classifyMutations,
+  MutationClassification,
+} from '../../infrastructure/ticketbox/parsing/MutationClassifier';
 
 const logger = new SanitizedLogger({ state: 'CONTENT_SCRIPT' });
 const messageBus = new ChromeMessageBus(logger);
@@ -34,23 +38,27 @@ function isExtensionContextValid(): boolean {
   }
 }
 
-stateMachine.subscribe(async (context: StateContext) => {
+let lastEventTimestamp: number | null = null;
+let lastDetectedTimestamp: number | null = null;
+
+stateMachine.subscribe((context: StateContext) => {
   if (!isExtensionContextValid()) return;
-  try {
-    await Promise.all([
-      storage.saveJourneyState(context),
-      messageBus.publish({
-        type: 'STATE_CHANGED',
-        timestamp: new Date().toISOString(),
-        attemptId: stateMachine.attemptId,
-        state: context.currentState,
-        context,
-      }),
-    ]);
-  } catch (err: unknown) {
+  // Critical-path elimination: In-memory state is already updated synchronously.
+  // Disk persistence and IPC message dispatch run asynchronously on a side path
+  // so state transitions complete in <0.05ms without delaying T_EVENT -> T_RESERVATION.
+  Promise.all([
+    storage.saveJourneyState(context),
+    messageBus.publish({
+      type: 'STATE_CHANGED',
+      timestamp: new Date().toISOString(),
+      attemptId: stateMachine.attemptId,
+      state: context.currentState,
+      context,
+    }),
+  ]).catch((err: unknown) => {
     if (String(err).includes('Extension context invalidated')) return;
     logger.error('Error in stateMachine subscriber', err);
-  }
+  });
 });
 
 const journeyUseCase = new ExecuteBookingJourneyUseCase(
@@ -82,6 +90,9 @@ let consecutiveBookingFailures = 0;
 let lastBookingFailureTimestamp = 0;
 const MAX_CONSECUTIVE_AUTO_RECOVERIES = 3;
 const FAILURE_WINDOW_MS = 60_000;
+/** Epoch ms up to which passive challenge re-detection is suppressed after explicit user override */
+let userChallengeBypassUntil = 0;
+const USER_CHALLENGE_BYPASS_GRACE_MS = 15_000;
 
 // ── Anti-bot zoom-thrash detection ───────────────────────────────────────────
 // Ticketbox occasionally applies rapid zoom-in / zoom-out CSS transforms on the
@@ -654,15 +665,28 @@ async function checkLimitsAndStopIfNeeded(scopedPlan?: ScopedPurchasePlan): Prom
   const pState = await storage.getPersistentState();
   const now = Date.now();
 
+  // Enforce hard ceilings and safe defaults (T1: no unlimited execution)
+  const rawDuration = scopedPlan?.persistence?.maxDurationMinutes;
+  const maxDurationMinutes =
+    typeof rawDuration === 'number' && !isNaN(rawDuration) && rawDuration > 0
+      ? Math.min(rawDuration, 240)
+      : 120;
+
+  const rawAttempts = scopedPlan?.persistence?.maxAttempts;
+  const maxAttempts =
+    typeof rawAttempts === 'number' && !isNaN(rawAttempts) && rawAttempts > 0
+      ? Math.min(rawAttempts, 5000)
+      : 1000;
+
   // 1. Duration check
-  if (pState?.startedAt && scopedPlan?.persistence?.maxDurationMinutes) {
+  if (pState?.startedAt) {
     const startedAtMs =
       typeof pState.startedAt === 'number'
         ? pState.startedAt
         : new Date(pState.startedAt).getTime();
-    const maxDurationMs = scopedPlan.persistence.maxDurationMinutes * 60 * 1000;
+    const maxDurationMs = maxDurationMinutes * 60 * 1000;
     if (now - startedAtMs >= maxDurationMs) {
-      const reason = `Duration ceiling reached (${scopedPlan.persistence.maxDurationMinutes} minutes)`;
+      const reason = `Duration ceiling reached (${maxDurationMinutes} minutes)`;
       logger.info(reason);
       await stopMonitoringWithLimitReason(reason);
       return true;
@@ -681,11 +705,8 @@ async function checkLimitsAndStopIfNeeded(scopedPlan?: ScopedPurchasePlan): Prom
   }
 
   // 3. Max attempts check
-  if (
-    scopedPlan?.persistence?.maxAttempts &&
-    (pState?.attemptsCount ?? 0) >= scopedPlan.persistence.maxAttempts
-  ) {
-    const reason = `Max attempts limit reached (${pState?.attemptsCount}/${scopedPlan.persistence.maxAttempts})`;
+  if ((pState?.attemptsCount ?? 0) >= maxAttempts) {
+    const reason = `Max attempts limit reached (${pState?.attemptsCount}/${maxAttempts})`;
     logger.info(reason);
     await stopMonitoringWithLimitReason(reason);
     return true;
@@ -789,7 +810,9 @@ async function runMonitoringCycle(): Promise<void> {
     const stopped = await checkLimitsAndStopIfNeeded(scopedPlan);
     if (stopped) return;
 
-    const challenge = challengeDetector.detectChallenge();
+    const now = Date.now();
+    const challenge =
+      now < userChallengeBypassUntil ? { detected: false } : challengeDetector.detectChallenge();
     if (challenge.detected) {
       logger.warn(
         'Passive challenge detector triggered during monitoring cycle; pausing monitoring',
@@ -821,7 +844,11 @@ async function runMonitoringCycle(): Promise<void> {
     await performDiscoveryScan();
 
     if (isMonitoringActive) {
-      const baseInterval = scopedPlan?.persistence?.pollIntervalMs ?? 2000;
+      const rawInterval = scopedPlan?.persistence?.pollIntervalMs;
+      const baseInterval =
+        typeof rawInterval === 'number' && !isNaN(rawInterval) && rawInterval >= 1500
+          ? rawInterval
+          : 2000;
       const jitterRatio = scopedPlan?.persistence?.jitterRatio ?? 0.2;
       const jitter = (Math.random() * 2 - 1) * jitterRatio * baseInterval;
       const nextDelay = Math.max(1500, Math.round(baseInterval + jitter));
@@ -867,11 +894,16 @@ async function performDiscoveryScan(force = false): Promise<void> {
     if (recovered) return; // navigation triggered — stop scanning this cycle
     // ────────────────────────────────────────────────────────────────────────
 
-    const [eventState, catalog, summary] = await Promise.all([
+    const [eventState, catalog] = await Promise.all([
       adapter.getEventState(),
       adapter.discoverTicketCatalog(),
-      adapter.getBookingSummary(),
     ]);
+
+    const curState = stateMachine.state;
+    const summary =
+      curState === PurchaseState.TICKET_SELECTED || curState === PurchaseState.SEATS_SELECTED
+        ? await adapter.getBookingSummary()
+        : undefined;
 
     const allTickets = catalog.showings.flatMap((s) => s.ticketTypes);
     const availableTickets = allTickets.filter((t) => t.availability === 'AVAILABLE');
@@ -955,10 +987,10 @@ async function performDiscoveryScan(force = false): Promise<void> {
         : undefined,
     };
 
-    // Cache in chrome.storage.local for instant popup display on re-open only if tickets were discovered
+    // Cache in chrome.storage.local for instant popup display on re-open (side-path, non-blocking)
     if (isExtensionContextValid() && chrome.storage && chrome.storage.local) {
       if (allTickets.length > 0) {
-        await chrome.storage.local.set({ latestJourneyUpdate: journeyUpdate });
+        chrome.storage.local.set({ latestJourneyUpdate: journeyUpdate }).catch(() => {});
       }
     }
 
@@ -976,29 +1008,29 @@ async function performDiscoveryScan(force = false): Promise<void> {
         monitoringActive: isMonitoringActive,
       });
 
-      // Publish legacy PAGE_DISCOVERY_SNAPSHOT for backward compatibility
-      await messageBus.publish({
-        type: 'PAGE_DISCOVERY_SNAPSHOT',
-        observationId: `obs_${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        url: eventState.pageUrl,
-        pageTitle: eventTitle,
-        observedElements: {
-          buttonCount: document.querySelectorAll('button').length,
-          hasInteractiveElements: !!document.querySelector('button, [role="button"]'),
-          hasMainContent: !!document.querySelector('main, article, [role="main"]'),
-        },
-        observedAvailability: availableTickets.length > 0,
-        domSummary: {
-          title: eventTitle,
-          hasButtons: !!document.querySelector('button, [role="button"]'),
-          ticketElementsCount: allTickets.length,
-        },
-        timingMs: Date.now(),
-      });
-
-      // Publish JOURNEY_UPDATE with full catalogSnapshot
-      await messageBus.publish(journeyUpdate);
+      // Side-path publish: do not block candidate selection and reservation trigger
+      Promise.all([
+        messageBus.publish({
+          type: 'PAGE_DISCOVERY_SNAPSHOT',
+          observationId: `obs_${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          url: eventState.pageUrl,
+          pageTitle: eventTitle,
+          observedElements: {
+            buttonCount: document.querySelectorAll('button').length,
+            hasInteractiveElements: !!document.querySelector('button, [role="button"]'),
+            hasMainContent: !!document.querySelector('main, article, [role="main"]'),
+          },
+          observedAvailability: availableTickets.length > 0,
+          domSummary: {
+            title: eventTitle,
+            hasButtons: !!document.querySelector('button, [role="button"]'),
+            ticketElementsCount: allTickets.length,
+          },
+          timingMs: Date.now(),
+        }),
+        messageBus.publish(journeyUpdate),
+      ]).catch(() => {});
     }
 
     // If monitoring is active, check if we should trigger the booking journey
@@ -1074,6 +1106,13 @@ async function performDiscoveryScan(force = false): Promise<void> {
         storage.getPersistentState().catch(() => null),
       ]);
       const isArmed = pState?.currentPhase === 'ARMED' || pState?.currentPhase === 'MONITORING';
+      const isInterventionState = [
+        PurchaseState.CAPTCHA_REQUIRED,
+        PurchaseState.OTP_REQUIRED,
+        PurchaseState.SESSION_REAUTH_REQUIRED,
+        PurchaseState.HUMAN_INTERVENTION_REQUIRED,
+        PurchaseState.UNKNOWN_SECURITY_CHALLENGE,
+      ].includes(stateMachine.state);
       const armedEventId = config?.armedEventId || config?.scopedPurchasePlan?.eventId;
       const curEventId = extractEventIdFromUrl(currentUrl);
       const isMatchingEvent = armedEventId
@@ -1085,6 +1124,7 @@ async function performDiscoveryScan(force = false): Promise<void> {
       if (
         isArmed &&
         isMatchingEvent &&
+        !isInterventionState &&
         !userExplicitlyStopped &&
         !isMonitoringActive &&
         consecutiveBookingFailures <= MAX_CONSECUTIVE_AUTO_RECOVERIES
@@ -1335,7 +1375,14 @@ async function attemptBookingJourney(): Promise<void> {
       });
 
       const tracker = new LatencyTracker(stateMachine.attemptId || `attempt_${Date.now()}`, logger);
-      tracker.recordT0(Date.now(), true);
+      if (lastEventTimestamp) {
+        tracker.recordTEvent(lastEventTimestamp);
+        tracker.recordTDetected(lastDetectedTimestamp ?? lastEventTimestamp);
+      } else {
+        tracker.recordT0(Date.now(), true);
+      }
+      lastEventTimestamp = null;
+      lastDetectedTimestamp = null;
 
       // Remember where the step STARTED. Ticketbox is a SPA: the URL can already have changed by the
       // time execute() returns, and waiting for a change "from the new URL" would never end.
@@ -1391,10 +1438,15 @@ async function attemptBookingJourney(): Promise<void> {
         }
       }
 
-      // When payment gate, consent, or terminal state is reached requiring user action: pause monitoring
+      // When payment gate, consent, security challenges, or terminal state is reached requiring user action: pause monitoring
       if (
         (result.finalState === PurchaseState.PAYMENT_GATE ||
           result.finalState === PurchaseState.CONSENT_REQUIRED ||
+          result.finalState === PurchaseState.CAPTCHA_REQUIRED ||
+          result.finalState === PurchaseState.OTP_REQUIRED ||
+          result.finalState === PurchaseState.SESSION_REAUTH_REQUIRED ||
+          result.finalState === PurchaseState.HUMAN_INTERVENTION_REQUIRED ||
+          result.finalState === PurchaseState.UNKNOWN_SECURITY_CHALLENGE ||
           result.finalState === PurchaseState.FILLING_ATTENDEE_FORM ||
           result.finalState === PurchaseState.HELD ||
           result.finalState === PurchaseState.CONFIRMED ||
@@ -1642,7 +1694,7 @@ if (typeof document !== 'undefined') {
   });
 }
 
-// Set up MutationObserver with coalescing and node filtering to handle mutation storms
+// Set up MutationObserver with classification, fast-path for stock changes, and coalescing
 if (typeof MutationObserver !== 'undefined') {
   let isMutationCoalescing = false;
   let mutationCooldownTimer: number | null = null;
@@ -1663,51 +1715,54 @@ if (typeof MutationObserver !== 'undefined') {
       return;
     }
 
+    const classification = classifyMutations(mutations);
+    if (classification === MutationClassification.IRRELEVANT) {
+      return;
+    }
+
+    if (classification === MutationClassification.INVENTORY_RELEVANT) {
+      // FAST PATH: Earliest observable event of ticket availability / stock change!
+      lastEventTimestamp = Date.now();
+      lastDetectedTimestamp = Date.now();
+
+      if (!isDiscoveryScanning) {
+        if (mutationCooldownTimer) {
+          window.clearTimeout(mutationCooldownTimer);
+          mutationCooldownTimer = null;
+        }
+        isMutationCoalescing = false;
+        scheduleDiscoveryScan(0);
+      }
+      return;
+    }
+
+    // Structural or cosmetic changes: coalesce to avoid mutation storm
     if (isMutationCoalescing || isDiscoveryScanning) {
       return;
     }
 
-    let hasRelevantElements = false;
-    for (const m of mutations) {
-      if (m.addedNodes.length > 0) {
-        for (let i = 0; i < m.addedNodes.length; i++) {
-          const node = m.addedNodes[i];
-          if (node && node.nodeType === 1) {
-            const tag = (node as Element).tagName;
-            if (
-              tag !== 'SCRIPT' &&
-              tag !== 'STYLE' &&
-              tag !== 'LINK' &&
-              tag !== 'NOSCRIPT' &&
-              tag !== 'IFRAME'
-            ) {
-              hasRelevantElements = true;
-              break;
-            }
-          }
-        }
-      }
-      if (hasRelevantElements) break;
-    }
-
-    if (hasRelevantElements) {
-      isMutationCoalescing = true;
-      if (mutationCooldownTimer) window.clearTimeout(mutationCooldownTimer);
-      mutationCooldownTimer = window.setTimeout(() => {
-        isMutationCoalescing = false;
-        mutationCooldownTimer = null;
-        scheduleDiscoveryScan(0);
-      }, MUTATION_COOLDOWN_MS);
-    }
+    isMutationCoalescing = true;
+    if (mutationCooldownTimer) window.clearTimeout(mutationCooldownTimer);
+    mutationCooldownTimer = window.setTimeout(() => {
+      isMutationCoalescing = false;
+      mutationCooldownTimer = null;
+      scheduleDiscoveryScan(0);
+    }, MUTATION_COOLDOWN_MS);
   });
 
   const target = document.body || document.documentElement;
+  const observerOptions: MutationObserverInit = {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'disabled', 'data-status', 'aria-disabled'],
+  };
   if (target) {
-    observer.observe(target, { childList: true, subtree: true });
+    observer.observe(target, observerOptions);
   } else {
     document.addEventListener('DOMContentLoaded', () => {
       const node = document.body || document.documentElement;
-      if (node) observer.observe(node, { childList: true, subtree: true });
+      if (node) observer.observe(node, observerOptions);
     });
   }
 }
@@ -1945,34 +2000,37 @@ messageBus.subscribe((message: ExtensionMessage) => {
       try {
         const challengeResult = challengeDetector.detectChallenge();
         if (challengeResult.detected) {
-          logger.warn('Security challenge is still pending resolution in DOM', {
-            type: challengeResult.type,
-          });
-          startChallengeResolutionWatcher();
-        } else {
-          logger.info(
-            'Security challenge cleared; verifying safe state and returning to MONITORING'
+          logger.warn(
+            'Security challenge element still detected in DOM, but user explicitly confirmed resolution. Granting grace bypass window.',
+            {
+              type: challengeResult.type,
+            }
           );
-          stopChallengeResolutionWatcher();
-          const cur = stateMachine.state;
-          if (
-            cur === PurchaseState.CAPTCHA_REQUIRED ||
-            cur === PurchaseState.HUMAN_INTERVENTION_REQUIRED ||
-            cur === PurchaseState.OTP_REQUIRED ||
-            cur === PurchaseState.SESSION_REAUTH_REQUIRED ||
-            cur === PurchaseState.UNKNOWN_SECURITY_CHALLENGE
-          ) {
-            stateMachine.transition({ type: 'USER_COMPLETED_CHALLENGE' });
-            stateMachine.transition({
-              type: 'STATE_VERIFIED',
-              verifiedState: PurchaseState.MONITORING,
-            });
-          }
-          isMonitoringActive = true;
-          userExplicitlyStopped = false;
-          scheduleDiscoveryScan(0);
-          scheduleNextPoll(300);
         }
+        userChallengeBypassUntil = Date.now() + USER_CHALLENGE_BYPASS_GRACE_MS;
+        challengeDetector.setBypassWindow(USER_CHALLENGE_BYPASS_GRACE_MS);
+        logger.info(
+          'Security challenge cleared/overridden by user; verifying safe state and returning to MONITORING'
+        );
+        stopChallengeResolutionWatcher();
+        const cur = stateMachine.state;
+        if (
+          cur === PurchaseState.CAPTCHA_REQUIRED ||
+          cur === PurchaseState.HUMAN_INTERVENTION_REQUIRED ||
+          cur === PurchaseState.OTP_REQUIRED ||
+          cur === PurchaseState.SESSION_REAUTH_REQUIRED ||
+          cur === PurchaseState.UNKNOWN_SECURITY_CHALLENGE
+        ) {
+          stateMachine.transition({ type: 'USER_COMPLETED_CHALLENGE' });
+          stateMachine.transition({
+            type: 'STATE_VERIFIED',
+            verifiedState: PurchaseState.MONITORING,
+          });
+        }
+        isMonitoringActive = true;
+        userExplicitlyStopped = false;
+        scheduleDiscoveryScan(0);
+        scheduleNextPoll(300);
       } catch (err) {
         logger.warn('Failed during USER_COMPLETED_INTERVENTION resume workflow', {
           err: String(err),

@@ -100,6 +100,39 @@ export const DEFAULT_PURCHASE_PLAN_LIMITS: PurchasePlanLimits = {
   maxTotal: 50_000_000,
 };
 
+export const MAX_DURATION_MINUTES_LIMIT = 240;
+export const MAX_ATTEMPTS_LIMIT = 5000;
+
+/**
+ * Sanitizes PurchasePlanLimits against hard execution bounds:
+ * - maxDurationMinutes: fallback 120 if undefined/<=0/NaN, clamped to <= 240
+ * - maxAttempts: fallback 1000 if undefined/<=0/NaN, clamped to <= 5000
+ */
+export function sanitizePurchasePlanLimits(
+  limits?: Partial<PurchasePlanLimits> | null
+): PurchasePlanLimits {
+  let maxDuration = limits?.maxDurationMinutes;
+  if (typeof maxDuration !== 'number' || isNaN(maxDuration) || maxDuration <= 0) {
+    maxDuration = DEFAULT_PURCHASE_PLAN_LIMITS.maxDurationMinutes;
+  } else {
+    maxDuration = Math.min(maxDuration, MAX_DURATION_MINUTES_LIMIT);
+  }
+
+  let maxAttempts = limits?.maxAttempts;
+  if (typeof maxAttempts !== 'number' || isNaN(maxAttempts) || maxAttempts <= 0) {
+    maxAttempts = DEFAULT_PURCHASE_PLAN_LIMITS.maxAttempts;
+  } else {
+    maxAttempts = Math.min(maxAttempts, MAX_ATTEMPTS_LIMIT);
+  }
+
+  return {
+    maxDurationMinutes: maxDuration,
+    maxAttempts,
+    maxPricePerTicket: limits?.maxPricePerTicket,
+    maxTotal: limits?.maxTotal,
+  };
+}
+
 /**
  * Validation result for a PurchasePlan against a Ticket Catalog.
  */

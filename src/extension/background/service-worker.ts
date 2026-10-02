@@ -246,19 +246,29 @@ async function checkHeartbeatLimits(): Promise<void> {
       return;
     }
 
-    // Default mandatory limits applied to ALL plans (both scoped and non-scoped)
     const policy = config?.scopedPurchasePlan?.persistence;
     const planLimits = config?.purchasePlan?.limits;
 
-    const maxDurationMinutes = policy?.maxDurationMinutes ?? planLimits?.maxDurationMinutes ?? 120;
-    const maxAttempts = policy?.maxAttempts ?? planLimits?.maxAttempts ?? 1000;
+    // Enforce hard ceilings and safe defaults (T1: no unlimited execution)
+    const rawDuration = policy?.maxDurationMinutes ?? planLimits?.maxDurationMinutes;
+    const maxDurationMinutes =
+      typeof rawDuration === 'number' && !isNaN(rawDuration) && rawDuration > 0
+        ? Math.min(rawDuration, 240)
+        : 120;
+
+    const rawAttempts = policy?.maxAttempts ?? planLimits?.maxAttempts;
+    const maxAttempts =
+      typeof rawAttempts === 'number' && !isNaN(rawAttempts) && rawAttempts > 0
+        ? Math.min(rawAttempts, 5000)
+        : 1000;
+
     const stopAt = policy?.stopAt;
 
     const startedAtMs = new Date(persistentState.startedAt).getTime();
     const elapsedMinutes = (Date.now() - startedAtMs) / 60000;
 
-    // Check duration ceiling (0 or undefined = unlimited / no limit)
-    if (maxDurationMinutes > 0 && elapsedMinutes >= maxDurationMinutes) {
+    // Check duration ceiling (strictly bounded; never unlimited)
+    if (elapsedMinutes >= maxDurationMinutes) {
       const reason = `PERSISTENCE_LIMIT_EXCEEDED: Maximum duration reached (${maxDurationMinutes}m)`;
       logger.warn(reason);
       if (stateMachine.state !== PurchaseState.STOPPED_LIMIT_REACHED) {
@@ -287,8 +297,8 @@ async function checkHeartbeatLimits(): Promise<void> {
       return;
     }
 
-    // Check max attempts limit (0 or undefined = unlimited / no limit)
-    if (maxAttempts > 0 && persistentState.attemptsCount >= maxAttempts) {
+    // Check max attempts limit (strictly bounded; never unlimited)
+    if (persistentState.attemptsCount >= maxAttempts) {
       const reason = `PERSISTENCE_MAX_ATTEMPTS_REACHED: Maximum attempts reached (${maxAttempts})`;
       logger.warn(reason);
       if (stateMachine.state !== PurchaseState.STOPPED_LIMIT_REACHED) {
@@ -870,9 +880,24 @@ async function handleServiceWorkerMessage(
 
     case 'USER_COMPLETED_INTERVENTION': {
       logger.info(
-        'User completed intervention; transitioning to STATE_RECHECK for state revalidation'
+        'User completed intervention received in Service Worker; checking state before recheck',
+        { currentState: stateMachine.state }
       );
-      stateMachine.transition({ type: 'USER_COMPLETED_CHALLENGE' });
+      if (
+        stateMachine.state === PurchaseState.CAPTCHA_REQUIRED ||
+        stateMachine.state === PurchaseState.OTP_REQUIRED ||
+        stateMachine.state === PurchaseState.PAYMENT_ACTION_REQUIRED ||
+        stateMachine.state === PurchaseState.SESSION_REAUTH_REQUIRED ||
+        stateMachine.state === PurchaseState.UNKNOWN_SECURITY_CHALLENGE ||
+        stateMachine.state === PurchaseState.HUMAN_INTERVENTION_REQUIRED
+      ) {
+        stateMachine.transition({ type: 'USER_COMPLETED_CHALLENGE' });
+      } else {
+        logger.info(
+          'Service Worker state does not require challenge resolution transition; skipping',
+          { currentState: stateMachine.state }
+        );
+      }
       break;
     }
 

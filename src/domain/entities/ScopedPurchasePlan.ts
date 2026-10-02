@@ -30,6 +30,8 @@ export interface ScopedPurchasePlan {
 }
 
 export const MIN_POLL_INTERVAL_MS = 1500;
+export const MAX_DURATION_MINUTES_LIMIT = 240;
+export const MAX_ATTEMPTS_LIMIT = 5000;
 
 export const DEFAULT_PERSISTENCE_POLICY: PersistencePolicy = {
   maxDurationMinutes: 120,
@@ -37,6 +39,54 @@ export const DEFAULT_PERSISTENCE_POLICY: PersistencePolicy = {
   pollIntervalMs: 2000,
   jitterRatio: 0.2,
 };
+
+/**
+ * Resolves persistence policy values strictly against hard boundaries:
+ * - maxDurationMinutes: default 120 if missing or <= 0, clamped to <= 240
+ * - maxAttempts: default 1000 if missing or <= 0, clamped to <= 5000
+ * - pollIntervalMs: default 2000 if missing, clamped to >= 1500
+ */
+export function sanitizePersistencePolicy(
+  policy?: Partial<PersistencePolicy> | null
+): PersistencePolicy {
+  let maxDuration = policy?.maxDurationMinutes;
+  if (typeof maxDuration !== 'number' || isNaN(maxDuration) || maxDuration <= 0) {
+    maxDuration = DEFAULT_PERSISTENCE_POLICY.maxDurationMinutes;
+  } else {
+    maxDuration = Math.min(maxDuration, MAX_DURATION_MINUTES_LIMIT);
+  }
+
+  let maxAttempts = policy?.maxAttempts;
+  if (typeof maxAttempts !== 'number' || isNaN(maxAttempts) || maxAttempts <= 0) {
+    maxAttempts = DEFAULT_PERSISTENCE_POLICY.maxAttempts;
+  } else {
+    maxAttempts = Math.min(maxAttempts, MAX_ATTEMPTS_LIMIT);
+  }
+
+  let pollInterval = policy?.pollIntervalMs;
+  if (typeof pollInterval !== 'number' || isNaN(pollInterval) || pollInterval < MIN_POLL_INTERVAL_MS) {
+    pollInterval =
+      typeof pollInterval === 'number' && !isNaN(pollInterval) && pollInterval > 0
+        ? Math.max(pollInterval, MIN_POLL_INTERVAL_MS)
+        : DEFAULT_PERSISTENCE_POLICY.pollIntervalMs;
+  }
+
+  const jitterRatio =
+    typeof policy?.jitterRatio === 'number' && !isNaN(policy.jitterRatio) && policy.jitterRatio >= 0 && policy.jitterRatio <= 1
+      ? policy.jitterRatio
+      : DEFAULT_PERSISTENCE_POLICY.jitterRatio;
+
+  return {
+    maxDurationMinutes: maxDuration,
+    maxAttempts,
+    pollIntervalMs: pollInterval,
+    jitterRatio,
+    stopAt: policy?.stopAt,
+    startAt: policy?.startAt,
+    maxPricePerTicket: policy?.maxPricePerTicket,
+    maxTotal: policy?.maxTotal,
+  };
+}
 
 export function createDefaultScopedPurchasePlan(eventId = ''): ScopedPurchasePlan {
   return {
@@ -508,12 +558,48 @@ export function pickTarget(
  * Authoritatively extracts the event ID from a Ticketbox URL.
  * Handles both slug-based IDs (e.g. "rock-concert-12345" or "event-12345")
  * and /events/:id or /event/:id route formats.
+ * Ignores query strings and fragments so dates (e.g. ?date=2026-10-02) do not corrupt extraction.
  */
 export function extractEventIdFromUrl(url: string): string | null {
   if (!url) return null;
-  const matchSlug = url.match(/-(\d+)(?:[/?#]|$)/);
-  if (matchSlug && matchSlug[1]) return matchSlug[1];
-  const matchEvent = url.match(/\/events?\/([a-zA-Z0-9_-]+)/i);
-  if (matchEvent && matchEvent[1]) return matchEvent[1];
+
+  // 1. Strip query parameters and hash fragments
+  const cleanUrl = url.split(/[?#]/)[0] ?? '';
+  if (!cleanUrl) return null;
+
+  // 2. Extract pathname
+  let pathname = cleanUrl;
+  try {
+    pathname = new URL(cleanUrl).pathname;
+  } catch {
+    // If not a full URL, strip protocol / domain if present or use as pathname
+    pathname = cleanUrl.replace(/^[a-zA-Z]+:\/\/[^/]+/, '');
+  }
+
+  // 3. Priority A: /events/:id or /event/:id
+  // e.g. /events/26624/bookings/... or /events/conan-movie-premiere or /event/special-show-2026/booking
+  const matchEventRoute = pathname.match(/\/events?\/([^/]+)/i);
+  if (matchEventRoute && matchEventRoute[1]) {
+    const segment = matchEventRoute[1];
+    // If the segment itself has a trailing numeric slug (e.g. nhac-hoi-mua-thu-12345 or special-show-2026)
+    const slugInSegment = segment.match(/-(\d+)$/);
+    if (slugInSegment && slugInSegment[1]) {
+      return slugInSegment[1];
+    }
+    return segment;
+  }
+
+  // 4. Priority B: root event slug e.g. /the-aura-26624 or /event-54321/select-ticket
+  const matchRootSlug = pathname.match(/(?:^|\/)([a-zA-Z0-9_]+)-(\d+)(?:\/|$)/);
+  if (matchRootSlug && matchRootSlug[2]) {
+    return matchRootSlug[2];
+  }
+
+  // 5. Fallback: any -(\d+) in path
+  const matchAnySlug = pathname.match(/-(\d+)(?:\/|$)/);
+  if (matchAnySlug && matchAnySlug[1]) {
+    return matchAnySlug[1];
+  }
+
   return null;
 }

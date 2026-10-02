@@ -6,6 +6,7 @@ import {
   assertInScope,
   pickTarget,
   DEFAULT_PERSISTENCE_POLICY,
+  sanitizePersistencePolicy,
 } from '../../../src/domain/entities/ScopedPurchasePlan';
 import { ScopeViolationError } from '../../../src/domain/errors/DomainError';
 import { ScopedPurchasePlanValidator } from '../../../src/domain/policies/ScopedPurchasePlanValidator';
@@ -817,4 +818,121 @@ describe('Phase 2: Scoped Persistent Purchase Requirements (C1, C2, C3, C6, C9)'
       expect(() => assertInScope(plan, 'show-1', '  ULTRA VIP - L2  ')).not.toThrow();
     });
   });
+
+  describe('T1: Hard limits in ScopedPurchasePlanValidator and persistence sanitization', () => {
+    const baseValidPlan: ScopedPurchasePlan = {
+      eventId: 'evt-test',
+      targets: [{ showingId: 'show-1', ticketTypeIds: ['t-1'], rank: 1 }],
+      quantity: 1,
+      strategy: 'BY_TARGET_ORDER',
+      persistence: { ...DEFAULT_PERSISTENCE_POLICY },
+    };
+
+    it('rejects 0, negative, NaN, and exceeding ceilings in ScopedPurchasePlanValidator', () => {
+      // 0 maxDurationMinutes
+      const planZeroDuration = {
+        ...baseValidPlan,
+        persistence: { ...baseValidPlan.persistence, maxDurationMinutes: 0 },
+      };
+      const resZeroDuration = ScopedPurchasePlanValidator.validate(planZeroDuration);
+      expect(resZeroDuration.valid).toBe(false);
+      expect(resZeroDuration.errors.some((e) => e.includes('maxDurationMinutes'))).toBe(true);
+
+      // negative maxDurationMinutes
+      const planNegDuration = {
+        ...baseValidPlan,
+        persistence: { ...baseValidPlan.persistence, maxDurationMinutes: -10 },
+      };
+      expect(ScopedPurchasePlanValidator.validate(planNegDuration).valid).toBe(false);
+
+      // NaN maxDurationMinutes
+      const planNaNDuration = {
+        ...baseValidPlan,
+        persistence: { ...baseValidPlan.persistence, maxDurationMinutes: NaN },
+      };
+      expect(ScopedPurchasePlanValidator.validate(planNaNDuration).valid).toBe(false);
+
+      // maxDurationMinutes > 240
+      const planOverDuration = {
+        ...baseValidPlan,
+        persistence: { ...baseValidPlan.persistence, maxDurationMinutes: 241 },
+      };
+      const resOverDuration = ScopedPurchasePlanValidator.validate(planOverDuration);
+      expect(resOverDuration.valid).toBe(false);
+      expect(resOverDuration.errors.some((e) => e.includes('exceeds maximum ceiling of 240'))).toBe(true);
+
+      // 0 maxAttempts
+      const planZeroAttempts = {
+        ...baseValidPlan,
+        persistence: { ...baseValidPlan.persistence, maxAttempts: 0 },
+      };
+      expect(ScopedPurchasePlanValidator.validate(planZeroAttempts).valid).toBe(false);
+
+      // negative maxAttempts
+      const planNegAttempts = {
+        ...baseValidPlan,
+        persistence: { ...baseValidPlan.persistence, maxAttempts: -5 },
+      };
+      expect(ScopedPurchasePlanValidator.validate(planNegAttempts).valid).toBe(false);
+
+      // NaN maxAttempts
+      const planNaNAttempts = {
+        ...baseValidPlan,
+        persistence: { ...baseValidPlan.persistence, maxAttempts: NaN },
+      };
+      expect(ScopedPurchasePlanValidator.validate(planNaNAttempts).valid).toBe(false);
+
+      // maxAttempts > 5000
+      const planOverAttempts = {
+        ...baseValidPlan,
+        persistence: { ...baseValidPlan.persistence, maxAttempts: 5001 },
+      };
+      const resOverAttempts = ScopedPurchasePlanValidator.validate(planOverAttempts);
+      expect(resOverAttempts.valid).toBe(false);
+      expect(resOverAttempts.errors.some((e) => e.includes('exceeds maximum ceiling of 5000'))).toBe(true);
+
+      // pollIntervalMs < 1500
+      const planLowPoll = {
+        ...baseValidPlan,
+        persistence: { ...baseValidPlan.persistence, pollIntervalMs: 1499 },
+      };
+      expect(ScopedPurchasePlanValidator.validate(planLowPoll).valid).toBe(false);
+
+      // pollIntervalMs NaN
+      const planNaNPoll = {
+        ...baseValidPlan,
+        persistence: { ...baseValidPlan.persistence, pollIntervalMs: NaN },
+      };
+      expect(ScopedPurchasePlanValidator.validate(planNaNPoll).valid).toBe(false);
+    });
+
+    it('sanitizePersistencePolicy resolves safe defaults and enforces ceilings on 0, negative, NaN, missing, and over-limit values', () => {
+      // Missing / empty policy
+      const sanitizedEmpty = sanitizePersistencePolicy(undefined);
+      expect(sanitizedEmpty.maxDurationMinutes).toBe(120);
+      expect(sanitizedEmpty.maxAttempts).toBe(1000);
+      expect(sanitizedEmpty.pollIntervalMs).toBe(2000);
+
+      // 0, negative, NaN values
+      const sanitizedInvalid = sanitizePersistencePolicy({
+        maxDurationMinutes: 0,
+        maxAttempts: -10,
+        pollIntervalMs: NaN,
+      });
+      expect(sanitizedInvalid.maxDurationMinutes).toBe(120);
+      expect(sanitizedInvalid.maxAttempts).toBe(1000);
+      expect(sanitizedInvalid.pollIntervalMs).toBe(2000);
+
+      // Values exceeding ceiling are clamped
+      const sanitizedCeiling = sanitizePersistencePolicy({
+        maxDurationMinutes: 500,
+        maxAttempts: 99999,
+        pollIntervalMs: 500, // below 1500 floor
+      });
+      expect(sanitizedCeiling.maxDurationMinutes).toBe(240);
+      expect(sanitizedCeiling.maxAttempts).toBe(5000);
+      expect(sanitizedCeiling.pollIntervalMs).toBe(1500);
+    });
+  });
 });
+

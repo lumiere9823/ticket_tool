@@ -110,6 +110,33 @@ export class PurchasePlanValidator {
       );
     }
 
+    // 5. Execution limits validation (if specified)
+    if (plan.limits) {
+      if (plan.limits.maxDurationMinutes !== undefined) {
+        if (
+          typeof plan.limits.maxDurationMinutes !== 'number' ||
+          isNaN(plan.limits.maxDurationMinutes) ||
+          plan.limits.maxDurationMinutes <= 0
+        ) {
+          errors.push('maxDurationMinutes must be greater than 0.');
+        } else if (plan.limits.maxDurationMinutes > 240) {
+          errors.push(`maxDurationMinutes (${plan.limits.maxDurationMinutes}) exceeds maximum ceiling of 240.`);
+        }
+      }
+
+      if (plan.limits.maxAttempts !== undefined) {
+        if (
+          typeof plan.limits.maxAttempts !== 'number' ||
+          isNaN(plan.limits.maxAttempts) ||
+          plan.limits.maxAttempts <= 0
+        ) {
+          errors.push('maxAttempts must be greater than 0.');
+        } else if (plan.limits.maxAttempts > 5000) {
+          errors.push(`maxAttempts (${plan.limits.maxAttempts}) exceeds maximum ceiling of 5000.`);
+        }
+      }
+    }
+
     const valid = errors.length === 0;
     return {
       valid,

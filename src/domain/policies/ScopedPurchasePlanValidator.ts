@@ -57,18 +57,40 @@ export class ScopedPurchasePlanValidator {
     if (!plan.persistence) {
       errors.push('Persistence policy is missing.');
     } else {
-      if (plan.persistence.pollIntervalMs < MIN_POLL_INTERVAL_MS) {
+      if (
+        typeof plan.persistence.pollIntervalMs !== 'number' ||
+        isNaN(plan.persistence.pollIntervalMs) ||
+        plan.persistence.pollIntervalMs < MIN_POLL_INTERVAL_MS
+      ) {
         errors.push(
           `pollIntervalMs (${plan.persistence.pollIntervalMs}ms) is below the minimum allowed floor of ${MIN_POLL_INTERVAL_MS}ms.`
         );
       }
-      if (plan.persistence.maxDurationMinutes <= 0) {
+      if (
+        typeof plan.persistence.maxDurationMinutes !== 'number' ||
+        isNaN(plan.persistence.maxDurationMinutes) ||
+        plan.persistence.maxDurationMinutes <= 0
+      ) {
         errors.push('maxDurationMinutes must be greater than 0.');
+      } else if (plan.persistence.maxDurationMinutes > 240) {
+        errors.push(`maxDurationMinutes (${plan.persistence.maxDurationMinutes}) exceeds maximum ceiling of 240.`);
       }
-      if (plan.persistence.maxAttempts <= 0) {
+
+      if (
+        typeof plan.persistence.maxAttempts !== 'number' ||
+        isNaN(plan.persistence.maxAttempts) ||
+        plan.persistence.maxAttempts <= 0
+      ) {
         errors.push('maxAttempts must be greater than 0.');
+      } else if (plan.persistence.maxAttempts > 5000) {
+        errors.push(`maxAttempts (${plan.persistence.maxAttempts}) exceeds maximum ceiling of 5000.`);
       }
-      if (plan.persistence.jitterRatio < 0 || plan.persistence.jitterRatio > 1) {
+      if (
+        typeof plan.persistence.jitterRatio !== 'number' ||
+        isNaN(plan.persistence.jitterRatio) ||
+        plan.persistence.jitterRatio < 0 ||
+        plan.persistence.jitterRatio > 1
+      ) {
         errors.push('jitterRatio must be between 0 and 1.');
       }
       if (plan.persistence.stopAt) {
