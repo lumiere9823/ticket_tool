@@ -1,7 +1,14 @@
 import { PurchaseState } from '../../domain/states/PurchaseState';
 
 export type ChallengeType =
-  'RECAPTCHA' | 'HCAPTCHA' | 'TURNSTILE' | 'OTP' | 'AUTH_CHALLENGE' | 'RATE_LIMIT' | 'UNKNOWN';
+  | 'RECAPTCHA'
+  | 'HCAPTCHA'
+  | 'TURNSTILE'
+  | 'OTP'
+  | 'AUTH_CHALLENGE'
+  | 'RATE_LIMIT'
+  | 'QUEUE'
+  | 'UNKNOWN';
 
 export interface SecurityChallengeResult {
   detected: boolean;

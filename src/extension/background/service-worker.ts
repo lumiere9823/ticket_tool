@@ -104,6 +104,11 @@ async function updateExtensionBadge(state?: string, scheduled?: boolean): Promis
           text = 'CAPT';
           color = '#ef4444';
           break;
+        case PurchaseState.IN_QUEUE:
+        case 'IN_QUEUE':
+          text = 'QUEU';
+          color = '#f59e0b';
+          break;
         case PurchaseState.CONFIRMED:
           text = 'DONE';
           color = '#10b981';
@@ -193,6 +198,16 @@ async function initializeWorker(): Promise<void> {
       } else if (lastState.currentState === PurchaseState.READY) {
         if (stateMachine.state === PurchaseState.INIT) {
           await advanceToReady();
+        }
+      } else if (lastState.currentState === PurchaseState.IN_QUEUE) {
+        logger.info(
+          'Service worker restarted during IN_QUEUE; rehydrating to safe passive observation'
+        );
+        if (stateMachine.state === PurchaseState.INIT) {
+          await advanceToReady();
+          stateMachine.transition({ type: 'ARM' });
+          stateMachine.transition({ type: 'MONITORING_STARTED' });
+          stateMachine.transition({ type: 'QUEUE_DETECTED' });
         }
       }
     } else {

@@ -299,6 +299,21 @@ Until verified runtime evidence is captured, reviewed, and approved during Phase
 
 ---
 
+### Record E-014 — Virtual Waiting Room / Queue Detection & In-Queue Safety
+
+- **Observation:** High-demand events may route users to a virtual waiting room (e.g. Queue-it or Cloudflare Waiting Room).
+- **Evidence:**
+  - Authoritative third-party queue provider iframe (`queue-it.net`) or hostname redirect (`queue-it.net`, `/waiting-room`).
+  - Proprietary Ticketbox-specific queue selectors and polling payloads remain unverified on production.
+- **Interpretation:**
+  - When in a queue, reloading, navigating, or clicking buttons causes irreversible loss of queue position.
+  - The assistant must halt all DOM mutation, prevent stray-page/zoom reloads, and enter `IN_QUEUE`.
+  - In absence of verified queue evidence, challenge detector must return `UNKNOWN` routing to `UNKNOWN_SECURITY_CHALLENGE` rather than guessing internal selectors or keywords.
+- **Confidence:** **TBD / BLOCKED_BY_DISCOVERY** (Standard queue domains: OBSERVED; Ticketbox proprietary queue markup: TBD).
+- **Implementation Consequence:** Enforces state `IN_QUEUE`, restricts `ActionGuard` to `OBSERVE`/`USER_ACTION`, suppresses zoom/404 reloads, and displays non-destructive warning in popup.
+
+---
+
 ## 4. Active Evidence Summary Table
 
 | ID        | Flow Stage    | Endpoint / Selector                  | Confidence                             | Status in Code                                             |
@@ -316,3 +331,4 @@ Until verified runtime evidence is captured, reviewed, and approved during Phase
 | **E-011** | Quantity      | Steppers, `min`/`max` attrs          | OBSERVED (bounds) / BLOCKED (actions)  | Evaluator bounds check; `selectQuantity()` BLOCKED         |
 | **E-012** | Seatmap API   | `.../showings/{id}/seatmap`          | VERIFIED                               | `TicketboxSeatMapParser` authoritative API methods         |
 | **E-013** | Konva Canvas  | `.konvajs-content canvas`            | VERIFIED                               | `page-bridge.ts` & `TicketboxJourneyAdapter`               |
+| **E-014** | Waiting Room  | `queue-it.net`, `/waiting-room`      | TBD / BLOCKED_BY_DISCOVERY             | `DomSecurityChallengeDetector`, `IN_QUEUE` state safety    |

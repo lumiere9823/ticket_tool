@@ -149,6 +149,26 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
       };
     }
 
+    // 7. Virtual Queue / Waiting Room (Evidence: TBD / BLOCKED_BY_DISCOVERY per 17-ticketbox-adapter-evidence.md)
+    // Strictly read-only; only authoritative external queue infrastructure (e.g., Queue-it) is matched.
+    // Unverified/internal Ticketbox queue selectors remain TBD to avoid guessing selectors.
+    const hasQueueItIframe = this.hasVisibleIframeWithSrc(doc, 'queue-it.net');
+    let isQueueHostname = false;
+    if (typeof window !== 'undefined' && window.location) {
+      isQueueHostname =
+        window.location.hostname.includes('queue-it.net') ||
+        window.location.pathname.includes('/waiting-room');
+    }
+
+    if (hasQueueItIframe || isQueueHostname) {
+      return {
+        detected: true,
+        type: 'QUEUE',
+        details: 'Virtual waiting room / queue detected',
+        targetState: PurchaseState.IN_QUEUE,
+      };
+    }
+
     return { detected: false };
   }
 

@@ -253,6 +253,7 @@ function ensurePageBridgeInjected(): void {
  */
 async function detectAndRecoverFromStrayPage(): Promise<boolean> {
   if (!isMonitoringActive || userExplicitlyStopped) return false;
+  if (stateMachine.state === PurchaseState.IN_QUEUE) return false;
   if (typeof window === 'undefined' || typeof document === 'undefined') return false;
 
   // Cooldown guard
@@ -293,6 +294,16 @@ async function detectAndRecoverFromStrayPage(): Promise<boolean> {
   try {
     const targetParsed = new URL(targetUrl);
     const currentParsed = new URL(currentUrl);
+
+    // Queue / waiting-room paths are valid during virtual queuing and must not trigger stray recovery
+    const onQueuePath =
+      currentParsed.pathname.includes('/waiting-room') ||
+      currentParsed.pathname.includes('/queue') ||
+      currentParsed.hostname.includes('queue-it.net');
+    if (onQueuePath) {
+      return false;
+    }
+
     const onTicketbox = currentParsed.hostname.endsWith('ticketbox.vn');
     const onTargetEvent = currentParsed.pathname.startsWith(
       targetParsed.pathname.split('/').slice(0, 3).join('/')
@@ -477,6 +488,15 @@ function onZoomSampleObserved(newDpr: number): void {
   }
 
   if (zoomReversalTimestamps.length >= ZOOM_REVERSAL_THRESHOLD) {
+    if (stateMachine.state === PurchaseState.IN_QUEUE) {
+      logger.warn(
+        'Anti-bot zoom-thrash detected while IN_QUEUE; reload suppressed to preserve waiting room position.',
+        { reversalsInWindow: ZOOM_REVERSAL_THRESHOLD, windowMs: ZOOM_REVERSAL_WINDOW_MS }
+      );
+      zoomReversalTimestamps.length = 0;
+      return;
+    }
+
     // Check cooldown to prevent reload storm
     if (now - lastZoomReloadMs < ZOOM_RELOAD_COOLDOWN_MS) return;
     lastZoomReloadMs = now;
@@ -809,7 +829,8 @@ function startChallengeResolutionWatcher(): void {
       cur !== PurchaseState.HUMAN_INTERVENTION_REQUIRED &&
       cur !== PurchaseState.OTP_REQUIRED &&
       cur !== PurchaseState.SESSION_REAUTH_REQUIRED &&
-      cur !== PurchaseState.UNKNOWN_SECURITY_CHALLENGE
+      cur !== PurchaseState.UNKNOWN_SECURITY_CHALLENGE &&
+      cur !== PurchaseState.IN_QUEUE
     ) {
       stopChallengeResolutionWatcher();
       return;
@@ -1682,7 +1703,8 @@ async function checkRehydration(): Promise<void> {
         stateMachine.state === PurchaseState.HUMAN_INTERVENTION_REQUIRED ||
         stateMachine.state === PurchaseState.CAPTCHA_REQUIRED ||
         stateMachine.state === PurchaseState.OTP_REQUIRED ||
-        stateMachine.state === PurchaseState.UNKNOWN_SECURITY_CHALLENGE
+        stateMachine.state === PurchaseState.UNKNOWN_SECURITY_CHALLENGE ||
+        stateMachine.state === PurchaseState.IN_QUEUE
       ) {
         logger.info(
           'Restored protected/terminal journey state; preserving state without auto-reset',

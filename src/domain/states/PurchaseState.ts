@@ -52,6 +52,7 @@ export enum PurchaseState {
   SESSION_REAUTH_REQUIRED = 'SESSION_REAUTH_REQUIRED',
   UNKNOWN_SECURITY_CHALLENGE = 'UNKNOWN_SECURITY_CHALLENGE',
   HUMAN_INTERVENTION_REQUIRED = 'HUMAN_INTERVENTION_REQUIRED',
+  IN_QUEUE = 'IN_QUEUE',
 
   // Transitional State Verification
   STATE_RECHECK = 'STATE_RECHECK',
@@ -84,7 +85,8 @@ export function isHumanInterventionState(state: PurchaseState): boolean {
     state === PurchaseState.UNKNOWN_SECURITY_CHALLENGE ||
     state === PurchaseState.HUMAN_INTERVENTION_REQUIRED ||
     state === PurchaseState.CONSENT_REQUIRED ||
-    state === PurchaseState.PAYMENT_GATE
+    state === PurchaseState.PAYMENT_GATE ||
+    state === PurchaseState.IN_QUEUE
   );
 }
 
@@ -258,6 +260,9 @@ export type StateTransitionEvent =
   | { type: 'SESSION_REAUTH_REQUIRED'; reason?: string | undefined }
   | { type: 'UNKNOWN_SECURITY_CHALLENGE'; description?: string | undefined }
   | { type: 'SECURITY_CHALLENGE_DETECTED'; challengeType?: string | undefined }
+  | { type: 'QUEUE_DETECTED'; details?: string | undefined }
+  | { type: 'QUEUE_PASSED' }
+  | { type: 'QUEUE_EXITED' }
   // Human Intervention Resume Events
   | { type: 'USER_COMPLETED_CHALLENGE' }
   | { type: 'HUMAN_INTERVENTION_RESOLVED'; challengeId?: string | undefined }

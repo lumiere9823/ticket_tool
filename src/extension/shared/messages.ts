@@ -91,7 +91,12 @@ export interface ReservationFailedMessage extends BaseExtensionMessage {
 export interface HumanInterventionRequiredMessage extends BaseExtensionMessage {
   type: 'HUMAN_INTERVENTION_REQUIRED';
   challengeType:
-    'CAPTCHA' | 'OTP' | 'PAYMENT_ACTION' | 'SESSION_REAUTH' | 'UNKNOWN_SECURITY_CHALLENGE';
+    | 'CAPTCHA'
+    | 'OTP'
+    | 'PAYMENT_ACTION'
+    | 'SESSION_REAUTH'
+    | 'UNKNOWN_SECURITY_CHALLENGE'
+    | 'QUEUE';
   interventionId: string;
   instructions: string;
 }

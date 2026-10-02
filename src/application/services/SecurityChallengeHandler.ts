@@ -45,6 +45,8 @@ export class SecurityChallengeHandler {
       stateMachine.transition({ type: 'RATE_LIMITED' });
     } else if (targetState === PurchaseState.UNKNOWN_SECURITY_CHALLENGE) {
       stateMachine.transition({ type: 'UNKNOWN_SECURITY_CHALLENGE' });
+    } else if (targetState === PurchaseState.IN_QUEUE) {
+      stateMachine.transition({ type: 'QUEUE_DETECTED', details: challenge.details });
     } else {
       stateMachine.transition({
         type: 'SECURITY_CHALLENGE_DETECTED',

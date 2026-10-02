@@ -316,6 +316,12 @@ const STATE_ACTION_ALLOWLIST: Record<PurchaseState, Set<PurchaseActionType>> = {
     'RESET',
     'DISMISS',
   ]),
+  [PurchaseState.IN_QUEUE]: new Set([
+    'OBSERVE',
+    'USER_ACTION',
+    'RESET',
+    'DISMISS',
+  ]),
 
   // State recheck
   [PurchaseState.STATE_RECHECK]: new Set(['USER_ACTION', 'RESET', 'DISMISS']),
@@ -444,7 +450,12 @@ export class ActionGuard {
 
     // 3. Human Intervention Precedence: Automation is paused
     if (isHumanInterventionState(ctx.currentState)) {
-      if (ctx.action !== 'USER_ACTION') {
+      if (
+        ctx.action !== 'USER_ACTION' &&
+        ctx.action !== 'OBSERVE' &&
+        ctx.action !== 'RESET' &&
+        ctx.action !== 'DISMISS'
+      ) {
         return {
           allowed: false,
           reason: `Action rejected: System is in human intervention state '${ctx.currentState}'. Automation is paused.`,

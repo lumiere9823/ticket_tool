@@ -55,6 +55,10 @@ export class PopupStateView {
     if (blockingReason) {
       blockingReasonContainer.style.display = 'block';
       blockingReasonText.textContent = blockingReason;
+    } else if (state === PurchaseState.IN_QUEUE) {
+      blockingReasonContainer.style.display = 'block';
+      blockingReasonText.textContent =
+        'Đang trong hàng chờ (Waiting Room). Vui lòng GIỮ NGUYÊN TRANG, tuyệt đối không tải lại.';
     } else if (state === PurchaseState.FAILED) {
       blockingReasonContainer.style.display = 'block';
       blockingReasonText.textContent =
@@ -116,6 +120,7 @@ export class PopupStateView {
       case PurchaseState.OTP_REQUIRED:
       case PurchaseState.PAYMENT_ACTION_REQUIRED:
       case PurchaseState.SESSION_REAUTH_REQUIRED:
+      case PurchaseState.IN_QUEUE:
         stateBadge.classList.add('intervention');
         break;
       default:
@@ -128,6 +133,7 @@ export class PopupStateView {
       PurchaseState.OTP_REQUIRED,
       PurchaseState.SESSION_REAUTH_REQUIRED,
       PurchaseState.UNKNOWN_SECURITY_CHALLENGE,
+      PurchaseState.IN_QUEUE,
     ]);
     if (interventionBanner) {
       interventionBanner.style.display = interventionStates.has(state) ? 'flex' : 'none';

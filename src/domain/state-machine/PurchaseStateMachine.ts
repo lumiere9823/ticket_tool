@@ -74,6 +74,7 @@ const ALLOWED_RESET_STATES = new Set<PurchaseState>([
   PurchaseState.WAITING_FOR_STOCK,
   PurchaseState.RETRYING_TARGET,
   PurchaseState.HUMAN_INTERVENTION_REQUIRED,
+  PurchaseState.IN_QUEUE,
   PurchaseState.WAITING,
   PurchaseState.FAILED,
   PurchaseState.CONFIRMED,
@@ -701,6 +702,11 @@ const TRANSITION_TABLE: Partial<
   [PurchaseState.PAYMENT_ACTION_REQUIRED]: humanInterventionResumeRules,
   [PurchaseState.UNKNOWN_SECURITY_CHALLENGE]: humanInterventionResumeRules,
   [PurchaseState.HUMAN_INTERVENTION_REQUIRED]: humanInterventionResumeRules,
+  [PurchaseState.IN_QUEUE]: {
+    ...humanInterventionResumeRules,
+    QUEUE_PASSED: PurchaseState.STATE_RECHECK,
+    QUEUE_EXITED: PurchaseState.STATE_RECHECK,
+  },
 
   [PurchaseState.STATE_RECHECK]: {
     STATE_VERIFIED: handleStateVerified,
@@ -1134,18 +1140,19 @@ export class PurchaseStateMachine {
       );
     }
 
-    // Universal security challenges from active states
+    // Universal security challenges and queue from active states
     if (
       event.type === 'CAPTCHA_REQUIRED' ||
       event.type === 'OTP_REQUIRED' ||
-      event.type === 'UNKNOWN_SECURITY_CHALLENGE'
+      event.type === 'UNKNOWN_SECURITY_CHALLENGE' ||
+      event.type === 'QUEUE_DETECTED'
     ) {
       if (this._state === PurchaseState.CONFIRMED || isTerminalState(this._state)) {
         throw new StateTransitionError(
           from,
           'UNKNOWN',
           event.type,
-          `Cannot trigger security challenge from terminal or confirmed state '${from}'`
+          `Cannot trigger security challenge or queue from terminal or confirmed state '${from}'`
         );
       }
       if (event.type === 'CAPTCHA_REQUIRED') {
@@ -1156,6 +1163,9 @@ export class PurchaseStateMachine {
       }
       if (event.type === 'UNKNOWN_SECURITY_CHALLENGE') {
         return this.performTransition(PurchaseState.UNKNOWN_SECURITY_CHALLENGE, event.type);
+      }
+      if (event.type === 'QUEUE_DETECTED') {
+        return this.performTransition(PurchaseState.IN_QUEUE, event.type);
       }
     }
 
