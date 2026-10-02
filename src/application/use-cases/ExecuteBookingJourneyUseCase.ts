@@ -17,6 +17,8 @@ import { AdjacentSeatStrategy } from '../../domain/policies/AdjacentSeatStrategy
 import { BookingSummaryVerifier } from '../../domain/policies/BookingSummaryVerifier';
 import { ActionGuard } from '../../domain/policies/ActionGuard';
 import { BookingError } from '../../domain/errors/BookingErrors';
+import { BookingHandoffStep, HandoffRetryContext } from './BookingHandoffStep';
+import { BookingTicketSelectionStep } from './BookingTicketSelectionStep';
 
 export interface JourneyExecutionResult {
   success: boolean;
@@ -27,23 +29,19 @@ export interface JourneyExecutionResult {
   error?: string | undefined;
 }
 
-interface JourneyRetryContext {
-  failedAreaIds: Set<string>;
-  areaCollisionCounts: Map<string, number>;
-  exhaustedTierNames: Set<string>;
-  currentAreaId?: string | null;
-  currentAreaName?: string | null;
-}
-
 export interface JourneyUseCaseConfig {
   maxRetries?: number;
   maxAreaCollisions?: number;
 }
 
+type JourneyRetryContext = HandoffRetryContext;
+
 export class ExecuteBookingJourneyUseCase {
   private readonly MAX_RETRIES: number;
   private readonly MAX_AREA_COLLISIONS: number;
   private isExecuting = false;
+  private readonly handoffStep: BookingHandoffStep;
+  private readonly ticketSelectionStep: BookingTicketSelectionStep;
 
   constructor(
     private readonly stateMachine: PurchaseStateMachine,
@@ -55,6 +53,25 @@ export class ExecuteBookingJourneyUseCase {
   ) {
     this.MAX_RETRIES = config?.maxRetries ?? 8;
     this.MAX_AREA_COLLISIONS = config?.maxAreaCollisions ?? 2;
+    this.handoffStep = new BookingHandoffStep({
+      stateMachine: this.stateMachine,
+      adapter: this.adapter,
+      eventBus: this.eventBus,
+      logger: this.logger,
+      getPageUrl: () => this.getPageUrl(),
+      profileGate: (schema, preferences, selection) =>
+        this.profileGate(schema, preferences, selection),
+      waitForQuestionFormToClose: () => this.waitForQuestionFormToClose(),
+      formNotAdvancedResult: (selection) => this.formNotAdvancedResult(selection),
+      recordSeatCollision: (context, seatLabel) => this.recordSeatCollision(context, seatLabel),
+    });
+    this.ticketSelectionStep = new BookingTicketSelectionStep({
+      stateMachine: this.stateMachine,
+      adapter: this.adapter,
+      eventBus: this.eventBus,
+      logger: this.logger,
+      getState: () => this.getState(),
+    });
     if (
       this.adapter &&
       'setCurrentStateProvider' in this.adapter &&
@@ -405,7 +422,7 @@ export class ExecuteBookingJourneyUseCase {
   }
 
   private recordSeatCollision(
-    retryContext?: JourneyRetryContext,
+    retryContext?: HandoffRetryContext,
     seatLabel?: string | undefined
   ): void {
     if (!retryContext) return;
@@ -430,7 +447,7 @@ export class ExecuteBookingJourneyUseCase {
   private async runJourney(
     preferences: BookingPreferences,
     latencyTracker?: LatencyTracker,
-    retryContext?: JourneyRetryContext
+    retryContext?: HandoffRetryContext
   ): Promise<JourneyExecutionResult> {
     const currentUrl = this.getPageUrl();
     const isOnPayment = currentUrl.includes('/payment') || currentUrl.includes('/checkout');
@@ -458,197 +475,9 @@ export class ExecuteBookingJourneyUseCase {
       }
     }
 
-    if (isOnPayment) {
-      this.stateMachine.transition({ type: 'PAYMENT_GATE' });
-      this.logger.info('Payment step reached — user action required.');
-      await this.eventBus.publish({
-        type: 'NOTIFICATION_EVENT',
-        timestamp: new Date().toISOString(),
-        category: 'PAYMENT_REQUIRED',
-        title: 'Ticketbox Assistant',
-        body: 'Payment step reached — user action required.',
-      });
-      return {
-        success: true,
-        finalState: PurchaseState.PAYMENT_GATE,
-        requiresUserAction: true,
-        actionRequiredReason: 'Payment step reached — user action required.',
-      };
-    }
-
+    if (isOnPayment) return this.handoffStep.handlePaymentGate();
     if (isOnQuestionForm) {
-      this.logger.info('Executing Question / Attendee Form step on question-form page');
-      if (this.adapter.detectAndHandleErrorModal) {
-        const modalResult = await this.adapter.detectAndHandleErrorModal();
-        if (modalResult.hasError && modalResult.isSeatUnavailable) {
-          this.recordSeatCollision(retryContext, modalResult.seatLabel);
-          throw new BookingError({
-            code: 'SEAT_UNAVAILABLE',
-            message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved. Retrying alternative seat.`,
-            state: this.stateMachine.state,
-            recoverable: true,
-          });
-        }
-      }
-
-      const tFormStart = Date.now();
-      const formSchema = this.adapter.getFormSchema ? await this.adapter.getFormSchema() : null;
-      latencyTracker?.recordFormDetection(Date.now() - tFormStart);
-
-      if (formSchema && formSchema.fields.length > 0) {
-        this.stateMachine.transition({
-          type: 'QUESTION_FORM_DETECTED',
-          fieldCount: formSchema.fields.length,
-        });
-        this.logger.info(`Question form detected: ${formSchema.fields.length} fields`);
-
-        this.stateMachine.transition({ type: 'FILLING_ATTENDEE_FORM' });
-
-        const blocked = this.profileGate(formSchema, preferences);
-        if (blocked) return blocked;
-
-        if (this.adapter.fillAttendeeForm && preferences.userProfile) {
-          const formGuard = ActionGuard.canExecuteAction({
-            currentState: this.stateMachine.state,
-            action: 'FILL_FORM',
-          });
-          if (!formGuard.allowed) {
-            throw new BookingError({
-              code: 'REQUIRED_FIELD_MISSING',
-              message: formGuard.reason ?? 'ActionGuard rejected filling attendee form',
-              state: this.stateMachine.state,
-              recoverable: false,
-            });
-          }
-
-          const fillResult = await this.adapter.fillAttendeeForm(preferences.userProfile);
-
-          if (fillResult.isConsentBlocked) {
-            this.stateMachine.transition({
-              type: 'CONSENT_REQUIRED',
-              consentLabel: formSchema.consentLabel,
-            });
-            this.logger.warn('User consent required for terms and conditions');
-            await this.eventBus.publish({
-              type: 'NOTIFICATION_EVENT',
-              timestamp: new Date().toISOString(),
-              category: 'CONSENT_REQUIRED',
-              title: 'Ticketbox Assistant',
-              body: 'User consent required to proceed with booking',
-            });
-            return {
-              success: true,
-              finalState: PurchaseState.CONSENT_REQUIRED,
-              requiresUserAction: true,
-              actionRequiredReason: 'User consent required',
-            };
-          }
-
-          if (!fillResult.allSatisfied) {
-            this.logger.warn('Form has unsatisfied required fields', {
-              missing: fillResult.missingFields,
-            });
-            return {
-              success: true,
-              finalState: PurchaseState.FILLING_ATTENDEE_FORM,
-              requiresUserAction: true,
-              actionRequiredReason: `Required fields missing: ${fillResult.missingFields.join(', ')}`,
-            };
-          }
-        }
-
-        this.stateMachine.transition({ type: 'FORM_VALIDATED' });
-        this.logger.info('Form validated successfully');
-      }
-
-      // Submit question form by clicking "Tiếp tục"
-      if (this.adapter.proceedToNextStep) {
-        const proceedGuard = ActionGuard.canExecuteAction({
-          currentState: this.stateMachine.state,
-          action: 'PROCEED',
-        });
-        if (!proceedGuard.allowed) {
-          throw new BookingError({
-            code: 'PROCEED_FAILED',
-            message: proceedGuard.reason ?? 'ActionGuard rejected proceeding to next step',
-            state: this.stateMachine.state,
-            recoverable: false,
-          });
-        }
-
-        this.logger.info('Submitting attendee form / proceeding to payment step');
-        await this.adapter.proceedToNextStep();
-        await new Promise((r) => setTimeout(r, 100));
-
-        // Check for error modal right after click
-        if (this.adapter.detectAndHandleErrorModal) {
-          const modalResult = await this.adapter.detectAndHandleErrorModal();
-          if (modalResult.hasError && modalResult.isSeatUnavailable) {
-            this.recordSeatCollision(retryContext, modalResult.seatLabel);
-            throw new BookingError({
-              code: 'SEAT_UNAVAILABLE',
-              message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved. Retrying alternative seat.`,
-              state: this.stateMachine.state,
-              recoverable: true,
-            });
-          }
-        }
-
-        if (formSchema && formSchema.fields.length > 0) {
-          const closed = await this.waitForQuestionFormToClose();
-          if (!closed) {
-            if (this.adapter.detectAndHandleErrorModal) {
-              const modalResult = await this.adapter.detectAndHandleErrorModal();
-              if (modalResult.hasError && modalResult.isSeatUnavailable) {
-                this.recordSeatCollision(retryContext, modalResult.seatLabel);
-                throw new BookingError({
-                  code: 'SEAT_UNAVAILABLE',
-                  message: `Seat ${modalResult.seatLabel ?? 'selected'} is already reserved. Retrying alternative seat.`,
-                  state: this.stateMachine.state,
-                  recoverable: true,
-                });
-              }
-            }
-            return this.formNotAdvancedResult();
-          }
-        }
-      }
-
-      // Verify URL before claiming PAYMENT_GATE
-      const afterSubmitUrl = this.getPageUrl();
-      const isActualPayment =
-        afterSubmitUrl.includes('/payment') ||
-        afterSubmitUrl.includes('/checkout') ||
-        !afterSubmitUrl.includes('ticketbox.vn');
-
-      if (!isActualPayment) {
-        this.logger.info('Question form submitted, waiting for navigation to payment page...', {
-          currentUrl: afterSubmitUrl,
-        });
-        return {
-          success: true,
-          finalState: this.stateMachine.state,
-          requiresUserAction: false,
-          actionRequiredReason: 'Navigating to payment gate...',
-        };
-      }
-
-      this.stateMachine.transition({ type: 'PAYMENT_GATE' });
-      this.logger.info('Payment step reached — user action required.');
-      await this.eventBus.publish({
-        type: 'NOTIFICATION_EVENT',
-        timestamp: new Date().toISOString(),
-        category: 'PAYMENT_REQUIRED',
-        title: 'Ticketbox Assistant',
-        body: 'Payment step reached — user action required.',
-      });
-
-      return {
-        success: true,
-        finalState: PurchaseState.PAYMENT_GATE,
-        requiresUserAction: true,
-        actionRequiredReason: 'Payment step reached — user action required.',
-      };
+      return this.handoffStep.handleQuestionForm(preferences, latencyTracker, retryContext);
     }
 
     if (this.adapter.setScopedPlan) {
@@ -895,37 +724,15 @@ export class ExecuteBookingJourneyUseCase {
 
     // 6. STANDING FLOW vs SEATED FLOW
     if (bookingMode === 'STANDING') {
-      // STANDING FLOW (Section 9)
-      this.stateMachine.transition({
-        type: 'SELECTING_QUANTITY',
-        quantity: preferences.quantity,
-      });
-
-      const qtySuccess = await this.adapter.selectQuantity(
-        {
-          id: chosenTicket.id,
-          name: chosenTicket.name,
-          price: { amount: chosenTicket.price, currency: 'VND' },
-          mode: 'STANDING',
-          availability: 'AVAILABLE',
-          minQuantity: chosenTicket.minQuantity,
-          maxQuantity: chosenTicket.maxQuantity,
-          selectedQuantity: preferences.quantity,
-          selectable: true,
-          source: { page: 'BOOKING', evidence: [] },
-        },
-        preferences.quantity
+      const stepResult = await this.ticketSelectionStep.execute(
+        chosenTicket,
+        bookingMode,
+        preferences,
+        currentSelection,
+        latencyTracker,
+        retryContext
       );
-
-      if (!qtySuccess) {
-        throw new BookingError({
-          code: 'QUANTITY_CONTROL_NOT_FOUND',
-          message: `Setting quantity to ${preferences.quantity} failed`,
-          state: this.stateMachine.state,
-          recoverable: true,
-        });
-      }
-      this.logger.info(`Quantity set: ${preferences.quantity}`);
+      if (stepResult) return stepResult;
     } else {
       // SEATED FLOW (Section 10, 11, 12, 13)
       // A. Area Selection check

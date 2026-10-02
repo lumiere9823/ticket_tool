@@ -14,14 +14,16 @@ import {
 import { PurchasePlanValidator } from '../../domain/policies/PurchasePlanValidator';
 import {
   ScopedPurchasePlan,
-  PriorityStrategy,
-  DEFAULT_PERSISTENCE_POLICY,
   createDefaultScopedPurchasePlan,
   extractEventIdFromUrl,
 } from '../../domain/entities/ScopedPurchasePlan';
 import { ScopedPurchasePlanValidator } from '../../domain/policies/ScopedPurchasePlanValidator';
 import { PersistentExecutionState } from '../../application/ports/StorageRepository';
 import { buildUserProfileFromInputs } from './profile-builder';
+import { PopupMatrixRenderer } from './PopupMatrixRenderer';
+import { PopupStateView } from './PopupStateView';
+import { registerPopupEventListeners } from './PopupEventListeners';
+import { PopupConfigView } from './PopupConfigView';
 
 // ─── Infrastructure ──────────────────────────────────────────────────────────
 
@@ -197,6 +199,25 @@ const btnInterventionResume = document.getElementById(
 
 const ticketsTbody = document.getElementById('tickets-tbody') as HTMLElement;
 
+const matrixRenderer = new PopupMatrixRenderer({
+  ticketsBody: ticketsTbody,
+  emptyState: matrixEmpty,
+  tableWrapper: matrixTableWrapper,
+  matrixBody: scopedMatrixTbody,
+  getScopedPlan: () => currentScopedPlan,
+  formatPrice,
+  onMatrixChange: () => {
+    rebuildScopedPlanFromMatrix();
+    updateScopedSummaryAndValidation();
+    savePlan();
+  },
+});
+
+const renderCatalogTable = (tickets: TicketOption[]): void =>
+  matrixRenderer.renderCatalogTable(tickets);
+const renderScopedMatrix = (snapshot: TicketCatalogSnapshot): void =>
+  matrixRenderer.renderScopedMatrix(snapshot);
+
 const selTicket = document.getElementById('sel-ticket') as HTMLElement;
 const selMode = document.getElementById('sel-mode') as HTMLElement;
 const selArea = document.getElementById('sel-area') as HTMLElement;
@@ -213,6 +234,46 @@ const metricT1 = document.getElementById('metric-t1') as HTMLElement;
 const metricT2 = document.getElementById('metric-t2') as HTMLElement;
 const metricT3 = document.getElementById('metric-t3') as HTMLElement;
 const metricT5 = document.getElementById('metric-t5') as HTMLElement;
+
+const stateView = new PopupStateView({
+  stateBadge,
+  currentStepDisplay,
+  blockingReasonContainer,
+  blockingReasonText,
+  interventionBanner,
+  armButtons: [btnArm, btnBasicArm],
+});
+
+const configView = new PopupConfigView({
+  ticketRulesContainer,
+  showingSelect,
+  allowFallbackCheckbox,
+  fallbackPolicySelect,
+  matrixBody: scopedMatrixTbody,
+  quantityInput: scopedQuantityInput,
+  strategySelect: scopedStrategySelect,
+  durationInput: paramDurationInput,
+  attemptsInput: paramAttemptsInput,
+  pollIntervalInput: paramPollIntervalInput,
+  jitterInput: paramJitterInput,
+  allowPartialCheckbox: paramAllowPartialCheckbox,
+  maxPriceInput: paramMaxPricePerTicketInput,
+  maxTotalInput: paramMaxTotalInput,
+  summaryBox: scopedSummaryBox,
+  summaryAllowed,
+  summaryDisallowed,
+  validationError: scopedValidationError,
+  getCatalog: () => currentCatalog,
+  getPurchasePlan: () => currentPlan,
+  setPurchasePlan: (plan) => {
+    currentPlan = plan;
+  },
+  getPlan: () => currentScopedPlan,
+  setPlan: (plan) => {
+    currentScopedPlan = plan;
+  },
+  onPlanChange: () => savePlan(),
+});
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
@@ -372,19 +433,7 @@ function onShowingChange(): void {
  * Falls back to all tickets when showingId is null.
  */
 function getTicketsForCurrentShowing(): TicketOption[] {
-  const sid = currentPlan.showingId;
-  if (sid) {
-    const showing = (currentCatalog.showings || []).find((s) => s.id === sid);
-    if (
-      showing &&
-      'tickets' in showing &&
-      Array.isArray(showing.tickets) &&
-      showing.tickets.length > 0
-    ) {
-      return showing.tickets as TicketOption[];
-    }
-  }
-  return currentCatalog.tickets;
+  return configView.getTicketsForCurrentShowing();
 }
 
 /**
@@ -392,27 +441,14 @@ function getTicketsForCurrentShowing(): TicketOption[] {
  * Defaults: min=1, max=8 when unknown.
  */
 function buildQuantityOptions(ticket: TicketOption): number[] {
-  const min = ticket.minQuantity ?? 1;
-  const max = ticket.maxQuantity ?? 8;
-  const options: number[] = [];
-  for (let q = min; q <= Math.min(max, 20); q++) {
-    options.push(q);
-  }
-  return options.length > 0 ? options : [1];
+  return configView.buildQuantityOptions(ticket);
 }
 
 /**
  * Creates the availability suffix for an option label.
  */
 function ticketOptionLabel(t: TicketOption): string {
-  const price = formatPrice(t.price);
-  const avail =
-    t.availability === 'AVAILABLE'
-      ? ''
-      : t.availability === 'SOLD_OUT'
-        ? ' — HẾT VÉ'
-        : ` — ${t.availability}`;
-  return `${t.name} — ${price}${avail}`;
+  return configView.ticketOptionLabel(t);
 }
 
 // ─── Ticket Rule Card Builder ─────────────────────────────────────────────────
@@ -757,304 +793,14 @@ function addTicketRuleRow(rule?: Partial<TicketRule>): void {
 
 // ─── Catalog Table Rendering ──────────────────────────────────────────────────
 
-function renderCatalogTable(tickets: TicketOption[]): void {
-  if (!tickets || tickets.length === 0) {
-    const tr = document.createElement('tr');
-    const td = document.createElement('td');
-    td.colSpan = 4;
-    td.className = 'empty-cell';
-    td.textContent = 'No tickets discovered yet';
-    tr.appendChild(td);
-    ticketsTbody.replaceChildren(tr);
-    return;
-  }
-
-  ticketsTbody.innerHTML = '';
-  for (const t of tickets) {
-    const tr = document.createElement('tr');
-
-    const tdName = document.createElement('td');
-    tdName.textContent = t.name;
-
-    const tdPrice = document.createElement('td');
-    tdPrice.textContent = formatPrice(t.price);
-
-    const tdMode = document.createElement('td');
-    tdMode.textContent = t.mode;
-
-    const tdAvail = document.createElement('td');
-    const badge = document.createElement('span');
-    badge.className = 'status-badge';
-    badge.textContent = t.availability;
-    if (t.availability === 'AVAILABLE') badge.classList.add('status-available');
-    else if (t.availability === 'SOLD_OUT') badge.classList.add('status-soldout');
-    else badge.classList.add('status-unknown');
-    tdAvail.appendChild(badge);
-
-    tr.appendChild(tdName);
-    tr.appendChild(tdPrice);
-    tr.appendChild(tdMode);
-    tr.appendChild(tdAvail);
-    ticketsTbody.appendChild(tr);
-  }
-}
-
 // ─── Scoped Matrix UI Functions ───────────────────────────────────────────────
 
-function renderScopedMatrix(snapshot: TicketCatalogSnapshot): void {
-  if (!snapshot.showings || snapshot.showings.length === 0) {
-    if (snapshot.tickets && snapshot.tickets.length > 0) {
-      const singleShowing = {
-        id: 'default',
-        name: snapshot.eventTitle || 'Suất diễn mặc định',
-        date: null,
-        venue: null,
-        tickets: snapshot.tickets,
-      };
-      renderMatrixWithShowings([singleShowing], snapshot);
-      return;
-    }
-    if (matrixEmpty) matrixEmpty.style.display = 'block';
-    if (matrixTableWrapper) matrixTableWrapper.style.display = 'none';
-    return;
-  }
-
-  renderMatrixWithShowings(snapshot.showings, snapshot);
-}
-
-function renderMatrixWithShowings(
-  showings: Array<{
-    id: string | null;
-    name: string | null;
-    date: string | null;
-    tickets?: TicketOption[];
-  }>,
-  snapshot: TicketCatalogSnapshot
-): void {
-  if (matrixEmpty) matrixEmpty.style.display = 'none';
-  if (matrixTableWrapper) matrixTableWrapper.style.display = 'block';
-  if (!scopedMatrixTbody) return;
-  scopedMatrixTbody.innerHTML = '';
-
-  showings.forEach((s, idx) => {
-    const showingId = s.id ?? `showing-${idx}`;
-    const showingName = s.name ?? s.date ?? `Suất ${idx + 1}`;
-
-    const existingTarget = currentScopedPlan.targets.find((t) => t.showingId === showingId);
-    const rank = existingTarget?.rank ?? idx + 1;
-    const selectedTicketIds = new Set(existingTarget?.ticketTypeIds ?? []);
-
-    const tr = document.createElement('tr');
-    tr.dataset.showingId = showingId;
-
-    // 1. Rank Cell
-    const tdRank = document.createElement('td');
-    const rankInput = document.createElement('input');
-    rankInput.type = 'number';
-    rankInput.min = '1';
-    rankInput.max = '20';
-    rankInput.value = String(rank);
-    rankInput.className = 'rank-input';
-    rankInput.addEventListener('change', () => {
-      rebuildScopedPlanFromMatrix();
-      updateScopedSummaryAndValidation();
-      savePlan();
-    });
-    tdRank.appendChild(rankInput);
-
-    // 2. Showing Cell
-    const tdShowing = document.createElement('td');
-    const showingTitle = document.createElement('strong');
-    showingTitle.textContent = showingName;
-    tdShowing.appendChild(showingTitle);
-    if (s.date && s.date !== s.name) {
-      const dateSub = document.createElement('div');
-      dateSub.style.fontSize = '10px';
-      dateSub.style.color = 'var(--text-muted)';
-      dateSub.textContent = s.date;
-      tdShowing.appendChild(dateSub);
-    }
-
-    // 3. Ticket Tiers Checkboxes Cell
-    const tdTickets = document.createElement('td');
-    tdTickets.className = 'tier-checkboxes-cell';
-
-    const tickets = s.tickets && s.tickets.length > 0 ? s.tickets : snapshot.tickets;
-    if (!tickets || tickets.length === 0) {
-      tdTickets.textContent = 'Chưa có loại vé';
-    } else {
-      tickets.forEach((t) => {
-        const ticketId = t.id ?? t.name;
-        const label = document.createElement('label');
-        label.className = 'tier-checkbox-item';
-
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.value = ticketId;
-        cb.dataset.ticketName = t.name;
-        cb.checked = selectedTicketIds.has(ticketId) || selectedTicketIds.has(t.name);
-        cb.addEventListener('change', () => {
-          rebuildScopedPlanFromMatrix();
-          updateScopedSummaryAndValidation();
-          savePlan();
-        });
-
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = t.name;
-
-        const priceSpan = document.createElement('span');
-        priceSpan.className = 'tier-price-tag';
-        priceSpan.textContent = `(${formatPrice(t.price)})`;
-
-        label.appendChild(cb);
-        label.appendChild(nameSpan);
-        label.appendChild(priceSpan);
-
-        if (t.availability === 'SOLD_OUT') {
-          const soldBadge = document.createElement('span');
-          soldBadge.className = 'badge-mini';
-          soldBadge.style.color = '#f87171';
-          soldBadge.textContent = 'Hết vé';
-          label.appendChild(soldBadge);
-        }
-
-        tdTickets.appendChild(label);
-      });
-    }
-
-    tr.appendChild(tdRank);
-    tr.appendChild(tdShowing);
-    tr.appendChild(tdTickets);
-    scopedMatrixTbody.appendChild(tr);
-  });
-}
-
 function rebuildScopedPlanFromMatrix(): ScopedPurchasePlan {
-  if (!scopedMatrixTbody) return currentScopedPlan;
-  const rows = scopedMatrixTbody.querySelectorAll('tr');
-  const targets: ScopedPurchasePlan['targets'] = [];
-
-  rows.forEach((tr) => {
-    const showingId = tr.dataset.showingId;
-    if (!showingId) return;
-
-    const rankInput = tr.querySelector('.rank-input') as HTMLInputElement | null;
-    const rank = rankInput ? parseInt(rankInput.value, 10) || 1 : 1;
-
-    const checkedBoxes = Array.from(
-      tr.querySelectorAll<HTMLInputElement>('.tier-checkboxes-cell input[type="checkbox"]:checked')
-    );
-    const ticketTypeIds = checkedBoxes.map((cb) => cb.value);
-
-    if (ticketTypeIds.length > 0) {
-      targets.push({
-        showingId,
-        ticketTypeIds,
-        rank,
-      });
-    }
-  });
-
-  const quantity = scopedQuantityInput ? parseInt(scopedQuantityInput.value, 10) || 1 : 1;
-  const strategy = scopedStrategySelect
-    ? (scopedStrategySelect.value as PriorityStrategy) || 'BY_TARGET_ORDER'
-    : 'BY_TARGET_ORDER';
-
-  const persistence = {
-    maxDurationMinutes:
-      paramDurationInput && paramDurationInput.value.trim() !== ''
-        ? Math.max(0, parseInt(paramDurationInput.value, 10))
-        : DEFAULT_PERSISTENCE_POLICY.maxDurationMinutes,
-    maxAttempts:
-      paramAttemptsInput && paramAttemptsInput.value.trim() !== ''
-        ? Math.max(0, parseInt(paramAttemptsInput.value, 10))
-        : DEFAULT_PERSISTENCE_POLICY.maxAttempts,
-    pollIntervalMs: paramPollIntervalInput
-      ? Math.max(
-          1500,
-          parseInt(paramPollIntervalInput.value, 10) || DEFAULT_PERSISTENCE_POLICY.pollIntervalMs
-        )
-      : DEFAULT_PERSISTENCE_POLICY.pollIntervalMs,
-    jitterRatio: paramJitterInput
-      ? parseFloat(paramJitterInput.value) || DEFAULT_PERSISTENCE_POLICY.jitterRatio
-      : DEFAULT_PERSISTENCE_POLICY.jitterRatio,
-    maxPricePerTicket:
-      paramMaxPricePerTicketInput && paramMaxPricePerTicketInput.value.trim() !== ''
-        ? Math.max(0, parseInt(paramMaxPricePerTicketInput.value, 10))
-        : undefined,
-    maxTotal:
-      paramMaxTotalInput && paramMaxTotalInput.value.trim() !== ''
-        ? Math.max(0, parseInt(paramMaxTotalInput.value, 10))
-        : undefined,
-  };
-
-  const allowPartialQuantity = paramAllowPartialCheckbox
-    ? paramAllowPartialCheckbox.checked
-    : false;
-
-  currentScopedPlan = {
-    eventId: currentCatalog.eventId ?? '',
-    targets,
-    quantity,
-    strategy,
-    persistence,
-    allowPartialQuantity,
-  };
-
-  return currentScopedPlan;
+  return configView.rebuildScopedPlanFromMatrix();
 }
 
 function updateScopedSummaryAndValidation(): void {
-  const plan = currentScopedPlan;
-  const totalTickets = plan.targets.reduce((acc, t) => acc + t.ticketTypeIds.length, 0);
-
-  if (totalTickets === 0) {
-    if (scopedSummaryBox) scopedSummaryBox.style.display = 'none';
-    if (scopedValidationError) {
-      scopedValidationError.style.display = 'block';
-      scopedValidationError.textContent =
-        '⚠️ Danh sách mục tiêu (whitelist) đang rỗng. Bạn phải tick chọn ít nhất một hạng vé trong ma trận.';
-    }
-    return;
-  }
-
-  const allowedSummaries = plan.targets.map((t) => {
-    return `• Suất [${t.showingId}] (Ưu tiên Rank ${t.rank}): ${t.ticketTypeIds.join(', ')}`;
-  });
-  if (summaryAllowed) {
-    const strong = document.createElement('strong');
-    strong.textContent = `Sẽ chỉ mua (Số lượng: ${plan.quantity} vé):`;
-    const frag = document.createDocumentFragment();
-    frag.appendChild(strong);
-    for (const summaryLine of allowedSummaries) {
-      frag.appendChild(document.createElement('br'));
-      frag.appendChild(document.createTextNode(summaryLine));
-    }
-    summaryAllowed.replaceChildren(frag);
-  }
-  if (summaryDisallowed) {
-    const strong = document.createElement('strong');
-    strong.textContent = 'Sẽ KHÔNG mua:';
-    summaryDisallowed.replaceChildren(
-      strong,
-      document.createTextNode(' Bất kỳ suất diễn hay hạng vé nào khác ngoài danh sách trên.')
-    );
-  }
-  if (scopedSummaryBox) {
-    scopedSummaryBox.style.display = 'flex';
-  }
-
-  const validation = ScopedPurchasePlanValidator.validate(plan, currentCatalog);
-  if (!validation.valid) {
-    if (scopedValidationError) {
-      scopedValidationError.style.display = 'block';
-      scopedValidationError.textContent = `❌ Lỗi cấu hình:\n• ${validation.errors.join('\n• ')}`;
-    }
-  } else {
-    if (scopedValidationError) {
-      scopedValidationError.style.display = 'none';
-    }
-  }
+  configView.updateScopedSummaryAndValidation();
 }
 
 // ─── Mode Switcher & Basic Panel Logic ───────────────────────────────────────
@@ -1527,148 +1273,7 @@ function validateAllRuleCards(): void {
 // ─── State Badge ───────────────────────────────────────────────────────────────
 
 function updateStateBadge(state: PurchaseState, blockingReason?: string): void {
-  stateBadge.textContent = state;
-  currentStepDisplay.textContent = state;
-  stateBadge.className = 'badge';
-
-  if (blockingReason) {
-    blockingReasonContainer.style.display = 'block';
-    blockingReasonText.textContent = blockingReason;
-  } else if (state === PurchaseState.FAILED) {
-    blockingReasonContainer.style.display = 'block';
-    blockingReasonText.textContent =
-      'Quy trình gặp sự cố DOM hoặc vé hết. Vui lòng thử lại hoặc tải lại trang.';
-  } else {
-    blockingReasonContainer.style.display = 'none';
-  }
-
-  switch (state) {
-    case PurchaseState.READY:
-    case PurchaseState.IDLE:
-      stateBadge.classList.add('ready');
-      break;
-    case PurchaseState.ARMED:
-    case PurchaseState.MONITORING:
-    case PurchaseState.EVENT_DETECTED:
-    case PurchaseState.SHOWING_DETECTED:
-    case PurchaseState.TICKETS_DETECTED:
-    case PurchaseState.EVALUATING_TICKETS:
-    case PurchaseState.AVAILABLE_DETECTED:
-    case PurchaseState.SELECTING:
-    case PurchaseState.TICKET_SELECTED:
-    case PurchaseState.BOOKING_MODE_DETECTED:
-    case PurchaseState.SELECTING_QUANTITY:
-    case PurchaseState.AREA_SELECTION_REQUIRED:
-    case PurchaseState.SELECTING_AREA:
-    case PurchaseState.SEAT_MAP_DETECTED:
-    case PurchaseState.SELECTING_SEATS:
-    case PurchaseState.SEATS_SELECTED:
-    case PurchaseState.BOOKING_SUMMARY_DETECTED:
-    case PurchaseState.QUESTION_FORM_DETECTED:
-    case PurchaseState.FILLING_ATTENDEE_FORM:
-    case PurchaseState.FORM_VALIDATED:
-    case PurchaseState.RESERVING:
-      stateBadge.classList.add('armed');
-      break;
-    case PurchaseState.HELD:
-    case PurchaseState.CONFIRMED:
-      stateBadge.classList.add('held');
-      break;
-    case PurchaseState.STOPPED:
-    case PurchaseState.STOPPED_LIMIT_REACHED:
-    case PurchaseState.STOPPED_NO_TARGET:
-    case PurchaseState.FAILED:
-    case PurchaseState.RATE_LIMITED:
-    case PurchaseState.SOLD_OUT:
-    case PurchaseState.INVALID_SELECTION:
-      stateBadge.classList.add('failed');
-      break;
-    case PurchaseState.WAITING:
-    case PurchaseState.WAITING_FOR_STOCK:
-      stateBadge.classList.add('monitoring');
-      break;
-    case PurchaseState.RETRYING_TARGET:
-      stateBadge.classList.add('armed');
-      break;
-    case PurchaseState.HUMAN_INTERVENTION_REQUIRED:
-    case PurchaseState.CONSENT_REQUIRED:
-    case PurchaseState.PAYMENT_GATE:
-    case PurchaseState.CAPTCHA_REQUIRED:
-    case PurchaseState.OTP_REQUIRED:
-    case PurchaseState.PAYMENT_ACTION_REQUIRED:
-    case PurchaseState.SESSION_REAUTH_REQUIRED:
-      stateBadge.classList.add('intervention');
-      break;
-    default:
-      break;
-  }
-
-  const isIntervention = [
-    PurchaseState.HUMAN_INTERVENTION_REQUIRED,
-    PurchaseState.CAPTCHA_REQUIRED,
-    PurchaseState.OTP_REQUIRED,
-    PurchaseState.SESSION_REAUTH_REQUIRED,
-    PurchaseState.UNKNOWN_SECURITY_CHALLENGE,
-  ].includes(state);
-
-  if (interventionBanner) {
-    interventionBanner.style.display = isIntervention ? 'flex' : 'none';
-  }
-
-  const isRunning = [
-    PurchaseState.ARMED,
-    PurchaseState.MONITORING,
-    PurchaseState.EVENT_DETECTED,
-    PurchaseState.SHOWING_DETECTED,
-    PurchaseState.TICKETS_DETECTED,
-    PurchaseState.EVALUATING_TICKETS,
-    PurchaseState.AVAILABLE_DETECTED,
-    PurchaseState.SELECTING,
-    PurchaseState.TICKET_SELECTED,
-    PurchaseState.BOOKING_MODE_DETECTED,
-    PurchaseState.SELECTING_QUANTITY,
-    PurchaseState.AREA_SELECTION_REQUIRED,
-    PurchaseState.SELECTING_AREA,
-    PurchaseState.SEAT_MAP_DETECTED,
-    PurchaseState.SELECTING_SEATS,
-    PurchaseState.SEATS_SELECTED,
-    PurchaseState.BOOKING_SUMMARY_DETECTED,
-    PurchaseState.QUESTION_FORM_DETECTED,
-    PurchaseState.FILLING_ATTENDEE_FORM,
-    PurchaseState.FORM_VALIDATED,
-    PurchaseState.RESERVING,
-    PurchaseState.RETRYING_TARGET,
-    PurchaseState.WAITING,
-    PurchaseState.WAITING_FOR_STOCK,
-  ].includes(state);
-
-  if (isRunning) {
-    if (btnBasicArm) {
-      btnBasicArm.textContent = '🛑 DỪNG SĂN VÉ (ĐANG CHẠY...)';
-      btnBasicArm.classList.add('running-active');
-      btnBasicArm.style.background = '#dc2626';
-      btnBasicArm.style.color = '#ffffff';
-    }
-    if (btnArm) {
-      btnArm.textContent = '🛑 DỪNG SĂN VÉ (ĐANG CHẠY...)';
-      btnArm.classList.add('running-active');
-      btnArm.style.background = '#dc2626';
-      btnArm.style.color = '#ffffff';
-    }
-  } else {
-    if (btnBasicArm) {
-      btnBasicArm.textContent = '🚀 BẮT ĐẦU SĂN VÉ (ARM)';
-      btnBasicArm.classList.remove('running-active');
-      btnBasicArm.style.background = '';
-      btnBasicArm.style.color = '';
-    }
-    if (btnArm) {
-      btnArm.textContent = '🚀 BẮT ĐẦU SĂN VÉ (ARM)';
-      btnArm.classList.remove('running-active');
-      btnArm.style.background = '';
-      btnArm.style.color = '';
-    }
-  }
+  stateView.update(state, blockingReason);
 }
 
 async function updatePersistentMonitoringDisplay(
@@ -2504,7 +2109,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
 // ─── Button Handlers ──────────────────────────────────────────────────────────
 
-btnArm.addEventListener('click', async () => {
+const handleArmClick = async (): Promise<void> => {
   if (isArmingInProgress) return;
   isArmingInProgress = true;
   try {
@@ -2677,9 +2282,9 @@ btnArm.addEventListener('click', async () => {
   } finally {
     isArmingInProgress = false;
   }
-});
+};
 
-btnStop.addEventListener('click', async () => {
+const handleStopClick = async (): Promise<void> => {
   addLog('Đã dừng trợ lý theo yêu cầu.');
   updateStateBadge(PurchaseState.STOPPED, 'Đã dừng theo yêu cầu của bạn');
   // Immediately halt the live elapsed timer — don't wait for async storage update.
@@ -2694,7 +2299,7 @@ btnStop.addEventListener('click', async () => {
     timestamp: new Date().toISOString(),
     reason: 'Manual user stop via Popup UI',
   });
-});
+};
 
 if (btnResetConfig) {
   btnResetConfig.addEventListener('click', async () => {
@@ -2728,9 +2333,20 @@ btnAddTicketRow.addEventListener('click', () => {
   savePlan();
 });
 
-btnRefreshCatalog.addEventListener('click', () => {
+const handleRefreshCatalogClick = (): void => {
   addLog('Làm mới danh mục vé theo yêu cầu...');
   requestDiscoveryFromTab(true);
+};
+
+registerPopupEventListeners({
+  armButton: btnArm,
+  stopButton: btnStop,
+  refreshButton: btnRefreshCatalog,
+  saveButton: document.getElementById('btn-save') as HTMLButtonElement | null,
+  onArm: handleArmClick,
+  onStop: handleStopClick,
+  onRefresh: handleRefreshCatalogClick,
+  onSave: savePlan,
 });
 
 showingSelect.addEventListener('change', onShowingChange);
