@@ -19,7 +19,6 @@ function buildContentScript(): Plugin {
             '@application': resolve(__dirname, 'src/application'),
             '@infrastructure': resolve(__dirname, 'src/infrastructure'),
             '@extension': resolve(__dirname, 'src/extension'),
-            '@ui': resolve(__dirname, 'src/ui'),
           },
         },
         build: {
@@ -48,7 +47,6 @@ function buildContentScript(): Plugin {
             '@application': resolve(__dirname, 'src/application'),
             '@infrastructure': resolve(__dirname, 'src/infrastructure'),
             '@extension': resolve(__dirname, 'src/extension'),
-            '@ui': resolve(__dirname, 'src/ui'),
           },
         },
         build: {
@@ -79,7 +77,6 @@ export default defineConfig({
       '@application': resolve(__dirname, 'src/application'),
       '@infrastructure': resolve(__dirname, 'src/infrastructure'),
       '@extension': resolve(__dirname, 'src/extension'),
-      '@ui': resolve(__dirname, 'src/ui'),
     },
   },
   build: {
