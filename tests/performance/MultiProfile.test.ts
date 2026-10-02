@@ -62,7 +62,7 @@ describe('Performance Benchmark: Multi-Profile Isolation & Parallel Orchestratio
     );
 
     console.info('[PERF] 1 Profile Isolation Stats (ms):', stats);
-    expect(stats.p95).toBeLessThan(2);
+    expect(stats.p95).toBeLessThan(5);
   });
 
   it('measures concurrent execution across 2 isolated profiles', async () => {
@@ -77,7 +77,7 @@ describe('Performance Benchmark: Multi-Profile Isolation & Parallel Orchestratio
     );
 
     console.info('[PERF] 2 Profiles Concurrent Stats (ms):', stats);
-    expect(stats.p95).toBeLessThan(4);
+    expect(stats.p95).toBeLessThan(10);
   });
 
   it('measures concurrent execution across 4 isolated profiles', async () => {

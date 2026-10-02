@@ -52,6 +52,78 @@ export class LatencyTracker {
     });
   }
 
+  // Real Runtime T_EVENT Telemetry Model (Phase 2.1)
+  public recordTEvent(timestampMs: number = Date.now()): void {
+    this.markers.tEvent = timestampMs;
+    if (this.markers.t0AvailabilityObserved === undefined) {
+      this.markers.t0AvailabilityObserved = timestampMs;
+    }
+    this.logger?.debug('Recorded T_EVENT (earliest observable inventory change)', {
+      attemptId: this.attemptId,
+      tEvent: timestampMs,
+    });
+  }
+
+  public recordTDetected(timestampMs: number = Date.now()): void {
+    this.markers.tDetected = timestampMs;
+    if (this.markers.t1LocalDetected === undefined) {
+      this.markers.t1LocalDetected = timestampMs;
+    }
+    this.logger?.debug('Recorded T_DETECTED (assistant observed event)', {
+      attemptId: this.attemptId,
+      tDetected: timestampMs,
+    });
+  }
+
+  public recordTDiscovery(timestampMs: number = Date.now()): void {
+    this.markers.tDiscovery = timestampMs;
+    this.logger?.debug('Recorded T_DISCOVERY (catalog/inventory discovery complete)', {
+      attemptId: this.attemptId,
+      tDiscovery: timestampMs,
+    });
+  }
+
+  public recordTCandidate(timestampMs: number = Date.now()): void {
+    this.markers.tCandidate = timestampMs;
+    if (this.markers.t2SelectionDecision === undefined) {
+      this.markers.t2SelectionDecision = timestampMs;
+    }
+    this.logger?.debug('Recorded T_CANDIDATE (candidate ranking and selection decided)', {
+      attemptId: this.attemptId,
+      tCandidate: timestampMs,
+    });
+  }
+
+  public recordTReservation(timestampMs: number = Date.now()): void {
+    this.markers.tReservation = timestampMs;
+    if (this.markers.t3ReservationInitiated === undefined) {
+      this.markers.t3ReservationInitiated = timestampMs;
+    }
+    this.logger?.debug('Recorded T_RESERVATION (reservation action initiated)', {
+      attemptId: this.attemptId,
+      tReservation: timestampMs,
+    });
+  }
+
+  public recordTResult(timestampMs: number = Date.now()): void {
+    this.markers.tResult = timestampMs;
+    if (this.markers.t4ReservationResponse === undefined) {
+      this.markers.t4ReservationResponse = timestampMs;
+    }
+    if (this.markers.t5ServerConfirmedHold === undefined) {
+      this.markers.t5ServerConfirmedHold = timestampMs;
+    }
+    this.logger?.info('Recorded T_RESULT (authoritative reservation confirmation received)', {
+      attemptId: this.attemptId,
+      tResult: timestampMs,
+      breakdown: this.getBreakdown(),
+    });
+  }
+
+  public getMarkers(): Readonly<LatencyMarkers> {
+    return { ...this.markers };
+  }
+
   // Extended Journey Timings (Section 30)
   public recordTicketDiscovery(durationMs: number): void {
     this.markers.ticketDiscoveryDurationMs = durationMs;
@@ -93,6 +165,12 @@ export class LatencyTracker {
       t3ReservationInitiated: t3,
       t4ReservationResponse: t4,
       t5ServerConfirmedHold: t5,
+      tEvent,
+      tDetected,
+      tDiscovery,
+      tCandidate,
+      tReservation,
+      tResult,
       ticketDiscoveryDurationMs,
       ticketDecisionDurationMs,
       ticketSelectionDurationMs,
@@ -111,6 +189,30 @@ export class LatencyTracker {
       ...(t4 !== undefined && t5 !== undefined ? { confirmationLatencyMs: t5 - t4 } : {}),
       ...(t0 !== undefined && t5 !== undefined ? { totalCriticalLatencyMs: t5 - t0 } : {}),
       isT0Authoritative: this.isT0Authoritative,
+
+      // Real Runtime T_EVENT intervals
+      ...(tEvent !== undefined && tDetected !== undefined
+        ? { eventToDetectionMs: tDetected - tEvent }
+        : {}),
+      ...(tDetected !== undefined && tDiscovery !== undefined
+        ? { detectionToDiscoveryMs: tDiscovery - tDetected }
+        : {}),
+      ...(tDiscovery !== undefined && tCandidate !== undefined
+        ? { discoveryToCandidateMs: tCandidate - tDiscovery }
+        : {}),
+      ...(tCandidate !== undefined && tReservation !== undefined
+        ? { candidateToReservationMs: tReservation - tCandidate }
+        : {}),
+      ...(tReservation !== undefined && tResult !== undefined
+        ? { reservationToResultMs: tResult - tReservation }
+        : {}),
+      ...(tEvent !== undefined && tReservation !== undefined
+        ? { eventToReservationMs: tReservation - tEvent }
+        : {}),
+      ...(tEvent !== undefined && tResult !== undefined
+        ? { totalEventToResultMs: tResult - tEvent }
+        : {}),
+
       ...(ticketDiscoveryDurationMs !== undefined ? { ticketDiscoveryDurationMs } : {}),
       ...(ticketDecisionDurationMs !== undefined ? { ticketDecisionDurationMs } : {}),
       ...(ticketSelectionDurationMs !== undefined ? { ticketSelectionDurationMs } : {}),

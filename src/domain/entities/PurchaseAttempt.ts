@@ -10,6 +10,14 @@ export interface LatencyMarkers {
   t4ReservationResponse?: number | undefined;
   t5ServerConfirmedHold?: number | undefined;
 
+  // Real Runtime T_EVENT Telemetry Model (Phase 2.1)
+  tEvent?: number | undefined;
+  tDetected?: number | undefined;
+  tDiscovery?: number | undefined;
+  tCandidate?: number | undefined;
+  tReservation?: number | undefined;
+  tResult?: number | undefined;
+
   // Extended Journey Timings (Section 30)
   ticketDiscoveryStart?: number | undefined;
   ticketDiscoveryEnd?: number | undefined;
@@ -45,6 +53,15 @@ export interface LatencyBreakdown {
   confirmationLatencyMs?: number | undefined;
   totalCriticalLatencyMs?: number | undefined;
   isT0Authoritative: boolean;
+
+  // Real Runtime T_EVENT Breakdown Intervals
+  eventToDetectionMs?: number | undefined;
+  detectionToDiscoveryMs?: number | undefined;
+  discoveryToCandidateMs?: number | undefined;
+  candidateToReservationMs?: number | undefined;
+  reservationToResultMs?: number | undefined;
+  eventToReservationMs?: number | undefined; // Primary Objective
+  totalEventToResultMs?: number | undefined;
 
   // Extended Journey Durations (Section 30)
   ticketDiscoveryDurationMs?: number | undefined;
@@ -110,6 +127,49 @@ export class PurchaseAttempt {
     this._markers.t5ServerConfirmedHold = timestampMs;
   }
 
+  // Real Runtime T_EVENT Telemetry Model (Phase 2.1)
+  public markTEvent(timestampMs: number = Date.now()): void {
+    this._markers.tEvent = timestampMs;
+    if (this._markers.t0AvailabilityObserved === undefined) {
+      this._markers.t0AvailabilityObserved = timestampMs;
+    }
+  }
+
+  public markTDetected(timestampMs: number = Date.now()): void {
+    this._markers.tDetected = timestampMs;
+    if (this._markers.t1LocalDetected === undefined) {
+      this._markers.t1LocalDetected = timestampMs;
+    }
+  }
+
+  public markTDiscovery(timestampMs: number = Date.now()): void {
+    this._markers.tDiscovery = timestampMs;
+  }
+
+  public markTCandidate(timestampMs: number = Date.now()): void {
+    this._markers.tCandidate = timestampMs;
+    if (this._markers.t2SelectionDecision === undefined) {
+      this._markers.t2SelectionDecision = timestampMs;
+    }
+  }
+
+  public markTReservation(timestampMs: number = Date.now()): void {
+    this._markers.tReservation = timestampMs;
+    if (this._markers.t3ReservationInitiated === undefined) {
+      this._markers.t3ReservationInitiated = timestampMs;
+    }
+  }
+
+  public markTResult(timestampMs: number = Date.now()): void {
+    this._markers.tResult = timestampMs;
+    if (this._markers.t4ReservationResponse === undefined) {
+      this._markers.t4ReservationResponse = timestampMs;
+    }
+    if (this._markers.t5ServerConfirmedHold === undefined) {
+      this._markers.t5ServerConfirmedHold = timestampMs;
+    }
+  }
+
   public getMarkers(): Readonly<LatencyMarkers> {
     return { ...this._markers };
   }
@@ -122,6 +182,20 @@ export class PurchaseAttempt {
       t3ReservationInitiated: t3,
       t4ReservationResponse: t4,
       t5ServerConfirmedHold: t5,
+      tEvent,
+      tDetected,
+      tDiscovery,
+      tCandidate,
+      tReservation,
+      tResult,
+      ticketDiscoveryDurationMs,
+      ticketDecisionDurationMs,
+      ticketSelectionDurationMs,
+      areaSelectionDurationMs,
+      seatDiscoveryDurationMs,
+      seatSelectionDurationMs,
+      summaryVerificationDurationMs,
+      formDetectionDurationMs,
     } = this._markers;
 
     return {
@@ -132,6 +206,38 @@ export class PurchaseAttempt {
       ...(t4 !== undefined && t5 !== undefined ? { confirmationLatencyMs: t5 - t4 } : {}),
       ...(t0 !== undefined && t5 !== undefined ? { totalCriticalLatencyMs: t5 - t0 } : {}),
       isT0Authoritative: this.isT0Authoritative,
+
+      // Real Runtime T_EVENT intervals
+      ...(tEvent !== undefined && tDetected !== undefined
+        ? { eventToDetectionMs: tDetected - tEvent }
+        : {}),
+      ...(tDetected !== undefined && tDiscovery !== undefined
+        ? { detectionToDiscoveryMs: tDiscovery - tDetected }
+        : {}),
+      ...(tDiscovery !== undefined && tCandidate !== undefined
+        ? { discoveryToCandidateMs: tCandidate - tDiscovery }
+        : {}),
+      ...(tCandidate !== undefined && tReservation !== undefined
+        ? { candidateToReservationMs: tReservation - tCandidate }
+        : {}),
+      ...(tReservation !== undefined && tResult !== undefined
+        ? { reservationToResultMs: tResult - tReservation }
+        : {}),
+      ...(tEvent !== undefined && tReservation !== undefined
+        ? { eventToReservationMs: tReservation - tEvent }
+        : {}),
+      ...(tEvent !== undefined && tResult !== undefined
+        ? { totalEventToResultMs: tResult - tEvent }
+        : {}),
+
+      ...(ticketDiscoveryDurationMs !== undefined ? { ticketDiscoveryDurationMs } : {}),
+      ...(ticketDecisionDurationMs !== undefined ? { ticketDecisionDurationMs } : {}),
+      ...(ticketSelectionDurationMs !== undefined ? { ticketSelectionDurationMs } : {}),
+      ...(areaSelectionDurationMs !== undefined ? { areaSelectionDurationMs } : {}),
+      ...(seatDiscoveryDurationMs !== undefined ? { seatDiscoveryDurationMs } : {}),
+      ...(seatSelectionDurationMs !== undefined ? { seatSelectionDurationMs } : {}),
+      ...(summaryVerificationDurationMs !== undefined ? { summaryVerificationDurationMs } : {}),
+      ...(formDetectionDurationMs !== undefined ? { formDetectionDurationMs } : {}),
     };
   }
 }

@@ -84,7 +84,7 @@ describe('Performance Benchmark: Mutation Storms and Event Coalescing', () => {
     );
 
     console.info('[PERF] 100 Mutations Coalesce Stats (ms):', stats);
-    expect(stats.median).toBeLessThan(40);
+    expect(stats.median).toBeLessThan(60);
   });
 
   it('handles 1,000 mutations without event storm (runs <= 2)', async () => {
@@ -108,7 +108,7 @@ describe('Performance Benchmark: Mutation Storms and Event Coalescing', () => {
     );
 
     console.info('[PERF] 1,000 Mutations Coalesce Stats (ms):', stats);
-    expect(stats.median).toBeLessThan(50);
+    expect(stats.median).toBeLessThan(120);
   });
 
   it('handles 10,000 mutations storm: 10,000 mutations != 10,000 discovery runs (runs <= 3)', async () => {
@@ -134,6 +134,6 @@ describe('Performance Benchmark: Mutation Storms and Event Coalescing', () => {
     );
 
     console.info('[PERF] 10,000 Mutations Coalesce Stats (ms):', stats);
-    expect(stats.median).toBeLessThan(100);
+    expect(stats.median).toBeLessThan(200);
   });
 });

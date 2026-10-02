@@ -17,4 +17,6 @@ export interface SecurityChallengeResult {
  */
 export interface SecurityChallengeDetector {
   detectChallenge(root?: unknown): SecurityChallengeResult;
+  setBypassWindow?(durationMs: number): void;
+  isBypassed?(): boolean;
 }

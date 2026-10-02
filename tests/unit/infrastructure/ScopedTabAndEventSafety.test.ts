@@ -35,6 +35,16 @@ describe('P1-6: Scoped Configuration to Tab & Event', () => {
       expect(extractEventIdFromUrl('https://ticketbox.vn/event/special-gala/booking')).toBe(
         'special-gala'
       );
+      expect(
+        extractEventIdFromUrl(
+          'https://ticketbox.vn/events/26624/bookings/9208429695672/question-form?date=2026-10-02'
+        )
+      ).toBe('26624');
+      expect(
+        extractEventIdFromUrl(
+          'https://ticketbox.vn/events/26624/bookings/9208429695672/select-ticket'
+        )
+      ).toBe('26624');
     });
 
     it('should return null for non-event or stray URLs', () => {

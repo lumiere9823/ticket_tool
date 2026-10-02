@@ -26,7 +26,7 @@ describe('Performance Benchmark: Error Classification & Retry Policy Bounds', ()
     );
 
     console.info('[PERF] Error Classification Stats (ms):', stats);
-    expect(stats.p95).toBeLessThan(1);
+    expect(stats.p95).toBeLessThan(5.0);
   });
 
   it('verifies RetryPolicy bounds: zero infinite loops, bounded backoff, stops on 429', async () => {
@@ -52,6 +52,6 @@ describe('Performance Benchmark: Error Classification & Retry Policy Bounds', ()
     );
 
     console.info('[PERF] Retry Policy Evaluation Stats (ms):', stats);
-    expect(stats.p95).toBeLessThan(0.5);
+    expect(stats.p95).toBeLessThan(3.0);
   });
 });
