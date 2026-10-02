@@ -3,6 +3,7 @@ import { TicketboxPageAdapter } from '../ports/TicketboxPageAdapter';
 import { EventBus } from '../ports/EventBus';
 import { LoggerPort } from '../ports/LoggerPort';
 import { LatencyTracker } from '../services/LatencyTracker';
+import { SecurityChallengeHandler } from '../services/SecurityChallengeHandler';
 import { SecurityChallengeDetector } from '../ports/SecurityChallengeDetector';
 import { PurchaseState, FailureReason, canAutoReset } from '../../domain/states/PurchaseState';
 import {
@@ -179,26 +180,12 @@ export class ExecuteBookingJourneyUseCase {
               targetState: challenge.targetState,
             }
           );
-          const targetState = challenge.targetState ?? PurchaseState.HUMAN_INTERVENTION_REQUIRED;
-          if (targetState === PurchaseState.CAPTCHA_REQUIRED) {
-            this.stateMachine.transition({ type: 'CAPTCHA_REQUIRED' });
-          } else if (targetState === PurchaseState.OTP_REQUIRED) {
-            this.stateMachine.transition({ type: 'OTP_REQUIRED' });
-          } else if (targetState === PurchaseState.SESSION_REAUTH_REQUIRED) {
-            this.stateMachine.transition({ type: 'SESSION_REAUTH_REQUIRED' });
-          } else if (targetState === PurchaseState.RATE_LIMITED) {
-            this.stateMachine.transition({ type: 'RATE_LIMITED' });
-          } else {
-            this.stateMachine.transition({
-              type: 'SECURITY_CHALLENGE_DETECTED',
-              challengeType: challenge.type,
-            });
-          }
+          const handled = SecurityChallengeHandler.handle(challenge, this.stateMachine);
           return {
             success: true,
-            finalState: this.stateMachine.state,
-            requiresUserAction: true,
-            actionRequiredReason: challenge.details ?? 'Security challenge detected',
+            finalState: handled.finalState,
+            requiresUserAction: handled.requiresUserAction,
+            actionRequiredReason: handled.details,
           };
         }
       }
@@ -284,27 +271,12 @@ export class ExecuteBookingJourneyUseCase {
                   targetState: retryChallenge.targetState,
                 }
               );
-              const targetState =
-                retryChallenge.targetState ?? PurchaseState.HUMAN_INTERVENTION_REQUIRED;
-              if (targetState === PurchaseState.CAPTCHA_REQUIRED) {
-                this.stateMachine.transition({ type: 'CAPTCHA_REQUIRED' });
-              } else if (targetState === PurchaseState.OTP_REQUIRED) {
-                this.stateMachine.transition({ type: 'OTP_REQUIRED' });
-              } else if (targetState === PurchaseState.SESSION_REAUTH_REQUIRED) {
-                this.stateMachine.transition({ type: 'SESSION_REAUTH_REQUIRED' });
-              } else if (targetState === PurchaseState.RATE_LIMITED) {
-                this.stateMachine.transition({ type: 'RATE_LIMITED' });
-              } else {
-                this.stateMachine.transition({
-                  type: 'SECURITY_CHALLENGE_DETECTED',
-                  challengeType: retryChallenge.type,
-                });
-              }
+              const handled = SecurityChallengeHandler.handle(retryChallenge, this.stateMachine);
               return {
                 success: true,
-                finalState: this.stateMachine.state,
-                requiresUserAction: true,
-                actionRequiredReason: retryChallenge.details ?? 'Security challenge detected',
+                finalState: handled.finalState,
+                requiresUserAction: handled.requiresUserAction,
+                actionRequiredReason: handled.details,
               };
             }
           }
@@ -718,6 +690,7 @@ export class ExecuteBookingJourneyUseCase {
 
     // 2. TICKET DISCOVERY
     const tDiscoveryStart = Date.now();
+    latencyTracker?.recordTDiscovery(tDiscoveryStart);
     const tickets: JourneyTicketType[] = this.adapter.discoverJourneyTickets
       ? await this.adapter.discoverJourneyTickets(preferences.preferredShowingId)
       : [];
@@ -765,6 +738,7 @@ export class ExecuteBookingJourneyUseCase {
     );
     const tDecisionEnd = Date.now();
     latencyTracker?.recordTicketDecision(tDecisionEnd - tDecisionStart);
+    latencyTracker?.recordTCandidate(tDecisionEnd);
 
     if (!decision.selectedTicket) {
       this.logger.warn(`No ticket selected: ${decision.reason}`);
@@ -805,6 +779,7 @@ export class ExecuteBookingJourneyUseCase {
     }
 
     const tSelectionStart = Date.now();
+    latencyTracker?.recordTReservation(tSelectionStart);
     const ticketId = chosenTicket.id ?? chosenTicket.name;
     const targetShowingId = chosenTicket.showingId ?? preferences.preferredShowingId ?? null;
     const selectedSuccess = await this.adapter.selectTicket(
@@ -814,6 +789,7 @@ export class ExecuteBookingJourneyUseCase {
     );
     const tSelectionEnd = Date.now();
     latencyTracker?.recordTicketSelection(tSelectionEnd - tSelectionStart);
+    latencyTracker?.recordTResult(tSelectionEnd);
 
     if (!selectedSuccess) {
       throw new BookingError({

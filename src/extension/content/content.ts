@@ -9,6 +9,7 @@ import { PurchaseState, StateContext, canAutoReset } from '../../domain/states/P
 import { ChromeStorageRepository } from '../../infrastructure/storage/ChromeStorageRepository';
 import { BookingPreferences } from '../../domain/entities/BookingJourneyModels';
 import { LatencyTracker } from '../../application/services/LatencyTracker';
+import { SecurityChallengeHandler } from '../../application/services/SecurityChallengeHandler';
 import {
   filterByScope,
   pickTarget,
@@ -822,21 +823,7 @@ async function runMonitoringCycle(): Promise<void> {
         }
       );
       isMonitoringActive = false;
-      const targetState = challenge.targetState ?? PurchaseState.HUMAN_INTERVENTION_REQUIRED;
-      if (targetState === PurchaseState.CAPTCHA_REQUIRED) {
-        stateMachine.transition({ type: 'CAPTCHA_REQUIRED' });
-      } else if (targetState === PurchaseState.OTP_REQUIRED) {
-        stateMachine.transition({ type: 'OTP_REQUIRED' });
-      } else if (targetState === PurchaseState.SESSION_REAUTH_REQUIRED) {
-        stateMachine.transition({ type: 'SESSION_REAUTH_REQUIRED' });
-      } else if (targetState === PurchaseState.RATE_LIMITED) {
-        stateMachine.transition({ type: 'RATE_LIMITED' });
-      } else {
-        stateMachine.transition({
-          type: 'SECURITY_CHALLENGE_DETECTED',
-          challengeType: challenge.type,
-        });
-      }
+      SecurityChallengeHandler.handle(challenge, stateMachine);
       startChallengeResolutionWatcher();
       return;
     }
