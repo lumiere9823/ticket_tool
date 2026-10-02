@@ -76,13 +76,13 @@ Toàn bộ các yêu cầu khắt khe nhất về an toàn miền (domain safety
 
 Tất cả các quyết định kiến trúc then chốt đã được biên soạn và phê duyệt đầy đủ trong thư mục `docs/ticketbox/decisions/`:
 
-1. [`ADR-001`](docs/ticketbox/decisions/ADR-001-extension-first.md): Kiến trúc Tiện ích Trình duyệt (Chrome Extension MV3) làm nền tảng vận hành chính.
-2. [`ADR-002`](docs/ticketbox/decisions/ADR-002-critical-path.md): Tách biệt Luồng Đường dẫn Tới hạn (Critical Path) và Cơ chế Đệm Lỗi.
-3. [`ADR-003`](docs/ticketbox/decisions/ADR-003-multi-profile-architecture.md): Phân lập Hồ sơ Trình duyệt Đa tài khoản & Phòng chống Nhiễm bẩn Ngữ cảnh Chéo.
-4. [`ADR-004`](docs/ticketbox/decisions/ADR-004-state-machine-single-source-of-truth.md): Máy Trạng thái là Nguồn Sự thật Duy nhất và Bất biến.
-5. [`ADR-005`](docs/ticketbox/decisions/ADR-005-phase-3-security-and-privacy.md): Củng cố Bảo mật, Quyền riêng tư, Mã hóa Nonce & Phân lập Lưu trữ.
-6. [`ADR-006`](docs/ticketbox/decisions/ADR-006-state-machine-invariants-and-audit.md): Khóa Bất biến Máy Trạng thái, Kiểm toán Chuyển dịch & Phục hồi Ngữ cảnh.
-7. [`ADR-007`](docs/ticketbox/decisions/ADR-007-booking-journey-and-form-autofill-reliability.md): Độ Tin cậy Hành trình Đặt vé, Điền Form Khảo sát React & Xử lý Tranh chấp Ghế.
+1. [`ADR-001`](decisions/ADR-001-extension-first.md): Kiến trúc Tiện ích Trình duyệt (Chrome Extension MV3) làm nền tảng vận hành chính.
+2. [`ADR-002`](decisions/ADR-002-critical-path.md): Tách biệt Luồng Đường dẫn Tới hạn (Critical Path) và Cơ chế Đệm Lỗi.
+3. [`ADR-003`](decisions/ADR-003-multi-profile-architecture.md): Phân lập Hồ sơ Trình duyệt Đa tài khoản & Phòng chống Nhiễm bẩn Ngữ cảnh Chéo.
+4. [`ADR-004`](decisions/ADR-004-state-machine-single-source-of-truth.md): Máy Trạng thái là Nguồn Sự thật Duy nhất và Bất biến.
+5. [`ADR-005`](decisions/ADR-005-phase-3-security-and-privacy.md): Củng cố Bảo mật, Quyền riêng tư, Mã hóa Nonce & Phân lập Lưu trữ.
+6. [`ADR-006`](decisions/ADR-006-state-machine-invariants-and-audit.md): Khóa Bất biến Máy Trạng thái, Kiểm toán Chuyển dịch & Phục hồi Ngữ cảnh.
+7. [`ADR-007`](decisions/ADR-007-booking-journey-and-form-autofill-reliability.md): Độ Tin cậy Hành trình Đặt vé, Điền Form Khảo sát React & Xử lý Tranh chấp Ghế.
 
 ---
 

@@ -23,33 +23,35 @@ A browser-based purchase assistant for Ticketbox engineered with strict reservat
 
 ```text
 ├── docs/ticketbox/            # Authoritative architecture, PRD, and discovery docs
-│   ├── decisions/             # ADR-001, ADR-002, ADR-003
-│   ├── 00-project-overview.md
-│   ├── 01-product-requirements.md
-│   ├── 04-state-machine.md
-│   ├── 05-reservation-boundary.md
-│   ├── 06-multi-account-orchestration.md
-│   ├── 08-security-and-compliance.md
-│   ├── 14-repository-audit.md           # Phase 0 Audit
-│   ├── 15-architecture-baseline.md       # Phase 1 Freeze
-│   ├── 16-technology-stack.md           # Phase 2 Tech Decision
-│   └── 17-ticketbox-adapter-evidence.md # Discovery Evidence Log
+│   ├── README.md               # Full documentation index (start here)
+│   ├── SUMMARY.md               # 1-page architecture/invariants summary
+│   ├── decisions/              # ADR-001..ADR-008
+│   └── 00-23-*.md               # Numbered specs (see docs/ticketbox/README.md for the full list)
 │
 ├── src/
-│   ├── domain/                # Pure domain layer (entities, policies, state machine)
-│   ├── application/           # Use cases, ports, and latency services
-│   ├── infrastructure/        # Chrome storage, message bus, sanitized logger, adapters
-│   └── extension/             # Manifest V3 service worker, content script, popup UI
+│   ├── domain/                 # Pure domain layer (entities, policies, state machine) — zero Chrome/DOM deps
+│   ├── application/             # Use cases, ports, and latency services
+│   ├── infrastructure/          # Chrome storage, message bus, sanitized logger, Ticketbox adapters
+│   └── extension/               # Manifest V3 service worker, content script, popup UI
+│       ├── background/           # service-worker.ts
+│       ├── content/               # content.ts, page-bridge.ts (MAIN world bridge)
+│       ├── popup/                 # popup.html/.ts + extracted view/controller modules
+│       └── shared/                 # Typed message bus contracts, bridge protocol, network safety
 │
 ├── tests/
-│   └── unit/                  # Vitest unit test suites (Domain, Application, Security)
+│   ├── unit/                   # Vitest unit suites: domain/, application/, infrastructure/, extension/
+│   ├── performance/              # Benchmark-style suites (latency, mutation storms, IPC)
+│   └── fixtures/                  # Shared deterministic HTML/catalog/popup fixtures
 │
+├── scripts/                    # Dev-only tooling (Chromium CAPTCHA probe, real-runtime benchmark)
 ├── public/
-│   └── manifest.json          # Chrome Extension Manifest V3
+│   └── manifest.json            # Chrome Extension Manifest V3
 ├── package.json
 ├── tsconfig.json
 └── vite.config.ts
 ```
+
+See **[docs/ticketbox/README.md](docs/ticketbox/README.md)** for the complete, maintained documentation index.
 
 ---
 
@@ -78,7 +80,9 @@ npm run typecheck
 ### 4.3 Running Tests
 
 ```bash
-npm test
+npm test                # full suite (unit + performance)
+npm run test:coverage   # same suite with V8 coverage report
+npm run test:contracts  # popup view/controller contract tests only
 ```
 
 ### 4.4 Linting & Formatting
@@ -86,6 +90,7 @@ npm test
 ```bash
 npm run lint
 npm run format:check
+npm run format         # rewrites files in place
 ```
 
 ### 4.5 Production Build
@@ -95,6 +100,12 @@ npm run build
 ```
 
 The compiled, ready-to-load extension will be generated in `dist/`.
+
+### 4.6 Full CI Gate
+
+```bash
+npm run ci   # typecheck + lint + format:check + test + build
+```
 
 ---
 
@@ -122,3 +133,12 @@ The compiled, ready-to-load extension will be generated in `dist/`.
 1. **No Credential Storage:** The extension never prompts for, captures, or persists passwords, OTP codes, or payment cards.
 2. **Sanitized Logs:** All tokens, cookies, authorization headers, and CVVs are automatically masked as `[REDACTED]`.
 3. **No Abuse Controls Bypass:** CAPTCHA, waiting queues, and rate limits are never bypassed. Platform errors trigger safe, bounded stop.
+
+---
+
+## 8. Further Reading
+
+- **[docs/ticketbox/README.md](docs/ticketbox/README.md)** — full documentation index.
+- **[docs/ticketbox/SUMMARY.md](docs/ticketbox/SUMMARY.md)** — 1-page architecture/invariants summary.
+- **[HUONG_DAN_SU_DUNG.md](HUONG_DAN_SU_DUNG.md)** — Vietnamese end-user guide to the popup, including a troubleshooting section.
+- **[CHANGELOG.md](CHANGELOG.md)** — notable changes.

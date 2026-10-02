@@ -13,6 +13,7 @@ Chào bạn! Đây là tài liệu hướng dẫn chi tiết từng bước sử
 5. [Tính năng Hẹn Giờ Mở Bán (Scheduled ARM) & Cơ chế Đánh thức](#5-tính-năng-hẹn-giờ-mở-bán-scheduled-arm)
 6. [Các lưu ý "sống còn" khi săn vé Ticketbox](#6-các-lưu-ý-sống-còn-khi-săn-vé-ticketbox)
 7. [Giải đáp thắc mắc thường gặp (FAQ)](#7-giải-đáp-thắc-mắc-thường-gặp-faq)
+8. [Xử lý sự cố](#8-xử-lý-sự-cố)
 
 ---
 
@@ -38,7 +39,7 @@ Giao diện popup hiện nay được chia thành **2 chế độ riêng biệt*
 | **Đối tượng**         | Người dùng thông thường, muốn săn vé nhanh, dễ hiểu             | Săn vé show lớn, nhiều ngày, cần chiến thuật dự phòng chặt chẽ         |
 | **Cách chọn vé**      | Tick chọn trực tiếp vào danh sách vé hiển thị giá tiền          | Bảng ma trận Suất diễn × Hạng vé (Scoped Matrix)                       |
 | **Chiến lược**        | Ưu tiên từ trên xuống dưới theo danh sách vé đã chọn            | Tùy biến: Theo Rank mục tiêu, Ưu tiên suất diễn, hay Ưu tiên hạng vé   |
-| **Thông số kiên trì** | Tự động áp dụng tối ưu (Poll 1.8s, trần 120 phút, 1000 lần thử) | Cho phép tự chỉnh trần phút, trần số lần thử, khoảng cách poll, Jitter |
+| **Thông số kiên trì** | Tự động áp dụng mặc định (Poll 2s, trần 120 phút, 1000 lần thử) | Cho phép tự chỉnh trần phút, trần số lần thử, khoảng cách poll, Jitter |
 | **Thao tác ARM**      | 1 Click duy nhất là chạy ngay                                   | Yêu cầu tick hộp kiểm duyệt an toàn (Scope Confirmation)               |
 
 ---
@@ -75,6 +76,7 @@ Giao diện popup hiện nay được chia thành **2 chế độ riêng biệt*
      - **Nếu chưa mở bán (ví dụ mở lúc 14:00):** Bấm chọn ngày và giờ mở bán là `14:00`.
 3. **3. THÔNG TIN NGƯỜI NHẬN (PROFILE):**
    - Điền Họ tên, Số điện thoại, Email, Số CCCD. Extension sẽ tự động ghi nhớ cho các lần sau.
+   - **Bắt buộc tick ô "Đồng ý điều khoản & BTC sử dụng thông tin".** Nếu sự kiện có bảng câu hỏi (question form) yêu cầu đồng ý điều khoản mà ô này chưa tick, trợ lý sẽ **tự động dừng lại** ở trạng thái `CONSENT_REQUIRED` và chờ bạn tick thủ công — đây là hành vi an toàn có chủ đích, không phải lỗi.
 
 ### Bước 4: Bấm nút ARM và an tâm chờ đợi
 
@@ -160,3 +162,32 @@ Ticketbox Assistant được trang bị cơ chế hẹn giờ thông minh qua **
 ---
 
 _Chúc bạn săn được những tấm vé ưng ý với Ticketbox Purchase Assistant!_
+
+### CAPTCHA, OTP hoặc yêu cầu đăng nhập lại
+
+- Khi phát hiện CAPTCHA/Turnstile/reCAPTCHA/hCaptcha, OTP hoặc phiên đăng nhập hết hạn, trợ lý chuyển sang trạng thái can thiệp thủ công và dừng hành trình tự động.
+- Hãy giải thử thách trực tiếp trên tab Ticketbox, đăng nhập lại nếu được yêu cầu, rồi bấm **Tiếp tục sau khi xác thực** trong banner popup.
+- Extension không tự giải CAPTCHA, không tự nhập OTP và không lưu các giá trị này.
+
+### Rate limit hoặc hàng chờ
+
+- Khi gặp tín hiệu rate limit, trợ lý dừng an toàn hoặc chuyển sang trạng thái chờ theo state machine; không cố tăng tốc hoặc gửi request dồn dập.
+- Hàng chờ/waiting room không được bypass. Hãy để trang Ticketbox xử lý theo quy trình bình thường và chỉ tiếp tục khi giao diện đã sẵn sàng.
+
+### Trang 404 hoặc tab bị chuyển sai trang
+
+- Khi đang theo dõi mà tab rơi vào trang 404, trang chủ hoặc một event khác, content script có cơ chế nhận diện và thử quay về `targetEventUrl` với thời gian cooldown.
+- Nếu không tự khôi phục, mở lại đúng trang event, kiểm tra URL trong popup và bấm **Làm mới catalog**.
+
+### Hết vé, không thấy catalog hoặc tab bị ẩn
+
+- Discovery là thụ động và chỉ hiển thị dữ liệu quan sát được. Nếu catalog trống, mở đúng trang event rồi bấm **Làm mới catalog**; không nhập endpoint hoặc selector thủ công.
+- Cảnh báo `Tab hidden` nghĩa là Chrome có thể giảm độ chính xác timer nền. Giữ tab Ticketbox ở foreground trong thời gian săn vé.
+- Polling luôn có sàn an toàn `1500ms` và có giới hạn thời gian/số lần thử; giá trị `0` cho hai giới hạn này không biến hành trình thành vô hạn.
+
+### Đã tới bước thanh toán
+
+- Khi tới `/payment`, `/checkout` hoặc trạng thái `PAYMENT_GATE`, trợ lý dừng để bạn tự chọn phương thức thanh toán và nhập OTP/3DS nếu cần.
+- Không coi việc chuyển URL, banner hoặc nút đã bấm là bằng chứng thanh toán thành công. Chỉ state có receipt/confirmation từ server mới là xác nhận cuối cùng.
+
+---

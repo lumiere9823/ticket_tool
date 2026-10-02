@@ -11,7 +11,7 @@
 
 The repository currently exists in a **documentation-first greenfield state**:
 
-- **Source Code:** No production code (`src/` does not exist).
+- **Source Code at the time of this audit:** The repository was documentation-first; the current production code now lives under `src/` (notably `src/extension/content/`).
 - **Environment:** Node.js `v24.11.1`, npm `11.6.4`, Windows OS, PowerShell shell. Package manager `pnpm` is not installed; `npm` is the verified available package manager.
 - **Git Repository:** Not yet initialized as a git repo (`fatal: not a git repository`).
 - **Existing Documentation:** 14 documentation files under `docs/ticketbox/`, 3 Architecture Decision Records (ADRs) under `docs/ticketbox/decisions/`, and 8 agent skill definitions under `.agents/skills/`.
@@ -57,7 +57,7 @@ Every requirement and assumption in the documentation has been evaluated and cla
 ### Contradiction 1: Layering & Content Script Responsibilities
 
 - **The Conflict:**  
-  In `07-extension-architecture.md` (lines 65–70 and 304–307), `selection-engine.ts` is explicitly placed inside `src/content/`, and the critical path diagram states: `Ticketbox -> Content Script -> Selection Engine -> Normal reservation interaction`.  
+  In `07-extension-architecture.md` (lines 65–70 and 304–307), `selection-engine.ts` is explicitly placed inside the historical content-script directory, and the critical path diagram states: `Ticketbox -> Content Script -> Selection Engine -> Normal reservation interaction`.
   However, in `11-technical-design.md` (lines 38–46, 65–76) and AI Rule 04 (`12-ai-engineering-rules.md`), business rules, selection policies, retry policies, and state machine transitions are strictly forbidden from living in Content Scripts:
   > _"Avoid: content script ├── DOM ├── business rules ├── retry ├── account policy └── state machine. Instead: DOM Adapter ↓ Application ↓ Domain"_
 - **Resolution:**  

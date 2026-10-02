@@ -11,13 +11,14 @@
     "test": "vitest run",
     "test:contracts": "vitest run tests/unit/extension/PopupViews.contract.test.ts",
     "test:coverage": "vitest run --coverage",
+    "docs:check": "npx tsx scripts/check-docs.ts",
     "test:watch": "vitest",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "test:chromium": "npx tsx scripts/test-chromium-captcha.ts",
-    "ci": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run build"
+    "ci": "npm run typecheck && npm run lint && npm run format:check && npm run docs:check && npm run test && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",

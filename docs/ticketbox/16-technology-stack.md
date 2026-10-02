@@ -147,14 +147,16 @@ The compiler configuration in `tsconfig.json` enforces maximum strictness:
 
 ## 6. Manifest V3 Permissions Strategy
 
-In strict adherence to Principle S-001 (Least Privilege):
+In strict adherence to Principle S-001 (Least Privilege). Source of truth: `public/manifest.json`.
 
-- **Host Permissions:** Restricted strictly to `*://*.ticketbox.vn/*` (and `*://localhost/*` for testing/discovery fixtures).
-- **Chrome API Permissions:**
+- **Host Permissions:** Restricted strictly to `*://*.ticketbox.vn/*`. There is no `localhost` host permission in the shipped manifest; local fixtures run entirely inside Vitest/JSDOM without a browser host permission.
+- **Chrome API Permissions (`permissions` array in `public/manifest.json`):**
   - `storage`: Required for local configuration, preferences, and session state rehydration.
   - `activeTab`: Required for interacting with the currently active Ticketbox tab when user clicks the extension.
-  - `tabs`: Required for checking event URLs.
-  - `alarms`: Required for heartbeat checks without persistent background wake-locks.
+  - `alarms`: Required for heartbeat checks (scheduled ARM timer, persistent-purchase limit checks) without persistent background wake-locks.
+  - `scripting`: Required to dynamically inject `content.js` via `chrome.scripting.executeScript` when the popup detects the content script has not yet attached to an open Ticketbox tab (see `requestDiscoveryFromTab` in `popup.ts`).
+  - `notifications`: Required to surface `chrome.notifications.create` system notifications from the service worker (e.g. human-intervention and reservation-result alerts).
+  - There is no separate `tabs` permission. `chrome.tabs.query({ url: '*://*.ticketbox.vn/*' })` calls (service-worker.ts, popup.ts, ChromeMessageBus.ts) work without it because Chrome grants URL-filtered tab queries once a matching host permission is already declared.
 - **Explicitly Excluded Permissions:**
   - `cookies`: Excluded to prevent direct session extraction or cookie theft.
   - `webRequestBlocking`: Excluded (MV3 declarativeNetRequest or passive observation preferred).
