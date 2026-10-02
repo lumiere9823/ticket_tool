@@ -231,11 +231,19 @@ export class LatencyTracker {
       // Server Clock Synchronization & Scheduled Arming Timings (N4)
       ...(this.markers.tArmed !== undefined ? { tArmed: this.markers.tArmed } : {}),
       ...(this.markers.tTarget !== undefined ? { tTarget: this.markers.tTarget } : {}),
-      ...(this.markers.tFirstAction !== undefined ? { tFirstAction: this.markers.tFirstAction } : {}),
-      ...(this.markers.serverOffsetMs !== undefined ? { serverOffsetMs: this.markers.serverOffsetMs } : {}),
+      ...(this.markers.tFirstAction !== undefined
+        ? { tFirstAction: this.markers.tFirstAction }
+        : {}),
+      ...(this.markers.serverOffsetMs !== undefined
+        ? { serverOffsetMs: this.markers.serverOffsetMs }
+        : {}),
       ...(this.markers.serverRttMs !== undefined ? { serverRttMs: this.markers.serverRttMs } : {}),
-      ...(this.markers.clockUncertaintyMs !== undefined ? { clockUncertaintyMs: this.markers.clockUncertaintyMs } : {}),
-      ...(this.markers.targetDeltaMs !== undefined ? { targetDeltaMs: this.markers.targetDeltaMs } : {}),
+      ...(this.markers.clockUncertaintyMs !== undefined
+        ? { clockUncertaintyMs: this.markers.clockUncertaintyMs }
+        : {}),
+      ...(this.markers.targetDeltaMs !== undefined
+        ? { targetDeltaMs: this.markers.targetDeltaMs }
+        : {}),
 
       // Real Runtime T_EVENT intervals
       ...(tEvent !== undefined && tDetected !== undefined

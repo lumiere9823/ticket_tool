@@ -361,7 +361,9 @@ async function detectAndRecoverFromStrayPage(): Promise<boolean> {
 
   // If 404 persists beyond ceiling after T0, halt and prompt user
   if (consecutive404Count > MAX_CONSECUTIVE_404_RETRIES) {
-    logger.warn('404 error persisted beyond maximum retries. Halting automation for user intervention.');
+    logger.warn(
+      '404 error persisted beyond maximum retries. Halting automation for user intervention.'
+    );
     isMonitoringActive = false;
     userExplicitlyStopped = true;
     try {

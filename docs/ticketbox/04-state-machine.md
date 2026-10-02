@@ -132,6 +132,7 @@ OTP_REQUIRED
 PAYMENT_ACTION_REQUIRED
 SESSION_REAUTH_REQUIRED
 UNKNOWN_SECURITY_CHALLENGE
+IN_QUEUE
 ```
 
 Không bypass:
@@ -142,6 +143,7 @@ Không bypass:
 - payment verification
 - security challenge
 - anti-bot mechanism
+- virtual waiting room / queue (giữ nguyên tab, cấm reload, cấm bypass)
 
 ---
 

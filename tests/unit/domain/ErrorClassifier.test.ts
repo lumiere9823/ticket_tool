@@ -85,7 +85,10 @@ describe('ErrorClassifier', () => {
     });
 
     it('should classify structured status 404 and NOT_FOUND code as TRANSIENT retryable', () => {
-      const error404 = ErrorClassifier.classify({ status: 404, message: 'Event not yet open or not found' });
+      const error404 = ErrorClassifier.classify({
+        status: 404,
+        message: 'Event not yet open or not found',
+      });
       expect(error404.category).toBe('PLATFORM');
       expect(error404.standardCategory).toBe('TRANSIENT');
       expect(error404.isRetryable).toBe(true);

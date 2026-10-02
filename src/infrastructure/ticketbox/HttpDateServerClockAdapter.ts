@@ -30,8 +30,7 @@ export class HttpDateServerClockAdapter implements ServerClockPort {
     private readonly logger?: LoggerPort,
     options?: HttpDateClockAdapterOptions
   ) {
-    this.endpointUrl =
-      options?.endpointUrl ?? 'https://api-v2.ticketbox.vn/gin/api/v2/events/0';
+    this.endpointUrl = options?.endpointUrl ?? 'https://api-v2.ticketbox.vn/gin/api/v2/events/0';
     this.maxSamples = options?.maxSamples ?? 3;
     this.sampleIntervalMs = options?.sampleIntervalMs ?? 300;
   }
@@ -40,7 +39,9 @@ export class HttpDateServerClockAdapter implements ServerClockPort {
     return this.lastEstimate;
   }
 
-  public async synchronize(sampleCount: number = this.maxSamples): Promise<ClockSyncEstimate | null> {
+  public async synchronize(
+    sampleCount: number = this.maxSamples
+  ): Promise<ClockSyncEstimate | null> {
     const samples: ClockSample[] = [];
     const count = Math.min(Math.max(1, sampleCount), 5);
 

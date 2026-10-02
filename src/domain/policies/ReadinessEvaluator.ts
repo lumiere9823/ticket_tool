@@ -12,12 +12,14 @@ export interface ReadinessCheckInput {
   isClockSynchronized: boolean;
   isTabForeground: boolean;
   isAuthenticated: boolean;
-  userProfile?: {
-    fullName?: string | undefined;
-    phone?: string | undefined;
-    email?: string | undefined;
-    agreeToTerms?: boolean | undefined;
-  } | undefined;
+  userProfile?:
+    | {
+        fullName?: string | undefined;
+        phone?: string | undefined;
+        email?: string | undefined;
+        agreeToTerms?: boolean | undefined;
+      }
+    | undefined;
 }
 
 export interface ReadinessCheckResult {
@@ -40,12 +42,12 @@ export function evaluatePreT0Readiness(input: ReadinessCheckInput): ReadinessChe
   const profile = input.userProfile;
   const profileComplete = Boolean(
     profile &&
-      profile.fullName &&
-      profile.fullName.trim().length > 0 &&
-      profile.phone &&
-      profile.phone.trim().length > 0 &&
-      profile.email &&
-      profile.email.trim().length > 0
+    profile.fullName &&
+    profile.fullName.trim().length > 0 &&
+    profile.phone &&
+    profile.phone.trim().length > 0 &&
+    profile.email &&
+    profile.email.trim().length > 0
   );
 
   const termsAgreed = Boolean(profile?.agreeToTerms);
@@ -68,11 +70,7 @@ export function evaluatePreT0Readiness(input: ReadinessCheckInput): ReadinessChe
   }
 
   const isReady =
-    clockSynchronized &&
-    tabForeground &&
-    authenticated &&
-    profileComplete &&
-    termsAgreed;
+    clockSynchronized && tabForeground && authenticated && profileComplete && termsAgreed;
 
   return {
     isReady,

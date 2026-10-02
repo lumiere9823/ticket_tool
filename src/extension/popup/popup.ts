@@ -312,8 +312,10 @@ function updateTelemetry(
   if (t2 !== undefined && metricT2) metricT2.textContent = `${t2}ms`;
   if (t3 !== undefined && metricT3) metricT3.textContent = `${t3}ms`;
   if (t5 !== undefined && metricT5) metricT5.textContent = `${t5}ms`;
-  if (delta !== undefined && metricDelta) metricDelta.textContent = `${delta > 0 ? '+' : ''}${delta}ms`;
-  if (offset !== undefined && metricOffset) metricOffset.textContent = `${offset > 0 ? '+' : ''}${offset}ms`;
+  if (delta !== undefined && metricDelta)
+    metricDelta.textContent = `${delta > 0 ? '+' : ''}${delta}ms`;
+  if (offset !== undefined && metricOffset)
+    metricOffset.textContent = `${offset > 0 ? '+' : ''}${offset}ms`;
 }
 
 function formatPrice(price: number): string {

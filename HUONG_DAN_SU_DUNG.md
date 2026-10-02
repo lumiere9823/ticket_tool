@@ -135,12 +135,21 @@ Ticketbox Assistant được trang bị cơ chế hẹn giờ thông minh qua **
 
 1. **Đăng nhập trước tài khoản Ticketbox:**
    - Luôn đăng nhập tài khoản Ticketbox trên trình duyệt trước giờ mở bán ít nhất 15 phút.
-2. **Không để máy tính Sleep / Gập màn hình:**
-   - Trình duyệt cần máy tính đang hoạt động (không ở chế độ Sleep sâu) để chuông hẹn giờ kích hoạt chính xác.
-3. **Bước thanh toán (Payment Gateway) an toàn:**
+2. **Chuẩn bị trước giờ mở bán (Pre-warm & Đồng bộ giờ Server):**
+   - Trước giờ mở bán $T_0$, trợ lý tự động đồng bộ giờ với máy chủ Ticketbox qua header `Date` để triệt tiêu lệch đồng hồ máy tính cá nhân.
+   - Trợ lý thực hiện bước nạp trước dữ liệu đọc (Pre-warm) gồm thông tin suất diễn, danh mục vé và form câu hỏi mà hoàn toàn không can thiệp DOM hoặc gửi request trái phép.
+   - Kiểm tra bảng sẵn sàng trên popup: đồng hồ đã đồng bộ, tab đang ở mặt trước (foreground), thông tin người nhận đã điền đầy đủ và đã tick đồng ý điều khoản.
+3. **Khi vào hàng chờ (Waiting Room): TUYỆT ĐỐI ĐỪNG TẢI LẠI TRANG:**
+   - Với các concert quy mô lớn, Ticketbox có thể kích hoạt phòng chờ ảo (Waiting Room / Queue-it).
+   - Khi phát hiện đang ở hàng chờ, trợ lý sẽ chuyển sang trạng thái `IN_QUEUE` (hiển thị nhãn màu cam `QUEU` trên extension icon và cảnh báo trong popup).
+   - **Cơ chế an toàn tự động:** Trợ lý sẽ TỰ ĐỘNG DỪNG mọi hành động click, đồng thời CHẶN toàn bộ các cơ chế tự tải lại trang (chống zoom-thrash và chống 404 lạc trang).
+   - **Hành động của bạn:** Hãy giữ nguyên tab, TUYỆT ĐỐI KHÔNG bấm F5 / Reload trang, không mở thêm tab mới tranh hàng chờ. Khi hệ thống duyệt bạn vào trang chọn vé, trợ lý sẽ tự động tiếp tục chu trình săn vé an toàn.
+4. **Không để máy tính Sleep / Gập màn hình:**
+   - Trình duyệt cần máy tính đang hoạt động (không ở chế độ Sleep sâu) để chuông hẹn giờ và vòng lặp chính xác (Precision Timer) kích hoạt mốc $T_0$.
+5. **Bước thanh toán (Payment Gateway) an toàn:**
    - Để bảo vệ tài khoản ngân hàng của bạn, Ticketbox Assistant sẽ tự động chọn vé, điền thông tin người mua, vượt qua các bước chọn khu vực/ghế và **dừng lại ở màn hình Thanh toán / Nhập OTP**.
    - Chuông thông báo sẽ reo lên để bạn chọn phương thức thanh toán (MoMo, Thẻ tín dụng, VietQR) và nhập OTP an toàn.
-4. **Nút 🗑 RESET CONFIG:**
+6. **Nút 🗑 RESET CONFIG:**
    - Khi bạn muốn chuyển sang săn một sự kiện khác, hãy bấm nút **RESET CONFIG** để xóa cấu hình cũ và bắt đầu cấu hình mới hoàn toàn tinh tươm.
 
 ---

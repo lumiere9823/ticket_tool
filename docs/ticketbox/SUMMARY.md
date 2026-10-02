@@ -42,8 +42,10 @@ INIT → AUTH_CHECK → EVENT_CHECK → READY → ARMED → MONITORING
 
 Human-intervention states (`CAPTCHA_REQUIRED`, `OTP_REQUIRED`,
 `SESSION_REAUTH_REQUIRED`, `UNKNOWN_SECURITY_CHALLENGE`,
-`HUMAN_INTERVENTION_REQUIRED`) can be entered from almost any active state and
-always pause automation. `STOPPED` / `STOPPED_LIMIT_REACHED` /
+`HUMAN_INTERVENTION_REQUIRED`, `IN_QUEUE`) can be entered from almost any active state and
+always pause automation. In `IN_QUEUE` (virtual waiting room), `ActionGuard` strictly restricts
+actions to `OBSERVE` and `USER_ACTION`, and all automated page reloads (zoom-thrash and 404 recovery)
+are suppressed to protect queue position. `STOPPED` / `STOPPED_LIMIT_REACHED` /
 `STOPPED_NO_TARGET` are fail-safe terminal states.
 
 ## Hard invariants (never change without updating this file)

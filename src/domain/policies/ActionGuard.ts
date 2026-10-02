@@ -316,12 +316,7 @@ const STATE_ACTION_ALLOWLIST: Record<PurchaseState, Set<PurchaseActionType>> = {
     'RESET',
     'DISMISS',
   ]),
-  [PurchaseState.IN_QUEUE]: new Set([
-    'OBSERVE',
-    'USER_ACTION',
-    'RESET',
-    'DISMISS',
-  ]),
+  [PurchaseState.IN_QUEUE]: new Set(['OBSERVE', 'USER_ACTION', 'RESET', 'DISMISS']),
 
   // State recheck
   [PurchaseState.STATE_RECHECK]: new Set(['USER_ACTION', 'RESET', 'DISMISS']),

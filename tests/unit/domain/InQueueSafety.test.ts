@@ -170,7 +170,8 @@ describe('In-Queue & Waiting Room Safety Policy (N6)', () => {
             return [
               {
                 tagName: 'IFRAME',
-                getAttribute: (attr: string) => (attr === 'src' ? 'https://queue-it.net/waiting-room' : null),
+                getAttribute: (attr: string) =>
+                  attr === 'src' ? 'https://queue-it.net/waiting-room' : null,
                 getBoundingClientRect: () => ({ width: 600, height: 400 }),
               },
             ];

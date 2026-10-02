@@ -37,7 +37,11 @@ export function toServerTime(clientNowMs: number, offsetMs: number): number {
  * If target is given in server time reference, target - toServerTime(clientNowMs, offsetMs)
  * which equals target - (clientNowMs + offsetMs) = (target - offsetMs) - clientNowMs.
  */
-export function msUntil(targetServerTimeMs: number, offsetMs: number, clientNowMs: number = Date.now()): number {
+export function msUntil(
+  targetServerTimeMs: number,
+  offsetMs: number,
+  clientNowMs: number = Date.now()
+): number {
   const currentServerTime = toServerTime(clientNowMs, offsetMs);
   return targetServerTimeMs - currentServerTime;
 }
