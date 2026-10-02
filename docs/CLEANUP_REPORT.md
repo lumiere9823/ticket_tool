@@ -82,6 +82,12 @@ No production credentials, cookies, OTPs, CVVs, tokens, or live PII were added.
   host/credential safety, sanitized logging, PII retention, consent/payment
   gates, and parser/form behavior. Adding tests solely to inflate coverage was
   avoided.
+- **C6:** `test-chromium-captcha.ts` accepts `CHROME_BIN` (retained),
+  `CHROMIUM_PATH`, `CHROME_TEST_PORT`, and `CHROME_DEBUG_PORT`, validates that
+  `dist/` exists before launching, and removes its temporary profile in
+  `finally` even when CDP/test setup fails. The live Chromium probe was not run
+  here because it requires a local Chrome binary and built extension; regular
+  build and Vitest validation were run instead.
 
 ## 3. Measured before/after
 

@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
-const PORT = 4567;
-const DEBUG_PORT = 9333;
+const PORT = Number.parseInt(process.env['CHROME_TEST_PORT'] ?? '4567', 10);
+const DEBUG_PORT = Number.parseInt(process.env['CHROME_DEBUG_PORT'] ?? '9333', 10);
 const HOST = '127.0.0.1';
 const EXTENSION_PATH = path.resolve('dist');
 const PROFILE_DIR = path.resolve('scratch/test-chrome-profile');
@@ -155,6 +155,11 @@ async function main() {
   const chromePath = findChromePath();
   console.info(`[SETUP] Found Chrome executable: ${chromePath}`);
   console.info(`[SETUP] Extension build directory: ${EXTENSION_PATH}`);
+  if (!fs.existsSync(EXTENSION_PATH)) {
+    throw new Error(
+      `Extension build directory not found: ${EXTENSION_PATH}. Run npm run build first.`
+    );
+  }
 
   if (!fs.existsSync(PROFILE_DIR)) {
     fs.mkdirSync(PROFILE_DIR, { recursive: true });
