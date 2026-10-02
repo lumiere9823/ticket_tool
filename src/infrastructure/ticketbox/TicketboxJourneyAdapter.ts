@@ -35,15 +35,15 @@ import { TicketboxSummaryParser } from './parsing/TicketboxSummaryParser';
 import { PurchaseState } from '../../domain/states/PurchaseState';
 
 import {
-  CancelOrderConfirmationResult,
+  type CancelOrderConfirmationResult,
   MAX_SEAT_SET_SIZE,
   addBoundedSetItem,
-  TicketboxEventApiResponse,
-  TicketboxQuestionFormApiResponse,
-  TicketboxQuestionItem,
-  TicketboxQuestionOption,
-  TicketboxShowingApiResponse,
-  TicketboxShowingApiTicket,
+  type TicketboxEventApiResponse,
+  type TicketboxQuestionFormApiResponse,
+  type TicketboxQuestionItem,
+  type TicketboxQuestionOption,
+  type TicketboxShowingApiResponse,
+  type TicketboxShowingApiTicket,
 } from './types/TicketboxApiTypes';
 import { TicketboxApiClient } from './client/TicketboxApiClient';
 import { TicketboxModalHandler } from './modal/TicketboxModalHandler';
@@ -57,15 +57,15 @@ import { PageBridgeClient } from './bridge/PageBridgeClient';
 import { dispatchSyntheticClick } from './dom/DOMEventHelpers';
 
 export {
-  CancelOrderConfirmationResult,
+  type CancelOrderConfirmationResult,
   MAX_SEAT_SET_SIZE,
   addBoundedSetItem,
-  TicketboxEventApiResponse,
-  TicketboxQuestionFormApiResponse,
-  TicketboxQuestionItem,
-  TicketboxQuestionOption,
-  TicketboxShowingApiResponse,
-  TicketboxShowingApiTicket,
+  type TicketboxEventApiResponse,
+  type TicketboxQuestionFormApiResponse,
+  type TicketboxQuestionItem,
+  type TicketboxQuestionOption,
+  type TicketboxShowingApiResponse,
+  type TicketboxShowingApiTicket,
 };
 
 /**
@@ -84,7 +84,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
   private customUrl?: string;
   private stateProvider?: () => PurchaseState;
 
-  private logger?: LoggerPort;
+  private logger?: LoggerPort | undefined;
   private apiClient: TicketboxApiClient;
   private bridgeClient: PageBridgeClient;
   private blacklistManager: SeatBlacklistManager;

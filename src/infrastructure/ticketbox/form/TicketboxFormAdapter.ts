@@ -79,14 +79,14 @@ export class TicketboxFormAdapter {
                 if (typeof (el as MutableDOMElement).click === 'function') {
                   (el as MutableDOMElement).click!();
                 }
-                setCheckboxOrRadioAndDispatch(el as HTMLInputElement, true);
+                setCheckboxOrRadioAndDispatch(el, true);
                 this.logger?.info('Consent radio/checkbox selected', { label: item.field.label });
               }
             } else if (
               item.field.type === 'SELECT' ||
               (raw.tagName && raw.tagName.toLowerCase() === 'select')
             ) {
-              setSelectValueAndDispatch(el as HTMLSelectElement, item.targetValue);
+              setSelectValueAndDispatch(el, item.targetValue);
               this.logger?.info('Form select dropdown set', {
                 label: item.field.label,
                 source: item.source,
@@ -94,7 +94,7 @@ export class TicketboxFormAdapter {
               });
             } else {
               // TEXT, EMAIL, PHONE, ID_CARD, BIRTH_YEAR, ADDRESS
-              setNativeInputValueAndDispatch(el as HTMLInputElement, item.targetValue);
+              setNativeInputValueAndDispatch(el, item.targetValue);
               this.logger?.info('Form text input filled', {
                 label: item.field.label,
                 source: item.source,

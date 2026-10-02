@@ -21,7 +21,7 @@ export interface AreaModalContext {
 
 export class AreaModalSelector {
   public static async tryHandleAreaModal(
-    modalRaw: HTMLElement,
+    modalRaw: Element,
     ticket: TicketType,
     quantity: number,
     attempt: number,

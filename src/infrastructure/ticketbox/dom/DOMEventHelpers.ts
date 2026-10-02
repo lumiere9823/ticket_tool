@@ -7,6 +7,7 @@
  */
 
 import { DOMElementLike } from '../parsing/DOMElementLike';
+import { MutableDOMElement } from '../types/TicketboxApiTypes';
 
 interface ReactTracker {
   setValue?: (v: string) => void;
@@ -120,8 +121,8 @@ export function setNativeInputValueAndDispatch(
   if ('value' in inputEl) {
     (inputEl as { value?: string }).value = value;
   }
-  if ('attributes' in inputEl && (inputEl as DOMElementLike).attributes) {
-    (inputEl as DOMElementLike).attributes['value'] = value;
+  if ('attributes' in inputEl && (inputEl as unknown as MutableDOMElement).attributes) {
+    (inputEl as unknown as MutableDOMElement).attributes['value'] = value;
   }
 
   // Reset React value tracker if present
@@ -262,12 +263,15 @@ export function setCheckboxOrRadioAndDispatch(
     }
   }
 
-  if ('setAttribute' in element && typeof (element as DOMElementLike).setAttribute === 'function') {
-    (element as DOMElementLike).setAttribute('checked', String(checked));
-    (element as DOMElementLike).setAttribute('aria-checked', String(checked));
+  if ('setAttribute' in element) {
+    const likeEl = element as DOMElementLike;
+    if (typeof likeEl.setAttribute === 'function') {
+      likeEl.setAttribute('checked', String(checked));
+      likeEl.setAttribute('aria-checked', String(checked));
+    }
   }
   if ('attributes' in element) {
-    const elLike = element as DOMElementLike;
+    const elLike = element as unknown as MutableDOMElement;
     elLike.attributes = elLike.attributes || {};
     elLike.attributes['checked'] = String(checked);
     elLike.attributes['aria-checked'] = String(checked);

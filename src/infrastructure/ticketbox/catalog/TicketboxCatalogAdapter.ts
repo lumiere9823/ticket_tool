@@ -161,10 +161,14 @@ export class TicketboxCatalogAdapter {
         {
           id: candidateId,
           name: candidateName || candidateId,
-          price: 0,
-          currency: 'VND',
-          available: true,
+          price: { amount: 0, currency: 'VND' },
+          mode: 'UNKNOWN',
           availability: 'AVAILABLE',
+          minQuantity: null,
+          maxQuantity: null,
+          selectedQuantity: quantity,
+          selectable: true,
+          source: { page: 'BOOKING', evidence: [] },
         },
         quantity
       );
