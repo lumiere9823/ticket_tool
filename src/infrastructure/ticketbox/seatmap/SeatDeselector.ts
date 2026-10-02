@@ -105,9 +105,7 @@ export class SeatDeselector {
 
     if (typeof window !== 'undefined') {
       const seatPayload = seatLabel ? [{ id: seatLabel, label: seatLabel }] : [];
-      ctx
-        .sendPageBridgeRequest('DESELECT_SEATS', { seats: seatPayload }, 1500)
-        .catch(() => {});
+      ctx.sendPageBridgeRequest('DESELECT_SEATS', { seats: seatPayload }, 1500).catch(() => {});
     }
 
     if (seatLabel) {

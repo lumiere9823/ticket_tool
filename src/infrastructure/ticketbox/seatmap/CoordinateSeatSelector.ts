@@ -226,12 +226,7 @@ export class CoordinateSeatSelector {
         clientY > 0
       ) {
         const topEl = document.elementFromPoint(clientX, clientY);
-        if (
-          topEl &&
-          topEl !== nativeEl &&
-          !nativeEl.contains(topEl) &&
-          !topEl.contains(nativeEl)
-        ) {
+        if (topEl && topEl !== nativeEl && !nativeEl.contains(topEl) && !topEl.contains(nativeEl)) {
           try {
             if (typeof window.PointerEvent === 'function') {
               topEl.dispatchEvent(new PointerEvent('pointerdown', pointerOpts));

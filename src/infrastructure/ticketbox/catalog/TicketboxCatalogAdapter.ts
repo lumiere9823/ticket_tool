@@ -90,7 +90,8 @@ export class TicketboxCatalogAdapter {
   ): Promise<boolean> {
     this.logger?.info('Executing Section 7 Ticket Selection', { candidateId, quantity, showingId });
 
-    let effectiveShowingId = showingId && showingId !== 'default' ? showingId : this.ctx.getShowingId();
+    let effectiveShowingId =
+      showingId && showingId !== 'default' ? showingId : this.ctx.getShowingId();
     const cachedEventApi = this.ctx.getCachedEventApiData();
     if (
       (!effectiveShowingId || effectiveShowingId === 'default') &&

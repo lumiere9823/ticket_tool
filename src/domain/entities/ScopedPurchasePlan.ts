@@ -64,7 +64,11 @@ export function sanitizePersistencePolicy(
   }
 
   let pollInterval = policy?.pollIntervalMs;
-  if (typeof pollInterval !== 'number' || isNaN(pollInterval) || pollInterval < MIN_POLL_INTERVAL_MS) {
+  if (
+    typeof pollInterval !== 'number' ||
+    isNaN(pollInterval) ||
+    pollInterval < MIN_POLL_INTERVAL_MS
+  ) {
     pollInterval =
       typeof pollInterval === 'number' && !isNaN(pollInterval) && pollInterval > 0
         ? Math.max(pollInterval, MIN_POLL_INTERVAL_MS)
@@ -72,7 +76,10 @@ export function sanitizePersistencePolicy(
   }
 
   const jitterRatio =
-    typeof policy?.jitterRatio === 'number' && !isNaN(policy.jitterRatio) && policy.jitterRatio >= 0 && policy.jitterRatio <= 1
+    typeof policy?.jitterRatio === 'number' &&
+    !isNaN(policy.jitterRatio) &&
+    policy.jitterRatio >= 0 &&
+    policy.jitterRatio <= 1
       ? policy.jitterRatio
       : DEFAULT_PERSISTENCE_POLICY.jitterRatio;
 

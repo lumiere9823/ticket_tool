@@ -113,9 +113,7 @@ export class AreaModalSelector {
     const readModalQty = (): number => {
       if (modalInput) {
         const propVal =
-          'value' in modalInput && modalInput.value !== undefined
-            ? String(modalInput.value)
-            : '';
+          'value' in modalInput && modalInput.value !== undefined ? String(modalInput.value) : '';
         if (propVal.trim() !== '') {
           const p = parseInt(propVal, 10);
           if (!isNaN(p)) return p;

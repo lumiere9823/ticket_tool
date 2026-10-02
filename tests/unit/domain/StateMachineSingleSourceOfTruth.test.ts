@@ -331,9 +331,8 @@ describe('P1-5: Single Source of Truth for State Machine', () => {
       await storage.saveLifecycleState(criticalContext);
 
       // Re-initialize worker as if Chrome restarted the background process
-      const { stateMachine: swStateMachine, initializeWorker } = await import(
-        '../../../src/extension/background/service-worker'
-      );
+      const { stateMachine: swStateMachine, initializeWorker } =
+        await import('../../../src/extension/background/service-worker');
       await initializeWorker();
 
       expect(swStateMachine.state).toBe(PurchaseState.STOPPED);
@@ -364,9 +363,8 @@ describe('P1-5: Single Source of Truth for State Machine', () => {
     });
 
     it('Dual-tab arming race: second tab arming registers new tabId and updates configuration safely', async () => {
-      const { storage: swStorage } = await import(
-        '../../../src/extension/background/service-worker'
-      );
+      const { storage: swStorage } =
+        await import('../../../src/extension/background/service-worker');
 
       // Tab 1 arms
       await handleServiceWorkerMessage(

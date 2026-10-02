@@ -123,7 +123,9 @@ export class TicketboxNavigationAdapter {
         const isSelectTicketPage = pathname.includes('/select-ticket');
         const isBottomBarOrActionBtn =
           typeof raw.closest === 'function' &&
-          raw.closest('.bottom-bar, [class*="bottom-bar"], [class*="bottomBar"], [class*="action-bar"], [class*="booking-bar"], #btn-continue') !== null;
+          raw.closest(
+            '.bottom-bar, [class*="bottom-bar"], [class*="bottomBar"], [class*="action-bar"], [class*="booking-bar"], #btn-continue'
+          ) !== null;
 
         const hasPromptOrBack = promptOrBackPhrases.some((phrase) => text.includes(phrase));
         if (hasPromptOrBack) {
@@ -138,12 +140,18 @@ export class TicketboxNavigationAdapter {
 
         const hasForwardKeyword =
           targetKeywords.some((kw) => text.includes(kw)) ||
-          (isSelectTicketPage && isBottomBarOrActionBtn && (text.includes('chọn vé') || text.includes('>>')));
+          (isSelectTicketPage &&
+            isBottomBarOrActionBtn &&
+            (text.includes('chọn vé') || text.includes('>>')));
         if (!hasForwardKeyword) {
           return false;
         }
 
-        if (selectionOnlyPhrases.some((phrase) => text.includes(phrase)) && !hasForwardKeyword && !isBottomBarOrActionBtn) {
+        if (
+          selectionOnlyPhrases.some((phrase) => text.includes(phrase)) &&
+          !hasForwardKeyword &&
+          !isBottomBarOrActionBtn
+        ) {
           return false;
         }
 
@@ -287,7 +295,8 @@ export class TicketboxNavigationAdapter {
                 const bText = (bottomBtn.textContent || '').toLowerCase().trim();
                 const isBottomValid =
                   (targetKeywords.some((kw) => bText.includes(kw)) ||
-                    (pathname.includes('/select-ticket') && (bText.includes('chọn vé') || bText.includes('>>')))) &&
+                    (pathname.includes('/select-ticket') &&
+                      (bText.includes('chọn vé') || bText.includes('>>')))) &&
                   !this.ctx.isElementDisabled(wrapBrowserElement(bottomBtn));
                 if (isBottomValid) {
                   this.logger?.info('Modal closed; also clicked bottom bar continue button', {

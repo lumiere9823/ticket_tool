@@ -8,10 +8,7 @@
  */
 
 import { LoggerPort } from '../../../application/ports/LoggerPort';
-import {
-  FormSchema,
-  UserProfileData,
-} from '../../../domain/entities/BookingJourneyModels';
+import { FormSchema, UserProfileData } from '../../../domain/entities/BookingJourneyModels';
 import { FormAutofillPolicy } from '../../../domain/policies/FormAutofillPolicy';
 import {
   setCheckboxOrRadioAndDispatch,

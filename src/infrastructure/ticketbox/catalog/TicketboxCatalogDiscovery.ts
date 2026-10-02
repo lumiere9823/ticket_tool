@@ -49,7 +49,8 @@ export class TicketboxCatalogDiscovery {
     }
     const root = this.ctx.getRoot();
     const url = this.ctx.getPageUrl();
-    const targetShowingId = showingId && showingId !== 'default' ? showingId : this.ctx.getShowingId();
+    const targetShowingId =
+      showingId && showingId !== 'default' ? showingId : this.ctx.getShowingId();
 
     const isBookingPage =
       url.includes('/bookings/') ||
@@ -115,7 +116,11 @@ export class TicketboxCatalogDiscovery {
       }
     }
 
-    if (targetShowingId && targetShowingId !== 'default' && !this.ctx.apiClient.getCachedSeatmapData()) {
+    if (
+      targetShowingId &&
+      targetShowingId !== 'default' &&
+      !this.ctx.apiClient.getCachedSeatmapData()
+    ) {
       try {
         const showingApiData =
           this.ctx.apiClient.getCachedShowingApiData() ||

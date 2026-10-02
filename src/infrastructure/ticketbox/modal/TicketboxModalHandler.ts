@@ -10,10 +10,7 @@
 import { LoggerPort } from '../../../application/ports/LoggerPort';
 import { PurchaseState } from '../../../domain/states/PurchaseState';
 import { DOMElementLike, wrapBrowserElement } from '../parsing/DOMElementLike';
-import {
-  CancelOrderConfirmationResult,
-  MutableDOMElement,
-} from '../types/TicketboxApiTypes';
+import { CancelOrderConfirmationResult, MutableDOMElement } from '../types/TicketboxApiTypes';
 
 export interface ModalHandlerContext {
   getRoot: () => DOMElementLike | null;

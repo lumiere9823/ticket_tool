@@ -120,7 +120,9 @@ export class PurchasePlanValidator {
         ) {
           errors.push('maxDurationMinutes must be greater than 0.');
         } else if (plan.limits.maxDurationMinutes > 240) {
-          errors.push(`maxDurationMinutes (${plan.limits.maxDurationMinutes}) exceeds maximum ceiling of 240.`);
+          errors.push(
+            `maxDurationMinutes (${plan.limits.maxDurationMinutes}) exceeds maximum ceiling of 240.`
+          );
         }
       }
 

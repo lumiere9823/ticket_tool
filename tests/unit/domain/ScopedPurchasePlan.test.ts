@@ -859,7 +859,9 @@ describe('Phase 2: Scoped Persistent Purchase Requirements (C1, C2, C3, C6, C9)'
       };
       const resOverDuration = ScopedPurchasePlanValidator.validate(planOverDuration);
       expect(resOverDuration.valid).toBe(false);
-      expect(resOverDuration.errors.some((e) => e.includes('exceeds maximum ceiling of 240'))).toBe(true);
+      expect(resOverDuration.errors.some((e) => e.includes('exceeds maximum ceiling of 240'))).toBe(
+        true
+      );
 
       // 0 maxAttempts
       const planZeroAttempts = {
@@ -889,7 +891,9 @@ describe('Phase 2: Scoped Persistent Purchase Requirements (C1, C2, C3, C6, C9)'
       };
       const resOverAttempts = ScopedPurchasePlanValidator.validate(planOverAttempts);
       expect(resOverAttempts.valid).toBe(false);
-      expect(resOverAttempts.errors.some((e) => e.includes('exceeds maximum ceiling of 5000'))).toBe(true);
+      expect(
+        resOverAttempts.errors.some((e) => e.includes('exceeds maximum ceiling of 5000'))
+      ).toBe(true);
 
       // pollIntervalMs < 1500
       const planLowPoll = {
@@ -935,4 +939,3 @@ describe('Phase 2: Scoped Persistent Purchase Requirements (C1, C2, C3, C6, C9)'
     });
   });
 });
-

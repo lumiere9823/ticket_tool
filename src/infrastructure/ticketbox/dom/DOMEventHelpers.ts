@@ -82,8 +82,7 @@ export function setNativeInputValueAndDispatch(
   inputEl: HTMLInputElement | HTMLTextAreaElement | DOMElementLike,
   value: string
 ): void {
-  const raw =
-    'rawElement' in inputEl ? (inputEl as DOMElementLike).rawElement : inputEl;
+  const raw = 'rawElement' in inputEl ? (inputEl as DOMElementLike).rawElement : inputEl;
   if (!raw) return;
 
   const nativeEl = raw as HTMLElement;
@@ -160,8 +159,7 @@ export function setSelectValueAndDispatch(
   selectEl: HTMLSelectElement | DOMElementLike,
   value: string
 ): void {
-  const raw =
-    'rawElement' in selectEl ? (selectEl as DOMElementLike).rawElement : selectEl;
+  const raw = 'rawElement' in selectEl ? (selectEl as DOMElementLike).rawElement : selectEl;
   if (!raw) return;
 
   const nativeEl = raw as HTMLSelectElement;
@@ -220,23 +218,20 @@ export function setCheckboxOrRadioAndDispatch(
   element: HTMLInputElement | DOMElementLike,
   checked: boolean = true
 ): void {
-  const raw =
-    'rawElement' in element ? (element as DOMElementLike).rawElement : element;
+  const raw = 'rawElement' in element ? (element as DOMElementLike).rawElement : element;
   if (!raw) return;
 
   const nativeEl = raw as HTMLInputElement;
   if (typeof window !== 'undefined' && window.HTMLInputElement) {
-    const desc = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype,
-      'checked'
-    );
+    const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');
     if (desc && desc.set) {
       desc.set.call(nativeEl, checked);
     } else {
       nativeEl.checked = checked;
     }
   } else {
-    const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(nativeEl) || nativeEl, 'checked') ||
+    const desc =
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(nativeEl) || nativeEl, 'checked') ||
       Object.getOwnPropertyDescriptor(nativeEl, 'checked');
     if (desc && desc.set) {
       desc.set.call(nativeEl, checked);

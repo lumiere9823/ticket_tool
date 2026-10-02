@@ -73,7 +73,9 @@ export class ScopedPurchasePlanValidator {
       ) {
         errors.push('maxDurationMinutes must be greater than 0.');
       } else if (plan.persistence.maxDurationMinutes > 240) {
-        errors.push(`maxDurationMinutes (${plan.persistence.maxDurationMinutes}) exceeds maximum ceiling of 240.`);
+        errors.push(
+          `maxDurationMinutes (${plan.persistence.maxDurationMinutes}) exceeds maximum ceiling of 240.`
+        );
       }
 
       if (
@@ -83,7 +85,9 @@ export class ScopedPurchasePlanValidator {
       ) {
         errors.push('maxAttempts must be greater than 0.');
       } else if (plan.persistence.maxAttempts > 5000) {
-        errors.push(`maxAttempts (${plan.persistence.maxAttempts}) exceeds maximum ceiling of 5000.`);
+        errors.push(
+          `maxAttempts (${plan.persistence.maxAttempts}) exceeds maximum ceiling of 5000.`
+        );
       }
       if (
         typeof plan.persistence.jitterRatio !== 'number' ||

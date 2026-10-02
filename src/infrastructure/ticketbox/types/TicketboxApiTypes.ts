@@ -26,9 +26,7 @@ export function addBoundedSetItem<T>(
 }
 
 export type CancelOrderConfirmationResult =
-  | { status: 'confirmed' }
-  | { status: 'blocked'; reason: string }
-  | { status: 'not_found' };
+  { status: 'confirmed' } | { status: 'blocked'; reason: string } | { status: 'not_found' };
 
 /**
  * Internal typed interface for DOM elements that support mutations (click, value assignment).

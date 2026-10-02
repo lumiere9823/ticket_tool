@@ -108,9 +108,7 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
       ('querySelector' in arg || 'tagName' in arg || 'attributes' in arg || 'nodeType' in arg);
 
     const isLog = (arg: unknown): boolean =>
-      !!arg &&
-      typeof arg === 'object' &&
-      typeof (arg as LoggerPort).info === 'function';
+      !!arg && typeof arg === 'object' && typeof (arg as LoggerPort).info === 'function';
 
     if (isDOM(firstArg)) {
       resolvedRoot = firstArg as DOMElementLike | Document | Element;

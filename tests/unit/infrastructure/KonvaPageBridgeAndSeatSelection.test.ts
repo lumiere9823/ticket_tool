@@ -84,7 +84,10 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       const listeners: Record<string, ((ev: unknown) => void)[]> = {};
 
       const fakeWindow = {
-        location: { origin: 'https://ticketbox.vn', href: 'https://ticketbox.vn/events/123/select-ticket' },
+        location: {
+          origin: 'https://ticketbox.vn',
+          href: 'https://ticketbox.vn/events/123/select-ticket',
+        },
         addEventListener: (event: string, handler: (ev: unknown) => void) => {
           listeners[event] = listeners[event] || [];
           listeners[event].push(handler);
@@ -131,7 +134,10 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
 
     it('should timeout gracefully when no response is received', async () => {
       const fakeWindow = {
-        location: { origin: 'https://ticketbox.vn', href: 'https://ticketbox.vn/events/123/select-ticket' },
+        location: {
+          origin: 'https://ticketbox.vn',
+          href: 'https://ticketbox.vn/events/123/select-ticket',
+        },
         addEventListener: () => {},
         removeEventListener: () => {},
         postMessage: () => {},
