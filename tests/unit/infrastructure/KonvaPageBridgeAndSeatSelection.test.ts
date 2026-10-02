@@ -84,6 +84,7 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       const listeners: Record<string, ((ev: unknown) => void)[]> = {};
 
       const fakeWindow = {
+        location: { origin: 'https://ticketbox.vn', href: 'https://ticketbox.vn/events/123/select-ticket' },
         addEventListener: (event: string, handler: (ev: unknown) => void) => {
           listeners[event] = listeners[event] || [];
           listeners[event].push(handler);
@@ -118,7 +119,7 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       globalThis.window = fakeWindow;
 
       const adapter = new TicketboxJourneyAdapter(logger);
-      const res = await adapter.sendPageBridgeRequest<{ ok: boolean }>('TEST_ACTION', {
+      const res = await adapter.sendPageBridgeRequest<{ ok: boolean }>('CHECK_READY', {
         foo: 'bar',
       });
 
@@ -130,6 +131,7 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
 
     it('should timeout gracefully when no response is received', async () => {
       const fakeWindow = {
+        location: { origin: 'https://ticketbox.vn', href: 'https://ticketbox.vn/events/123/select-ticket' },
         addEventListener: () => {},
         removeEventListener: () => {},
         postMessage: () => {},
@@ -141,7 +143,7 @@ describe('Konva Page Bridge & Canvas Seat Selection', () => {
       globalThis.window = fakeWindow;
 
       const adapter = new TicketboxJourneyAdapter(logger);
-      const res = await adapter.sendPageBridgeRequest('TIMEOUT_ACTION', {}, 100);
+      const res = await adapter.sendPageBridgeRequest('CHECK_READY', {}, 100);
 
       expect(res.success).toBe(false);
       expect(res.error).toBe('TIMEOUT');

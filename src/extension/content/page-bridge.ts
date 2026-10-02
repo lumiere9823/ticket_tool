@@ -62,6 +62,8 @@ import {
   BridgeResponseMessage,
   isValidBridgeRequest,
   getSafeBridgeTargetOrigin,
+  isValidClickSelector,
+  isValidClickText,
 } from '../shared/BridgeProtocol';
 
 function getKonva(): KonvaGlobalLike | null {
@@ -423,6 +425,7 @@ async function handleConfirmAreaModal(
 
 /**
  * Handles CLICK_ELEMENT from content script in MAIN world.
+ * Strictly enforces selector and text allowlists to disallow arbitrary DOM manipulation.
  */
 function handleClickElement(payload?: BridgeRequestPayload): {
   success: boolean;
@@ -431,9 +434,15 @@ function handleClickElement(payload?: BridgeRequestPayload): {
   if (typeof document === 'undefined') return { success: false, message: 'No document' };
   let el: HTMLElement | null = null;
   if (payload?.selector) {
+    if (!isValidClickSelector(payload.selector)) {
+      return { success: false, message: `Disallowed selector: ${payload.selector}` };
+    }
     el = document.querySelector(payload.selector) as HTMLElement | null;
   }
   if (!el && payload?.text) {
+    if (!isValidClickText(payload.text)) {
+      return { success: false, message: `Disallowed click text` };
+    }
     const search = payload.text.toLowerCase().trim();
     const all = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'));
     for (const item of all) {
@@ -1362,7 +1371,10 @@ function initializePageBridge(): void {
       error: result.error,
     };
 
-    window.postMessage(response, getSafeBridgeTargetOrigin());
+    const targetOrigin = getSafeBridgeTargetOrigin();
+    if (targetOrigin) {
+      window.postMessage(response, targetOrigin);
+    }
   });
 
   // 2. Monitor Konva stage scale for anti-bot zoom thrash detection
@@ -1388,15 +1400,18 @@ function startStageScaleMonitor(): void {
         const s = (sx + sy) / 2;
         if (Math.abs(s - lastScale) > 0.02) {
           lastScale = s;
-          window.postMessage(
-            {
-              source: 'TICKETBOX_ASSISTANT_PAGE',
-              type: 'ZOOM_SAMPLE',
-              scale: s,
-              nonce: activeBridgeNonce ?? undefined,
-            },
-            getSafeBridgeTargetOrigin()
-          );
+          const targetOrigin = getSafeBridgeTargetOrigin();
+          if (targetOrigin) {
+            window.postMessage(
+              {
+                source: 'TICKETBOX_ASSISTANT_PAGE',
+                type: 'ZOOM_SAMPLE',
+                scale: s,
+                nonce: activeBridgeNonce ?? undefined,
+              },
+              targetOrigin
+            );
+          }
         }
       }
     } catch {
@@ -1413,15 +1428,18 @@ function installRouteInterceptors(): void {
   if (typeof window === 'undefined' || !window.history) return;
   try {
     const notifyRouteChange = () => {
-      window.postMessage(
-        {
-          source: 'TICKETBOX_ASSISTANT_PAGE',
-          type: 'ROUTE_CHANGE',
-          url: window.location.href,
-          nonce: activeBridgeNonce ?? undefined,
-        },
-        getSafeBridgeTargetOrigin()
-      );
+      const targetOrigin = getSafeBridgeTargetOrigin();
+      if (targetOrigin) {
+        window.postMessage(
+          {
+            source: 'TICKETBOX_ASSISTANT_PAGE',
+            type: 'ROUTE_CHANGE',
+            url: window.location.href,
+            nonce: activeBridgeNonce ?? undefined,
+          },
+          targetOrigin
+        );
+      }
     };
 
     const origPushState = window.history.pushState;

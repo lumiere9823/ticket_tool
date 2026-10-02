@@ -560,12 +560,17 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
 
     const requestId = generateBridgeRequestId();
     const targetOrigin = getSafeBridgeTargetOrigin();
+    if (!targetOrigin) {
+      return { success: false, error: 'INVALID_ORIGIN' };
+    }
 
     return new Promise((resolve) => {
       let resolved = false;
 
       const cleanup = () => {
-        window.removeEventListener('message', onMessage);
+        if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+          window.removeEventListener('message', onMessage);
+        }
       };
 
       const timer = setTimeout(() => {
@@ -2272,19 +2277,34 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
           .trim();
         if (!text || text.length > 80) return false;
 
-        // Reject any element containing prompt or back navigation phrases
-        if (promptOrBackPhrases.some((phrase) => text.includes(phrase))) {
-          return false;
+        // On /select-ticket, the primary action button to proceed to ticket quantity/seat picker often has text like "Vui lòng chọn vé >>" or "Chọn vé >>"
+        const isSelectTicketPage = pathname.includes('/select-ticket');
+        const isBottomBarOrActionBtn =
+          typeof raw.closest === 'function' &&
+          raw.closest('.bottom-bar, [class*="bottom-bar"], [class*="bottomBar"], [class*="action-bar"], [class*="booking-bar"], #btn-continue') !== null;
+
+        // Reject elements containing prompt or back navigation phrases, EXCEPT if it's the primary bottom bar forward button on select-ticket (e.g. "vui lòng chọn vé >>")
+        const hasPromptOrBack = promptOrBackPhrases.some((phrase) => text.includes(phrase));
+        if (hasPromptOrBack) {
+          const isAllowedSelectTicketPrompt =
+            isSelectTicketPage &&
+            isBottomBarOrActionBtn &&
+            (text.includes('chọn vé') || text.includes('tiếp tục') || text.includes('>>'));
+          if (!isAllowedSelectTicketPrompt) {
+            return false;
+          }
         }
 
         // Must contain at least one forward target action keyword
-        const hasForwardKeyword = targetKeywords.some((kw) => text.includes(kw));
+        const hasForwardKeyword =
+          targetKeywords.some((kw) => text.includes(kw)) ||
+          (isSelectTicketPage && isBottomBarOrActionBtn && (text.includes('chọn vé') || text.includes('>>')));
         if (!hasForwardKeyword) {
           return false;
         }
 
-        // Reject if it is solely a selection prompt without forward continue intent
-        if (selectionOnlyPhrases.some((phrase) => text.includes(phrase)) && !hasForwardKeyword) {
+        // Reject if it is solely a static selection prompt without forward continue intent
+        if (selectionOnlyPhrases.some((phrase) => text.includes(phrase)) && !hasForwardKeyword && !isBottomBarOrActionBtn) {
           return false;
         }
 
@@ -2431,11 +2451,11 @@ export class TicketboxJourneyAdapter implements TicketboxPageAdapter {
               ) as HTMLElement | null;
               if (bottomBtn) {
                 const bText = (bottomBtn.textContent || '').toLowerCase().trim();
-                if (
-                  targetKeywords.some((kw) => bText.includes(kw)) &&
-                  !promptOrBackPhrases.some((phrase) => bText.includes(phrase)) &&
-                  !this.isElementDisabled(wrapBrowserElement(bottomBtn))
-                ) {
+                const isBottomValid =
+                  (targetKeywords.some((kw) => bText.includes(kw)) ||
+                    (pathname.includes('/select-ticket') && (bText.includes('chọn vé') || bText.includes('>>')))) &&
+                  !this.isElementDisabled(wrapBrowserElement(bottomBtn));
+                if (isBottomValid) {
                   this.logger?.info('Modal closed; also clicked bottom bar continue button', {
                     buttonText: bText,
                   });

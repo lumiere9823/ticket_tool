@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TicketboxJourneyAdapter } from '../../../src/infrastructure/ticketbox/TicketboxJourneyAdapter';
 import { SanitizedLogger } from '../../../src/infrastructure/logging/SanitizedLogger';
+import {
+  generateBridgeNonce,
+  generateBridgeRequestId,
+  isValidBridgeRequest,
+  isValidClickSelector,
+  isValidClickText,
+} from '../../../src/extension/shared/BridgeProtocol';
 
 describe('P3-1: Secure Bridge Protocol (Content Script <-> Page Bridge)', () => {
   let logger: SanitizedLogger;
@@ -181,5 +188,104 @@ describe('P3-1: Secure Bridge Protocol (Content Script <-> Page Bridge)', () => 
     expect(dispatchSpy).not.toHaveBeenCalled();
 
     globalThis.window = origWindow;
+  });
+
+  describe('T2: Strict bridge hardening & negative tests', () => {
+    it('refuses to send postMessage and returns INVALID_ORIGIN when origin is invalid or null', async () => {
+      const postMessageSpy = vi.fn();
+      const fakeWindow = {
+        location: { origin: 'null' },
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        postMessage: postMessageSpy,
+      };
+
+      const origWindow = globalThis.window;
+      // @ts-expect-error test mock
+      globalThis.window = fakeWindow;
+
+      const adapter = new TicketboxJourneyAdapter(logger);
+      const res = await adapter.sendPageBridgeRequest('CHECK_READY', {}, 50);
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('INVALID_ORIGIN');
+      expect(postMessageSpy).not.toHaveBeenCalled();
+
+      globalThis.window = origWindow;
+    });
+
+    it('fails closed when crypto is unavailable (no Math.random fallback)', () => {
+      const origCrypto = globalThis.crypto;
+      // @ts-expect-error mock missing crypto
+      delete globalThis.crypto;
+
+      try {
+        expect(() => generateBridgeNonce()).toThrow(/FAIL_CLOSED/);
+        expect(() => generateBridgeRequestId()).toThrow(/FAIL_CLOSED/);
+      } finally {
+        globalThis.crypto = origCrypto;
+      }
+    });
+
+    it('rejects message with wrong source or missing schema in isValidBridgeRequest', () => {
+      // Invalid source
+      expect(
+        isValidBridgeRequest({
+          source: 'ATTACKER_SOURCE',
+          type: 'CHECK_READY',
+          requestId: 'req-1',
+          nonce: 'nonce-1',
+        })
+      ).toBe(false);
+
+      // Unknown action
+      expect(
+        isValidBridgeRequest({
+          source: 'TICKETBOX_ASSISTANT_CONTENT',
+          type: 'EVIL_ACTION',
+          requestId: 'req-1',
+          nonce: 'nonce-1',
+        })
+      ).toBe(false);
+
+      // Missing nonce
+      expect(
+        isValidBridgeRequest({
+          source: 'TICKETBOX_ASSISTANT_CONTENT',
+          type: 'CHECK_READY',
+          requestId: 'req-1',
+          nonce: '',
+        })
+      ).toBe(false);
+
+      // Malformed payload (seats is not array)
+      expect(
+        isValidBridgeRequest({
+          source: 'TICKETBOX_ASSISTANT_CONTENT',
+          type: 'CHECK_READY',
+          requestId: 'req-1',
+          nonce: 'valid-nonce',
+          payload: { seats: 'not-an-array' },
+        })
+      ).toBe(false);
+    });
+
+    it('validates CLICK_ELEMENT selectors against allowlist', () => {
+      // Allowed selectors
+      expect(isValidClickSelector('#btn-next')).toBe(true);
+      expect(isValidClickSelector('#continue-button')).toBe(true);
+      expect(isValidClickSelector('button.btn-next')).toBe(true);
+      expect(isValidClickSelector('#submit-btn')).toBe(true);
+
+      // Disallowed arbitrary selectors
+      expect(isValidClickSelector('body')).toBe(false);
+      expect(isValidClickSelector('input[name="password"]')).toBe(false);
+      expect(isValidClickSelector('script')).toBe(false);
+      expect(isValidClickSelector('div.evil-overlay')).toBe(false);
+
+      // Text validations
+      expect(isValidClickText('Tiếp tục')).toBe(true);
+      expect(isValidClickText('<script>alert(1)</script>')).toBe(false);
+    });
   });
 });
