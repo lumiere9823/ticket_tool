@@ -20,6 +20,7 @@ import {
 import { DomSecurityChallengeDetector } from '../../infrastructure/security/DomSecurityChallengeDetector';
 import { PrecisionContentTimer } from '../../application/services/PrecisionContentTimer';
 import { msUntil } from '../../domain/policies/ServerClock';
+import { ErrorClassifier } from '../../domain/policies/ErrorClassifier';
 import {
   classifyMutations,
   MutationClassification,
@@ -123,6 +124,8 @@ const ZOOM_RELOAD_COOLDOWN_MS = 15_000;
 /** Epoch ms of the last 404-recovery navigation (cooldown guard). */
 let last404RecoveryMs = 0;
 const RECOVERY_404_COOLDOWN_MS = 8_000;
+let consecutive404Count = 0;
+const MAX_CONSECUTIVE_404_RETRIES = 6;
 
 function resetStateMachineToMonitoring(reason = 'Re-arm reset'): void {
   consecutiveBookingFailures = 0;
@@ -319,8 +322,12 @@ async function detectAndRecoverFromStrayPage(): Promise<boolean> {
 
   const isStray = urlIs404 || titleIs404 || metaIs404 || isStrayTicketboxPage;
 
-  if (!isStray) return false;
+  if (!isStray) {
+    consecutive404Count = 0;
+    return false;
+  }
 
+  consecutive404Count++;
   last404RecoveryMs = Date.now();
 
   const reason = urlIs404
@@ -331,20 +338,43 @@ async function detectAndRecoverFromStrayPage(): Promise<boolean> {
         ? 'prerender-status-code 404'
         : 'stray/home page detected';
 
+  const classified = ErrorClassifier.classify({
+    status: urlIs404 || metaIs404 ? 404 : undefined,
+    message: reason,
+  });
+
   logger.warn(
-    `Stray page detected while monitoring (${reason}). Navigating back to configured event URL.`,
-    { currentUrl, targetUrl }
+    `Stray page detected while monitoring (${reason}, classified: ${classified.standardCategory}, attempt: ${consecutive404Count}/${MAX_CONSECUTIVE_404_RETRIES}). Navigating back to configured event URL.`,
+    { currentUrl, targetUrl, classification: classified }
   );
+
+  // If 404 persists beyond ceiling after T0, halt and prompt user
+  if (consecutive404Count > MAX_CONSECUTIVE_404_RETRIES) {
+    logger.warn('404 error persisted beyond maximum retries. Halting automation for user intervention.');
+    isMonitoringActive = false;
+    userExplicitlyStopped = true;
+    try {
+      stateMachine.transition({
+        type: 'UNKNOWN_SECURITY_CHALLENGE',
+        description: 'PERSISTENT_404_ERROR',
+      });
+    } catch {
+      // ignore
+    }
+    return false;
+  }
 
   // Reset state machine so the next poll starts fresh
   resetStateMachineToMonitoring('404 stray-page recovery');
   awaitingNavigationFromUrl = null;
 
+  // Backoff delay before navigating back: 400ms base + backoff (capped at 2500ms)
+  const backoffDelayMs = Math.min(2500, 400 + (consecutive404Count - 1) * 350);
   window.setTimeout(() => {
     if (typeof window !== 'undefined') {
       window.location.href = targetUrl;
     }
-  }, 400);
+  }, backoffDelayMs);
 
   return true;
 }

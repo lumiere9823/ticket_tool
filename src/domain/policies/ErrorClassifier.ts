@@ -184,6 +184,16 @@ export class ErrorClassifier {
         };
       }
 
+      if (status === 404 || code === '404' || code === 'NOT_FOUND') {
+        return {
+          category: 'PLATFORM',
+          standardCategory: 'TRANSIENT',
+          reason: FailureReason.UNKNOWN,
+          message: message || 'Resource not found (404)',
+          isRetryable: true,
+        };
+      }
+
       if (
         status === 502 ||
         status === 503 ||

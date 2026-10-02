@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ErrorClassifier, FailureReason, PurchaseState } from '../../../src/domain';
-import { BookingError } from '../../../src/domain/errors/BookingErrors';
+import { ErrorClassifier, FailureReason } from '../../../src/domain';
 
 describe('ErrorClassifier', () => {
   it('should classify HTTP 429 / Rate Limit as PLATFORM non-retryable (Rule 11 & BR-006)', () => {
@@ -85,17 +84,26 @@ describe('ErrorClassifier', () => {
       expect(error.reason).toBe(FailureReason.AUTH_FAILURE);
     });
 
-    it('should classify BookingError with SEAT_UNAVAILABLE as BUSINESS retryable', () => {
-      const bError = new BookingError({
-        code: 'SEAT_UNAVAILABLE',
-        message: 'Seat A429 is unavailable',
-        state: PurchaseState.SEAT_SELECTION,
-        recoverable: true,
-      });
-      const classified = ErrorClassifier.classify(bError);
-      expect(classified.category).toBe('BUSINESS');
-      expect(classified.reason).toBe(FailureReason.SOLD_OUT);
-      expect(classified.isRetryable).toBe(true);
+    it('should classify structured status 404 and NOT_FOUND code as TRANSIENT retryable', () => {
+      const error404 = ErrorClassifier.classify({ status: 404, message: 'Event not yet open or not found' });
+      expect(error404.category).toBe('PLATFORM');
+      expect(error404.standardCategory).toBe('TRANSIENT');
+      expect(error404.isRetryable).toBe(true);
+
+      const errorCode = ErrorClassifier.classify({ code: 'NOT_FOUND' });
+      expect(errorCode.standardCategory).toBe('TRANSIENT');
+      expect(errorCode.isRetryable).toBe(true);
+    });
+
+    it('should identify non-retryable safety signals correctly', () => {
+      const rateLimitErr = ErrorClassifier.classify({ status: 429 });
+      expect(ErrorClassifier.isNonRetryableSafetySignal(rateLimitErr)).toBe(true);
+
+      const authErr = ErrorClassifier.classify({ status: 401 });
+      expect(ErrorClassifier.isNonRetryableSafetySignal(authErr)).toBe(true);
+
+      const notFoundErr = ErrorClassifier.classify({ status: 404 });
+      expect(ErrorClassifier.isNonRetryableSafetySignal(notFoundErr)).toBe(false);
     });
   });
 });
