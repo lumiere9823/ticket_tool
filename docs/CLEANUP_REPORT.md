@@ -3,7 +3,7 @@
 **Branch:** `chore/cleanup`  
 **Baseline commit:** `c4dec20`  
 **Cleanup start:** 2026-10-02  
-**Status:** In progress; this report is updated as cleanup groups land.
+**Status:** Complete.
 
 ## 1. Baseline
 
@@ -139,5 +139,12 @@ npm run build      PASS
 ```
 
 `npm run docs:check` is the documentation validation command and is included in
-`npm run ci`. The final `npm run ci` result is recorded after the last cleanup
-group is committed.
+`npm run ci`.
+
+Final clean-install validation on 2026-10-02:
+
+- `npm ci`: passed; npm reported 3 moderate audit findings and deprecation
+  warnings for transitive `glob`/`eslint` packages. No `npm audit fix --force`
+  was run because it can introduce dependency churn outside this cleanup scope.
+- `npm run ci`: **passed** after the clean install (typecheck, lint,
+  format-check, docs-check, 60 test files / 625 tests, and production build).
