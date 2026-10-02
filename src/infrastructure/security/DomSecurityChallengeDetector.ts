@@ -17,7 +17,21 @@ import { DOMElementLike } from '../ticketbox/parsing/DOMElementLike';
  * - 429 Rate limiting
  */
 export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
+  private bypassUntil = 0;
+
+  public setBypassWindow(durationMs: number): void {
+    this.bypassUntil = Date.now() + Math.max(0, durationMs);
+  }
+
+  public isBypassed(): boolean {
+    return Date.now() < this.bypassUntil;
+  }
+
   public detectChallenge(root?: unknown): SecurityChallengeResult {
+    if (this.isBypassed()) {
+      return { detected: false };
+    }
+
     const doc = this.resolveDocument(root);
     if (!doc) {
       return { detected: false };
@@ -31,11 +45,10 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
 
     const hasTurnstileActive =
       !turnstileToken &&
-      (this.hasElement(doc, '.cf-turnstile') ||
-        this.hasElement(doc, '#challenge-stage') ||
-        this.hasElement(doc, '[name="cf-turnstile-response"]') ||
-        this.hasIframeWithSrc(doc, 'challenges.cloudflare.com') ||
-        this.hasElement(doc, '#cf-wrapper'));
+      (this.hasVisibleElement(doc, '.cf-turnstile') ||
+        this.hasVisibleElement(doc, '#challenge-stage') ||
+        this.hasVisibleElement(doc, '#cf-wrapper') ||
+        this.hasVisibleIframeWithSrc(doc, 'challenges.cloudflare.com'));
 
     if (hasTurnstileActive) {
       return {
@@ -54,11 +67,10 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
 
     const hasRecaptchaActive =
       !recaptchaToken &&
-      (this.hasElement(doc, '.g-recaptcha') ||
-        this.hasElement(doc, '#g-recaptcha-response') ||
-        this.hasIframeWithSrc(doc, 'google.com/recaptcha') ||
-        this.hasIframeWithSrc(doc, 'recaptcha.net') ||
-        this.hasIframeWithTitle(doc, 'recaptcha'));
+      (this.hasVisibleElement(doc, '.g-recaptcha') ||
+        this.hasVisibleIframeWithSrc(doc, 'google.com/recaptcha') ||
+        this.hasVisibleIframeWithSrc(doc, 'recaptcha.net') ||
+        this.hasVisibleIframeWithTitle(doc, 'recaptcha'));
 
     if (hasRecaptchaActive) {
       return {
@@ -70,16 +82,15 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
     }
 
     // 3. hCaptcha: if response token is already populated, challenge is resolved
-    const hcaptchaToken =
-      this.getElementValue(doc, '[name="h-captcha-response"]') ||
-      this.getElementValue(doc, '[name="g-recaptcha-response"]');
+    // Strictly isolate hCaptcha response token (do not fall back to g-recaptcha-response)
+    const hcaptchaToken = this.getElementValue(doc, '[name="h-captcha-response"]');
 
     const hasHcaptchaActive =
       !hcaptchaToken &&
-      (this.hasElement(doc, '.h-captcha') ||
-        this.hasElement(doc, '[data-hcaptcha-widget-id]') ||
-        this.hasIframeWithSrc(doc, 'hcaptcha.com') ||
-        this.hasIframeWithTitle(doc, 'hcaptcha'));
+      (this.hasVisibleElement(doc, '.h-captcha') ||
+        this.hasVisibleElement(doc, '[data-hcaptcha-widget-id]') ||
+        this.hasVisibleIframeWithSrc(doc, 'hcaptcha.com') ||
+        this.hasVisibleIframeWithTitle(doc, 'hcaptcha'));
 
     if (hasHcaptchaActive) {
       return {
@@ -108,13 +119,13 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
       };
     }
 
-    // 5. 401 / 403 / Session Re-auth
-    const bodyText = this.getBodyText(doc).toLowerCase();
+    // 5. 401 / 403 / Session Re-auth: inspect targeted error containers, modals, banners, headings
+    const targetedErrorText = this.getTargetedErrorText(doc).toLowerCase();
     if (
-      bodyText.includes('403 forbidden') ||
-      bodyText.includes('401 unauthorized') ||
-      bodyText.includes('phiên đăng nhập hết hạn') ||
-      bodyText.includes('vui lòng đăng nhập lại')
+      targetedErrorText.includes('403 forbidden') ||
+      targetedErrorText.includes('401 unauthorized') ||
+      targetedErrorText.includes('phiên đăng nhập hết hạn') ||
+      targetedErrorText.includes('vui lòng đăng nhập lại')
     ) {
       return {
         detected: true,
@@ -124,11 +135,11 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
       };
     }
 
-    // 6. 429 Rate Limit
+    // 6. 429 Rate Limit: inspect targeted error containers, modals, banners, headings
     if (
-      bodyText.includes('429 too many requests') ||
-      bodyText.includes('quá nhiều yêu cầu') ||
-      bodyText.includes('rate limit exceeded')
+      targetedErrorText.includes('429 too many requests') ||
+      targetedErrorText.includes('quá nhiều yêu cầu') ||
+      targetedErrorText.includes('rate limit exceeded')
     ) {
       return {
         detected: true,
@@ -162,6 +173,96 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
     return false;
   }
 
+  private hasVisibleElement(doc: Document | Element | DOMElementLike, selector: string): boolean {
+    try {
+      if ('querySelectorAll' in doc && typeof doc.querySelectorAll === 'function') {
+        const elements = doc.querySelectorAll(selector);
+        for (let i = 0; i < elements.length; i++) {
+          const el = elements[i];
+          if (el && this.isElementVisuallyActive(el)) {
+            return true;
+          }
+        }
+        return false;
+      }
+      if ('querySelector' in doc && typeof doc.querySelector === 'function') {
+        const el = doc.querySelector(selector);
+        return el !== null && this.isElementVisuallyActive(el);
+      }
+    } catch {
+      // Ignored
+    }
+    return false;
+  }
+
+  private isElementVisuallyActive(el: unknown): boolean {
+    if (!el) return false;
+    try {
+      const raw = 'rawElement' in (el as DOMElementLike) ? (el as DOMElementLike).rawElement : el;
+      if (raw && typeof HTMLElement !== 'undefined' && raw instanceof HTMLElement) {
+        // Invisible reCAPTCHA v2 / v3 or Turnstile badge container
+        if (
+          raw.classList.contains('grecaptcha-badge') ||
+          raw.closest?.('.grecaptcha-badge') !== null
+        ) {
+          // grecaptcha-badge is the invisible badge widget, not an interactive blocking modal
+          return false;
+        }
+
+        if (raw.offsetParent === null && raw.style.position !== 'fixed') {
+          // Element is not in layout flow (e.g. display: none or within hidden container)
+          return false;
+        }
+
+        const rect = raw.getBoundingClientRect ? raw.getBoundingClientRect() : null;
+        if (rect) {
+          // Zero dimension or positioned completely offscreen (common for invisible challenge badges)
+          if (rect.width === 0 && rect.height === 0) {
+            return false;
+          }
+          if (rect.right < 0 || rect.bottom < 0 || rect.top > (window.innerHeight || 10000)) {
+            return false;
+          }
+        }
+
+        if (typeof window !== 'undefined' && window.getComputedStyle) {
+          const style = window.getComputedStyle(raw);
+          if (
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            style.opacity === '0' ||
+            (parseFloat(style.width) === 0 && parseFloat(style.height) === 0)
+          ) {
+            return false;
+          }
+        }
+      }
+      if (typeof (el as DOMElementLike).getAttribute === 'function') {
+        const styleAttr = (el as DOMElementLike).getAttribute('style') || '';
+        const classAttr = (el as DOMElementLike).getAttribute('class') || '';
+        if (classAttr.includes('grecaptcha-badge')) {
+          return false;
+        }
+        if (
+          styleAttr.includes('display: none') ||
+          styleAttr.includes('display:none') ||
+          styleAttr.includes('visibility: hidden') ||
+          styleAttr.includes('visibility:hidden') ||
+          styleAttr.includes('width: 0px') ||
+          styleAttr.includes('width:0px') ||
+          styleAttr.includes('height: 0px') ||
+          styleAttr.includes('height:0px')
+        ) {
+          return false;
+        }
+      }
+    } catch {
+      // If visibility cannot be evaluated, assume true to fail safe
+      return true;
+    }
+    return true;
+  }
+
   private getElementValue(
     doc: Document | Element | DOMElementLike,
     selector: string
@@ -191,7 +292,10 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
     return null;
   }
 
-  private hasIframeWithSrc(doc: Document | Element | DOMElementLike, srcFragment: string): boolean {
+  private hasVisibleIframeWithSrc(
+    doc: Document | Element | DOMElementLike,
+    srcFragment: string
+  ): boolean {
     try {
       if ('querySelectorAll' in doc && typeof doc.querySelectorAll === 'function') {
         const iframes = doc.querySelectorAll('iframe');
@@ -203,7 +307,9 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
               ? iframe.getAttribute('src')
               : (iframe as HTMLIFrameElement).src;
           if (src && src.toLowerCase().includes(srcFragment.toLowerCase())) {
-            return true;
+            if (this.isElementVisuallyActive(iframe)) {
+              return true;
+            }
           }
         }
       }
@@ -213,7 +319,7 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
     return false;
   }
 
-  private hasIframeWithTitle(
+  private hasVisibleIframeWithTitle(
     doc: Document | Element | DOMElementLike,
     titleFragment: string
   ): boolean {
@@ -228,7 +334,9 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
               ? iframe.getAttribute('title')
               : (iframe as HTMLIFrameElement).title;
           if (title && title.toLowerCase().includes(titleFragment.toLowerCase())) {
-            return true;
+            if (this.isElementVisuallyActive(iframe)) {
+              return true;
+            }
           }
         }
       }
@@ -238,17 +346,64 @@ export class DomSecurityChallengeDetector implements SecurityChallengeDetector {
     return false;
   }
 
-  private getBodyText(doc: Document | Element | DOMElementLike): string {
-    try {
-      if ('body' in doc && doc.body) {
-        return doc.body.textContent ?? '';
+  /**
+   * Targets specific error containers, modal dialogs, alert banners, toast notifications,
+   * or page-level error headings (h1, h2, title). Strictly avoids entire page descriptions or body text.
+   */
+  private getTargetedErrorText(doc: Document | Element | DOMElementLike): string {
+    const errorSelectors = [
+      'h1',
+      'h2',
+      '.error-container',
+      '.error-page',
+      '.error-message',
+      '.error-description',
+      '.ant-modal-confirm-error',
+      '.ant-modal-confirm-body',
+      '.ant-notification-notice-error',
+      '.ant-alert-error',
+      '.toast-error',
+      '[role="alert"]',
+      '.rate-limit',
+      '#challenge-error-title',
+      '#cf-error-details',
+    ];
+
+    const collectedText: string[] = [];
+
+    for (const selector of errorSelectors) {
+      try {
+        if ('querySelectorAll' in doc && typeof doc.querySelectorAll === 'function') {
+          const elements = doc.querySelectorAll(selector);
+          for (let i = 0; i < elements.length; i++) {
+            const el = elements[i];
+            if (el && this.isElementVisuallyActive(el) && el.textContent) {
+              collectedText.push(el.textContent.trim());
+            }
+          }
+        } else if ('querySelector' in doc && typeof doc.querySelector === 'function') {
+          const el = doc.querySelector(selector);
+          if (el && this.isElementVisuallyActive(el) && el.textContent) {
+            collectedText.push(el.textContent.trim());
+          }
+        }
+      } catch {
+        // Ignored
       }
-      if ('textContent' in doc && doc.textContent) {
-        return doc.textContent;
+    }
+
+    // Also include document.title if it exists and indicates error/challenge
+    try {
+      if ('title' in doc && typeof (doc as Document).title === 'string') {
+        const title = (doc as Document).title;
+        if (/401|403|429|forbidden|unauthorized|too many requests/i.test(title)) {
+          collectedText.push(title);
+        }
       }
     } catch {
       // Ignored
     }
-    return '';
+
+    return collectedText.join(' ');
   }
 }

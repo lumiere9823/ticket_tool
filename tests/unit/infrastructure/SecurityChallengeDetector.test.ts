@@ -171,6 +171,38 @@ describe('Security Challenge Detection & Resume Workflow (P1-4)', () => {
       expect(result.detected).toBe(false);
     });
 
+    it('does NOT treat g-recaptcha-response as a solved token for hCaptcha (strict token isolation)', () => {
+      const html = `
+        <div class="h-captcha" data-sitekey="test-key">
+          <textarea name="g-recaptcha-response">recaptcha_token_only</textarea>
+          <iframe src="https://newassets.hcaptcha.com/captcha/v1/widget" title="hCaptcha checkbox"></iframe>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+
+      const result = detector.detectChallenge(root);
+      expect(result.detected).toBe(true);
+      expect(result.type).toBe('HCAPTCHA');
+    });
+
+    it('does NOT trigger RATE_LIMIT when event description contains "quá nhiều yêu cầu" or "rate limit"', () => {
+      const html = `
+        <div class="event-details">
+          <h2>Đêm nhạc Acoustic</h2>
+          <div class="event-description">
+            <p>Do có quá nhiều yêu cầu từ khán giả, ban tổ chức mở thêm một đêm diễn đặc biệt.</p>
+            <p>Quy định vé: Không hoàn tiền dưới bất kỳ hình thức nào.</p>
+          </div>
+          <div class="ticket-row">Vé GA - 500,000 VND</div>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(html);
+
+      const result = detector.detectChallenge(root);
+      expect(result.detected).toBe(false);
+      expect(result.type).toBeUndefined();
+    });
+
     it('remains completely passive and never mutates the DOM', () => {
       const htmlBefore = `
         <div class="g-recaptcha" data-sitekey="123">
@@ -219,6 +251,31 @@ describe('Security Challenge Detection & Resume Workflow (P1-4)', () => {
       expect(result.finalState).toBe(PurchaseState.CAPTCHA_REQUIRED);
       expect(result.requiresUserAction).toBe(true);
       expect(sm.state).toBe(PurchaseState.CAPTCHA_REQUIRED);
+    });
+
+    it('does not trigger challenge when challenge container is hidden or invisible (display: none)', () => {
+      const htmlHidden = `
+        <div id="content">
+          <div class="g-recaptcha" style="display: none;" data-sitekey="test-key"></div>
+          <iframe src="https://www.google.com/recaptcha/api2/anchor?k=123" style="display: none;" title="reCAPTCHA"></iframe>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(htmlHidden);
+
+      const result = detector.detectChallenge(root);
+      expect(result.detected).toBe(false);
+    });
+
+    it('does not trigger challenge when Turnstile container is hidden (visibility: hidden)', () => {
+      const htmlHidden = `
+        <div class="cf-turnstile" style="visibility: hidden;">
+          <iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2" style="visibility: hidden;" title="Cloudflare Turnstile"></iframe>
+        </div>
+      `;
+      const root = parseHtmlToDOMElementLike(htmlHidden);
+
+      const result = detector.detectChallenge(root);
+      expect(result.detected).toBe(false);
     });
   });
 
