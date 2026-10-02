@@ -18,6 +18,8 @@ import {
 } from '../../domain/entities/ScopedPurchasePlan';
 
 import { DomSecurityChallengeDetector } from '../../infrastructure/security/DomSecurityChallengeDetector';
+import { PrecisionContentTimer } from '../../application/services/PrecisionContentTimer';
+import { msUntil } from '../../domain/policies/ServerClock';
 import {
   classifyMutations,
   MutationClassification,
@@ -86,6 +88,8 @@ const triedCandidateKeysInCycle = new Set<string>();
 let lastPollTimestamp = Date.now();
 let scheduledArmTargetMs: number | null = null;
 let scheduledArmTimer: number | null = null;
+let precisionContentTimer: PrecisionContentTimer | null = null;
+let isExecutingScheduledArm = false;
 let watchdogInterval: number | null = null;
 let consecutiveBookingFailures = 0;
 let lastBookingFailureTimestamp = 0;
@@ -165,36 +169,49 @@ function resetStateMachineToMonitoring(reason = 'Re-arm reset'): void {
   }
 }
 
-async function triggerScheduledArmInContent(): Promise<void> {
+function cancelContentArmTimers(): void {
   if (scheduledArmTimer) {
     window.clearTimeout(scheduledArmTimer);
     scheduledArmTimer = null;
   }
+  if (precisionContentTimer) {
+    precisionContentTimer.cancel();
+    precisionContentTimer = null;
+  }
   scheduledArmTargetMs = null;
-  if (isMonitoringActive || isExecutingJourney) return;
+}
 
-  logger.info(
-    'Scheduled ARM exact target time reached in content script; automatically activating monitoring'
-  );
-  resetStateMachineToMonitoring('Scheduled ARM exact timer');
+async function triggerScheduledArmInContent(): Promise<void> {
+  cancelContentArmTimers();
+  if (isExecutingScheduledArm || isMonitoringActive || isExecutingJourney) return;
 
-  isMonitoringActive = true;
-  isExecutingJourney = false;
-  awaitingNavigationFromUrl = null;
-  triedCandidateKeysInCycle.clear();
-  lastPollTimestamp = Date.now();
+  isExecutingScheduledArm = true;
+  try {
+    logger.info(
+      'Scheduled ARM exact target time reached in content script; automatically activating monitoring'
+    );
+    resetStateMachineToMonitoring('Scheduled ARM exact timer');
 
-  storage
-    .savePersistentState({
-      startedAt: new Date().toISOString(),
-      attemptsCount: 0,
-      currentPhase: 'MONITORING',
-      stopReason: undefined,
-    })
-    .catch(() => {});
+    isMonitoringActive = true;
+    isExecutingJourney = false;
+    awaitingNavigationFromUrl = null;
+    triedCandidateKeysInCycle.clear();
+    lastPollTimestamp = Date.now();
 
-  scheduleDiscoveryScan(50);
-  scheduleNextPoll(200);
+    storage
+      .savePersistentState({
+        startedAt: new Date().toISOString(),
+        attemptsCount: 0,
+        currentPhase: 'MONITORING',
+        stopReason: undefined,
+      })
+      .catch(() => {});
+
+    scheduleDiscoveryScan(50);
+    scheduleNextPoll(200);
+  } finally {
+    isExecutingScheduledArm = false;
+  }
 }
 
 function ensurePageBridgeInjected(): void {
@@ -1548,19 +1565,25 @@ async function checkRehydration(): Promise<void> {
     const config = await storage.getConfiguration();
     if (config?.scheduledArmAt) {
       const schedMs = new Date(config.scheduledArmAt).getTime();
-      if (schedMs > Date.now()) {
-        logger.info('Scheduled ARM pending in future; arming content script timer', {
+      const offsetMs = config.clockSyncEstimate?.offsetMs ?? 0;
+      const remainingMs = msUntil(schedMs, offsetMs, Date.now());
+
+      if (remainingMs > 0) {
+        logger.info('Scheduled ARM pending in future; arming precision timer in content script', {
           scheduledArmAt: config.scheduledArmAt,
-          remainingSeconds: Math.round((schedMs - Date.now()) / 1000),
+          offsetMs,
+          remainingSeconds: Math.round(remainingMs / 1000),
         });
-        scheduledArmTargetMs = schedMs;
-        if (scheduledArmTimer) window.clearTimeout(scheduledArmTimer);
-        scheduledArmTimer = window.setTimeout(
-          async () => {
+        cancelContentArmTimers();
+        scheduledArmTargetMs = schedMs - offsetMs; // target in client time reference
+        precisionContentTimer = new PrecisionContentTimer({
+          targetClientTimeMs: scheduledArmTargetMs,
+          fineWindowMs: 300,
+          onTrigger: async () => {
             await triggerScheduledArmInContent();
           },
-          Math.max(0, schedMs - Date.now())
-        );
+        });
+        precisionContentTimer.start();
         return;
       } else {
         logger.info('Scheduled ARM time has already passed; activating immediately', {
@@ -1769,7 +1792,7 @@ if (typeof window !== 'undefined') {
 }
 
 // Handle coordination messages from the Service Worker and Popup
-messageBus.subscribe((message: ExtensionMessage) => {
+messageBus.subscribe(async (message: ExtensionMessage) => {
   switch (message.type) {
     case 'REQUEST_DISCOVERY_SCAN': {
       logger.info('Content script received REQUEST_DISCOVERY_SCAN');
@@ -1797,35 +1820,38 @@ messageBus.subscribe((message: ExtensionMessage) => {
       const startAt = message.scopedPurchasePlan?.persistence?.startAt;
       if (startAt) {
         const startMs = new Date(startAt).getTime();
-        if (startMs > Date.now()) {
-          const delaySeconds = Math.round((startMs - Date.now()) / 1000);
-          logger.info('ARM is scheduled for future time; armed local timer in content script', {
+        const storedConfig = await storage.getConfiguration().catch(() => null);
+        const offsetMs = storedConfig?.clockSyncEstimate?.offsetMs ?? 0;
+        const remainingMs = msUntil(startMs, offsetMs, Date.now());
+
+        if (remainingMs > 0) {
+          const delaySeconds = Math.round(remainingMs / 1000);
+          logger.info('ARM is scheduled for future time; armed precision timer in content script', {
             startAt,
+            offsetMs,
             delaySeconds,
           });
-          scheduledArmTargetMs = startMs;
+          cancelContentArmTimers();
+          scheduledArmTargetMs = startMs - offsetMs;
           isMonitoringActive = false;
           if (monitoringTimeout) {
             window.clearTimeout(monitoringTimeout);
             monitoringTimeout = null;
           }
-          if (scheduledArmTimer) {
-            window.clearTimeout(scheduledArmTimer);
-          }
-          const delayMs = Math.max(0, startMs - Date.now());
-          scheduledArmTimer = window.setTimeout(async () => {
-            logger.info('Scheduled ARM timer fired at target timestamp in content script');
-            await triggerScheduledArmInContent();
-          }, delayMs);
+          precisionContentTimer = new PrecisionContentTimer({
+            targetClientTimeMs: scheduledArmTargetMs,
+            fineWindowMs: 300,
+            onTrigger: async () => {
+              logger.info('Scheduled ARM precision timer fired in content script');
+              await triggerScheduledArmInContent();
+            },
+          });
+          precisionContentTimer.start();
           break;
         }
       }
 
-      if (scheduledArmTimer) {
-        window.clearTimeout(scheduledArmTimer);
-        scheduledArmTimer = null;
-      }
-      scheduledArmTargetMs = null;
+      cancelContentArmTimers();
 
       resetStateMachineToMonitoring('User ARM requested');
       userExplicitlyStopped = false;
@@ -1883,11 +1909,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'STOP_REQUESTED': {
       userExplicitlyStopped = true;
-      if (scheduledArmTimer) {
-        window.clearTimeout(scheduledArmTimer);
-        scheduledArmTimer = null;
-      }
-      scheduledArmTargetMs = null;
+      cancelContentArmTimers();
       if (!isMonitoringActive && stateMachine.state === PurchaseState.STOPPED) {
         break;
       }
@@ -1929,11 +1951,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
           break;
         }
         userExplicitlyStopped = true;
-        if (scheduledArmTimer) {
-          window.clearTimeout(scheduledArmTimer);
-          scheduledArmTimer = null;
-        }
-        scheduledArmTargetMs = null;
+        cancelContentArmTimers();
         isMonitoringActive = false;
         if (!activeJourneyPromise) {
           isExecutingJourney = false;
@@ -1965,11 +1983,7 @@ messageBus.subscribe((message: ExtensionMessage) => {
 
     case 'CANCEL_SCHEDULED_ARM': {
       logger.info('Content script received CANCEL_SCHEDULED_ARM');
-      if (scheduledArmTimer) {
-        window.clearTimeout(scheduledArmTimer);
-        scheduledArmTimer = null;
-      }
-      scheduledArmTargetMs = null;
+      cancelContentArmTimers();
       isMonitoringActive = false;
       isExecutingJourney = false;
       awaitingNavigationFromUrl = null;

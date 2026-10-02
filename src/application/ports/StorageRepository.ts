@@ -27,6 +27,15 @@ export interface AssistantConfiguration {
   armedTabId?: number | undefined;
   /** Ticketbox event ID strictly bound to the armed execution. */
   armedEventId?: string | undefined;
+  /** Estimated server clock synchronization parameters */
+  clockSyncEstimate?:
+    | {
+        offsetMs: number;
+        roundTripTimeMs: number;
+        uncertaintyMs: number;
+        syncedAtMs: number;
+      }
+    | undefined;
 }
 
 export interface PersistentExecutionState {
