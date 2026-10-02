@@ -1379,12 +1379,22 @@ async function attemptBookingJourney(): Promise<void> {
       });
 
       const tracker = new LatencyTracker(stateMachine.attemptId || `attempt_${Date.now()}`, logger);
+      if (config?.clockSyncEstimate) {
+        tracker.recordTimingSync(
+          config.clockSyncEstimate.offsetMs,
+          config.clockSyncEstimate.roundTripTimeMs,
+          config.clockSyncEstimate.uncertaintyMs,
+          undefined,
+          config.scheduledArmAt ? new Date(config.scheduledArmAt).getTime() : undefined
+        );
+      }
       if (lastEventTimestamp) {
         tracker.recordTEvent(lastEventTimestamp);
         tracker.recordTDetected(lastDetectedTimestamp ?? lastEventTimestamp);
       } else {
         tracker.recordT0(Date.now(), true);
       }
+      tracker.recordTFirstAction(Date.now());
       lastEventTimestamp = null;
       lastDetectedTimestamp = null;
 

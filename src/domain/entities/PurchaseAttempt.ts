@@ -10,6 +10,15 @@ export interface LatencyMarkers {
   t4ReservationResponse?: number | undefined;
   t5ServerConfirmedHold?: number | undefined;
 
+  // Server Clock Synchronization & Scheduled Arming Timings (N4)
+  tArmed?: number | undefined;
+  tTarget?: number | undefined; // Estimated server target opening timestamp
+  tFirstAction?: number | undefined; // Timestamp of first executed DOM/fetch action
+  serverOffsetMs?: number | undefined;
+  serverRttMs?: number | undefined;
+  clockUncertaintyMs?: number | undefined;
+  targetDeltaMs?: number | undefined; // tFirstAction - (tTarget - serverOffsetMs) = delay vs schedule
+
   // Real Runtime T_EVENT Telemetry Model (Phase 2.1)
   tEvent?: number | undefined;
   tDetected?: number | undefined;
@@ -53,6 +62,15 @@ export interface LatencyBreakdown {
   confirmationLatencyMs?: number | undefined;
   totalCriticalLatencyMs?: number | undefined;
   isT0Authoritative: boolean;
+
+  // Server Clock Synchronization & Scheduled Arming Timings (N4)
+  tArmed?: number | undefined;
+  tTarget?: number | undefined;
+  tFirstAction?: number | undefined;
+  serverOffsetMs?: number | undefined;
+  serverRttMs?: number | undefined;
+  clockUncertaintyMs?: number | undefined;
+  targetDeltaMs?: number | undefined;
 
   // Real Runtime T_EVENT Breakdown Intervals
   eventToDetectionMs?: number | undefined;

@@ -124,6 +124,44 @@ export class LatencyTracker {
     return { ...this.markers };
   }
 
+  // Server Clock Synchronization & Scheduled Arming Timings (N4)
+  public recordTimingSync(
+    offsetMs: number,
+    rttMs: number,
+    uncertaintyMs: number,
+    tArmedMs?: number,
+    tTargetMs?: number
+  ): void {
+    this.markers.serverOffsetMs = offsetMs;
+    this.markers.serverRttMs = rttMs;
+    this.markers.clockUncertaintyMs = uncertaintyMs;
+    if (tArmedMs !== undefined) this.markers.tArmed = tArmedMs;
+    if (tTargetMs !== undefined) this.markers.tTarget = tTargetMs;
+    this.logger?.debug('Recorded Timing Sync', {
+      attemptId: this.attemptId,
+      offsetMs,
+      rttMs,
+      uncertaintyMs,
+      tArmedMs,
+      tTargetMs,
+    });
+  }
+
+  public recordTFirstAction(timestampMs: number = Date.now()): void {
+    this.markers.tFirstAction = timestampMs;
+    if (this.markers.tTarget !== undefined) {
+      const offset = this.markers.serverOffsetMs ?? 0;
+      // Target in client time reference is (tTarget - offset)
+      const targetClientTime = this.markers.tTarget - offset;
+      this.markers.targetDeltaMs = timestampMs - targetClientTime;
+    }
+    this.logger?.info('Recorded T_FIRST_ACTION', {
+      attemptId: this.attemptId,
+      tFirstAction: timestampMs,
+      targetDeltaMs: this.markers.targetDeltaMs,
+    });
+  }
+
   // Extended Journey Timings (Section 30)
   public recordTicketDiscovery(durationMs: number): void {
     this.markers.ticketDiscoveryDurationMs = durationMs;
@@ -189,6 +227,15 @@ export class LatencyTracker {
       ...(t4 !== undefined && t5 !== undefined ? { confirmationLatencyMs: t5 - t4 } : {}),
       ...(t0 !== undefined && t5 !== undefined ? { totalCriticalLatencyMs: t5 - t0 } : {}),
       isT0Authoritative: this.isT0Authoritative,
+
+      // Server Clock Synchronization & Scheduled Arming Timings (N4)
+      ...(this.markers.tArmed !== undefined ? { tArmed: this.markers.tArmed } : {}),
+      ...(this.markers.tTarget !== undefined ? { tTarget: this.markers.tTarget } : {}),
+      ...(this.markers.tFirstAction !== undefined ? { tFirstAction: this.markers.tFirstAction } : {}),
+      ...(this.markers.serverOffsetMs !== undefined ? { serverOffsetMs: this.markers.serverOffsetMs } : {}),
+      ...(this.markers.serverRttMs !== undefined ? { serverRttMs: this.markers.serverRttMs } : {}),
+      ...(this.markers.clockUncertaintyMs !== undefined ? { clockUncertaintyMs: this.markers.clockUncertaintyMs } : {}),
+      ...(this.markers.targetDeltaMs !== undefined ? { targetDeltaMs: this.markers.targetDeltaMs } : {}),
 
       // Real Runtime T_EVENT intervals
       ...(tEvent !== undefined && tDetected !== undefined

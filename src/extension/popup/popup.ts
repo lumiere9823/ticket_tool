@@ -234,6 +234,8 @@ const metricT1 = document.getElementById('metric-t1') as HTMLElement;
 const metricT2 = document.getElementById('metric-t2') as HTMLElement;
 const metricT3 = document.getElementById('metric-t3') as HTMLElement;
 const metricT5 = document.getElementById('metric-t5') as HTMLElement;
+const metricDelta = document.getElementById('metric-delta') as HTMLElement | null;
+const metricOffset = document.getElementById('metric-offset') as HTMLElement | null;
 
 const stateView = new PopupStateView({
   stateBadge,
@@ -298,11 +300,20 @@ function addLog(text: string, save = true): void {
   }
 }
 
-function updateTelemetry(t1?: number, t2?: number, t3?: number, t5?: number): void {
+function updateTelemetry(
+  t1?: number,
+  t2?: number,
+  t3?: number,
+  t5?: number,
+  delta?: number,
+  offset?: number
+): void {
   if (t1 !== undefined && metricT1) metricT1.textContent = `${t1}ms`;
   if (t2 !== undefined && metricT2) metricT2.textContent = `${t2}ms`;
   if (t3 !== undefined && metricT3) metricT3.textContent = `${t3}ms`;
   if (t5 !== undefined && metricT5) metricT5.textContent = `${t5}ms`;
+  if (delta !== undefined && metricDelta) metricDelta.textContent = `${delta > 0 ? '+' : ''}${delta}ms`;
+  if (offset !== undefined && metricOffset) metricOffset.textContent = `${offset > 0 ? '+' : ''}${offset}ms`;
 }
 
 function formatPrice(price: number): string {
